@@ -20,7 +20,8 @@ We move through turbotopics' models in the order you would in real research:
     4. STM         : prevalence on decade — which topics rise/fall over time.
     5. DTM         : dynamic topics — trace a word's trajectory across decades.
     6. HDP         : let the model infer how many topics there are.
-    7. Utilities   : summary(), save/load, prepare_pyldavis().
+    7. Guided      : seed named topics with KeyATM when you know the themes.
+    8. Utilities   : summary(), save/load, prepare_pyldavis().
 
 Everything here is tuned to run in a couple of minutes. Where a knob trades
 speed for quality (K, iterations, EM sweeps) we use a modest value and note in
@@ -290,9 +291,36 @@ def main():
         print(f"  ({mass[t]:5.1f} docs) {', '.join(words)}")
 
     # ------------------------------------------------------------------ #
-    # 7. UTILITIES.  Three things you'll reach for constantly.
+    # 7. GUIDED TOPICS.  Everything above *discovers* topics, which you then
+    #    label. When you already know the themes you want to measure, a guided
+    #    model seeds them by name so each topic maps to a construct by
+    #    construction — better validity, and reproducible across runs. KeyATM
+    #    takes a {name: [seed words]} dict; here we name four themes from Du
+    #    Bois's program and let KeyATM learn four more freely (num_topics=8).
+    #    `keyword_rate` reports how much each topic leans on its seed words.
     # ------------------------------------------------------------------ #
-    banner("[7] Utilities: summary, save/load, pyLDAvis")
+    banner("[7] Guided topics: seed named themes with KeyATM")
+    seeds = {
+        "education": ["school", "schools", "education", "college", "children"],
+        "labor":     ["labor", "wages", "industrial", "economic", "workers"],
+        "voting":    ["vote", "votes", "ballot", "suffrage", "franchise"],
+        "africa":    ["africa", "african", "congo", "liberia", "empire"],
+    }
+    ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+    ka.fit(phrased_docs, iters=800)         # ~1500+ iters for a real run
+    print("Seeded topics (and how much each leans on its keywords):")
+    for t in range(len(seeds)):
+        words = [w.replace("_", " ") for w, _ in ka.top_words(7, topic=t)]
+        print(f"  {ka.topic_names[t]:10s} (kw {ka.keyword_rate[t]:.2f}): "
+              f"{', '.join(words)}")
+    print("education, voting, and africa land cleanly on their seeds; labor is "
+          "diffuse here because Du Bois\n  ties labor to race throughout. The "
+          "four unseeded topics (4-7) are discovered as in plain LDA.")
+
+    # ------------------------------------------------------------------ #
+    # 8. UTILITIES.  Three things you'll reach for constantly.
+    # ------------------------------------------------------------------ #
+    banner("[8] Utilities: summary, save/load, pyLDAvis")
 
     # summary() — a tomotopy-style one-shot overview of a fitted model.
     print("turbotopics.summary(lda):\n")
@@ -315,13 +343,13 @@ def main():
           "(install pyLDAvis to render it as an interactive HTML chart).")
 
     # ------------------------------------------------------------------ #
-    # 8. TRANSFORM.  Every model exposes a sklearn-style `transform` that
+    # 9. TRANSFORM.  Every model exposes a sklearn-style `transform` that
     #    infers topic proportions theta for NEW, unseen documents against the
     #    fitted topics (the variational E-step for CTM/STM, collapsed Gibbs
     #    for LDA/DMR/HDP/...). OOV tokens are dropped. Hand it two snippets and
     #    watch them load on the right topics.
     # ------------------------------------------------------------------ #
-    banner("[8] transform: held-out inference on new documents")
+    banner("[9] transform: held-out inference on new documents")
     new_docs = [
         "the mob lynched a man in the southern state and the murder went "
         "unpunished".split(),

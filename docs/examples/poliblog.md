@@ -143,3 +143,38 @@ glm = stm.estimate_effect(draws, conservative, feature_names=["conservative"],
                           cluster=blog, link="logit")
 model.save("poliblog_stm.tt")
 ```
+
+## A guided alternative: name the topics up front
+
+The STM above discovers topics, which you then label. If you already know the
+themes you want to measure — a common case in political communication — a
+[guided model](../guides/guided.md) seeds them directly, so each topic
+corresponds to a construct by construction (better validity and reproducibility).
+Here `KeyATM` seeds four 2008-campaign themes and learns four more freely:
+
+```python
+seeds = {
+    "foreign_policy": ["isra", "iran", "iraq", "troop", "afghanistan"],
+    "economy":        ["economi", "market", "tax", "job", "financi"],
+    "social":         ["abort", "gay", "marriag", "religi", "church"],
+    "campaign":       ["poll", "vote", "campaign", "candid", "elect"],
+}
+ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+ka.fit(docs, iters=800)
+for t in range(4):
+    print(f"{ka.topic_names[t]:15s}", [w for w, _ in ka.top_words(7, topic=t)])
+```
+
+```
+foreign_policy  ['iraq', 'war', 'militari', 'iran', 'bush', 'forc', 'american']
+economy         ['will', 'tax', 'american', 'govern', 'economi', 'year', 'econom']
+social          ['american', 'america', 'peopl', 'will', 'women', 'countri', 'right']
+campaign        ['obama', 'vote', 'democrat', 'republican', 'voter', 'will', 'poll']
+```
+
+The named topics land on their themes (the foreign-policy and campaign topics are
+sharp; the social topic is more diffuse because that theme is weaker in this
+corpus). `ka.keyword_rate` reports how much each topic leans on its keywords.
+Feed the result to the same `estimate_effect` and validation steps as the STM —
+the only thing that changed is that you specified the topics instead of labeling
+them afterward.

@@ -144,8 +144,39 @@ hdp.fit(corpus, iters=150)
 print("HDP inferred K =", hdp.num_topics)          # 17
 ```
 
-`HDP` lands on 17, close to the 15 used for LDA. The
-[full notebook](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
+`HDP` lands on 17, close to the 15 used for LDA.
+
+## 6. Guided topics — name themes up front
+
+The models above *discover* topics, which you then label. When you already know
+the themes you want to measure, a [guided model](../guides/guided.md) seeds them
+by name, so each topic maps to a construct by construction. `KeyATM` names four
+themes from Du Bois's program and learns four more freely:
+
+```python
+seeds = {
+    "education": ["school", "schools", "education", "college", "children"],
+    "labor":     ["labor", "wages", "industrial", "economic", "workers"],
+    "voting":    ["vote", "votes", "ballot", "suffrage", "franchise"],
+    "africa":    ["africa", "african", "congo", "liberia", "empire"],
+}
+ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+ka.fit(phrased_docs, iters=800)
+for t in range(4):
+    print(f"{ka.topic_names[t]:10s}", [w for w, _ in ka.top_words(7, topic=t)])
+```
+
+```
+education  ['school', 'schools', 'work', 'education', 'south', 'children', 'people']
+labor      ['white', 'american', 'black', 'labor', 'social', 'race', 'world']
+voting     ['south', 'vote', 'state', 'women', 'united_states', 'lynching', 'southern']
+africa     ['africa', 'world', 'war', 'great', 'church', 'america', 'england']
+```
+
+Education, voting, and Africa land cleanly on their seeds; labor stays diffuse
+because Du Bois ties labor to race throughout the corpus — a substantive signal,
+not a model failure. `ka.keyword_rate` reports how much each topic leans on its
+seeds. The [full notebook](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
 continues with STM decade-prevalence (labor rises, women's suffrage falls after
 1920) and held-out `transform`, following the
 [publishing workflow](../publishing/index.md) end to end.
