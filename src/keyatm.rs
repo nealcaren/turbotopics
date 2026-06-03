@@ -97,6 +97,13 @@ pub struct KeyAtmModel {
     pub nkx: Vec<Vec<u32>>,
     /// `nk1[k]` — total s=1 token count in topic k.
     pub nk1: Vec<u32>,
+    /// Covariate model only: learned DMR coefficients `λ[k][f]` for the
+    /// log-linear document-topic prior `α_{d,k} = exp(x_d · λ_k)`. `None` for the
+    /// base (symmetric-α) model.
+    pub lambda: Option<Vec<Vec<f64>>>,
+    /// Covariate model only: the document feature matrix used at fit time
+    /// (`[D][F]`), kept for held-out inference. `None` for the base model.
+    pub features: Option<Vec<Vec<f64>>>,
 }
 
 impl KeyAtmModel {
@@ -157,8 +164,28 @@ impl KeyAtmModel {
 
     /// Doc-topic distributions θ, shape D×K, rows sum to 1.
     ///
-    /// θ_{d,k} = (ndk[d][k] + α) / (N_d + K·α).
+    /// Base model: `θ_{d,k} = (ndk[d][k] + α) / (N_d + K·α)`. Covariate model:
+    /// the symmetric α is replaced by the per-document prior
+    /// `α_{d,k} = exp(x_d · λ_k)`.
     pub fn doc_topic(&self) -> Vec<Vec<f64>> {
+        // Covariate model: per-document, per-topic α from the regression.
+        if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
+            let doc_alpha = crate::dmr::compute_doc_alpha(lambda, features);
+            return self
+                .ndk
+                .iter()
+                .zip(doc_alpha.iter())
+                .map(|(row, a_row)| {
+                    let a_sum: f64 = a_row.iter().sum();
+                    let n_d: f64 = row.iter().map(|&c| c as f64).sum::<f64>() + a_sum;
+                    row.iter()
+                        .zip(a_row.iter())
+                        .map(|(&c, &a)| (c as f64 + a) / n_d)
+                        .collect()
+                })
+                .collect();
+        }
+
         let k = self.num_topics;
         let alpha = self.alpha;
         let k_alpha = k as f64 * alpha;
@@ -247,6 +274,7 @@ impl KeywordIndex {
 fn resample_token<R: Rng>(
     model: &mut KeyAtmModel,
     ki: &KeywordIndex,
+    alpha_row: &[f64],
     d: usize,
     w: usize,
     old_z: usize,
@@ -255,7 +283,6 @@ fn resample_token<R: Rng>(
 ) -> (usize, u8) {
     let k = model.num_topics;
     let v = model.num_types;
-    let alpha = model.alpha;
     let beta = model.beta;
     let beta_key = model.beta_key;
     let gamma1 = model.gamma1;
@@ -285,7 +312,7 @@ fn resample_token<R: Rng>(
     let mut weights = vec![0.0f64; 2 * k];
 
     for kk in 0..k {
-        let ndk_val = model.ndk[d][kk] as f64 + alpha;
+        let ndk_val = model.ndk[d][kk] as f64 + alpha_row[kk];
         let nkw_val = model.nkw[kk][w] as f64 + beta;
         let nk0_val = model.nk0[kk] as f64;
         let nk1_val = model.nk1[kk] as f64;
@@ -337,14 +364,16 @@ fn sweep<R: Rng>(
     docs: &[Vec<u32>],
     assignments: &mut Vec<Vec<(usize, u8)>>,
     ki: &KeywordIndex,
+    doc_alpha: &[Vec<f64>],
     rng: &mut R,
 ) {
     for d in 0..docs.len() {
         let doc = &docs[d];
+        let alpha_row = &doc_alpha[d];
         for pos in 0..doc.len() {
             let w = doc[pos] as usize;
             let (old_z, old_s) = assignments[d][pos];
-            let (new_z, new_s) = resample_token(model, ki, d, w, old_z, old_s, rng);
+            let (new_z, new_s) = resample_token(model, ki, alpha_row, d, w, old_z, old_s, rng);
             assignments[d][pos] = (new_z, new_s);
         }
     }
@@ -390,22 +419,43 @@ pub fn fit_keyatm<R: Rng>(
         "keywords length must equal num_topics"
     );
 
+    let (mut model, mut assignments, ki) = init_state(
+        docs, num_types, num_topics, keywords, alpha, beta, beta_key, gamma1, gamma2, rng,
+    );
+
+    // Symmetric prior: every document-topic gets the same α.
+    let doc_alpha = vec![vec![alpha; num_topics]; docs.len()];
+
+    for _ in 0..iters {
+        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+    }
+    model
+}
+
+/// Shared initialisation for the base and covariate fits: build the keyword
+/// index, seed token assignments (keyword tokens anchored to their keyword topic
+/// with the switch on), and the count tables. Returns the model with
+/// `lambda`/`features` unset.
+#[allow(clippy::too_many_arguments)]
+fn init_state<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_topics: usize,
+    keywords: &[Vec<usize>],
+    alpha: f64,
+    beta: f64,
+    beta_key: f64,
+    gamma1: f64,
+    gamma2: f64,
+    rng: &mut R,
+) -> (KeyAtmModel, Vec<Vec<(usize, u8)>>, KeywordIndex) {
     let d_count = docs.len();
     let v = num_types;
     let k = num_topics;
-
-    // Derive derived counts.
     let l: Vec<usize> = keywords.iter().map(|kws| kws.len()).collect();
     let num_keyword_topics = keywords.iter().filter(|kws| !kws.is_empty()).count();
-    // Keyword topics are the first `num_keyword_topics` entries; verify they
-    // are all at the front (the contract from the caller).
-    // We use `num_keyword_topics` purely as an upper bound for keyword-topic
-    // checks: any topic k < num_keyword_topics with l[k]==0 is also "regular".
-
-    // Build keyword index.
     let ki = KeywordIndex::build(keywords);
 
-    // For each word, which topics hold it as a keyword (for seeded init).
     let mut word_keyword_topics: Vec<Vec<usize>> = vec![Vec::new(); v];
     for (kk, kws) in keywords.iter().enumerate() {
         for &w in kws {
@@ -413,20 +463,16 @@ pub fn fit_keyatm<R: Rng>(
         }
     }
 
-    // --- Initialisation ---
     // A token whose word is a keyword of some topic starts in that keyword topic
-    // (random among ties) with the keyword switch on (s=1); this anchors keyword
-    // topics to their keywords and bootstraps the keyword distribution. Other
-    // tokens start in a uniformly random topic with s=0. Without this seeding a
-    // keyword word would land in its keyword topic only 1/K of the time and the
-    // switch would never engage.
+    // (random among ties) with the switch on (s=1); other tokens start in a
+    // uniformly random topic with s=0.
     let mut ndk = vec![vec![0u32; k]; d_count];
     let mut nkw = vec![vec![0u32; v]; k];
     let mut nk0 = vec![0u32; k];
     let mut nkx: Vec<Vec<u32>> = keywords.iter().map(|kws| vec![0u32; kws.len()]).collect();
     let mut nk1 = vec![0u32; k];
 
-    let mut assignments: Vec<Vec<(usize, u8)>> = docs
+    let assignments: Vec<Vec<(usize, u8)>> = docs
         .iter()
         .enumerate()
         .map(|(d, doc)| {
@@ -438,7 +484,7 @@ pub fn fit_keyatm<R: Rng>(
                         ((rng.gen::<f64>() * k as f64) as usize % k, 0)
                     } else {
                         let z = cands[(rng.gen::<f64>() * cands.len() as f64) as usize % cands.len()];
-                        (z, 1) // word is a keyword of z -> start with the switch on
+                        (z, 1)
                     };
                     ndk[d][z] += 1;
                     if s == 0 {
@@ -455,7 +501,7 @@ pub fn fit_keyatm<R: Rng>(
         })
         .collect();
 
-    let mut model = KeyAtmModel {
+    let model = KeyAtmModel {
         num_types: v,
         num_topics: k,
         num_keyword_topics,
@@ -471,13 +517,66 @@ pub fn fit_keyatm<R: Rng>(
         nk0,
         nkx,
         nk1,
+        lambda: None,
+        features: None,
     };
+    (model, assignments, ki)
+}
 
-    // --- Gibbs sweeps ---
-    for _ in 0..iters {
-        sweep(&mut model, docs, &mut assignments, &ki, rng);
+/// Fit a keyATM **Covariate** model. The document-topic prior is a
+/// Dirichlet-Multinomial regression on document features,
+/// `α_{d,k} = exp(x_d · λ_k)` (Mimno & McCallum 2008), matching the keyATM R
+/// package's covariate model. `λ` is re-estimated by L-BFGS every
+/// `opt_interval` sweeps once past `burn_in`; the keyword (z, s) sampler is
+/// otherwise identical to the base model.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_keyatm_cov<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_topics: usize,
+    keywords: &[Vec<usize>],
+    features: &[Vec<f64>],
+    num_features: usize,
+    beta: f64,
+    beta_key: f64,
+    gamma1: f64,
+    gamma2: f64,
+    iters: usize,
+    opt_interval: usize,
+    burn_in: usize,
+    prior_variance: f64,
+    lbfgs_iters: usize,
+    rng: &mut R,
+) -> KeyAtmModel {
+    assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
+    assert_eq!(features.len(), docs.len(), "features rows must equal number of documents");
+
+    // α is replaced by the covariate prior; pass a nominal 1.0 for the struct.
+    let (mut model, mut assignments, ki) = init_state(
+        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, rng,
+    );
+
+    let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
+    let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+
+    for it in 0..iters {
+        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+        if opt_interval > 0 && it + 1 > burn_in && (it + 1 - burn_in) % opt_interval == 0 {
+            crate::dmr::optimize_lambda(
+                &mut lambda,
+                features,
+                &model.ndk,
+                num_topics,
+                num_features,
+                prior_variance,
+                lbfgs_iters,
+            );
+            doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+        }
     }
 
+    model.lambda = Some(lambda);
+    model.features = Some(features.to_vec());
     model
 }
 

@@ -1169,11 +1169,36 @@ class KeyATM:
         gamma2: float = 1.0,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 1500) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 1500,
+        covariates: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        feature_names: list[str] | None = None,
+        optimize_interval: int = 50,
+        burn_in: int = 200,
+        prior_variance: float = 1.0,
+        lbfgs_iters: int = 20,
+    ) -> None:
+        """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
+        covariate keyATM: the document-topic prior becomes a DMR,
+        alpha_{d,k} = exp(x_d . lambda_k) (an intercept is prepended), and the
+        learned lambda is exposed as `feature_effects`."""
+        ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Covariate model: learned lambda, shape (num_topics, F+1); column 0 is
+        the intercept. Raises if fit without covariates."""
+        ...
+    @property
+    def feature_names(self) -> list[str]:
+        """Covariate model: names for feature_effects columns ('intercept' first)."""
+        ...
     @property
     def keyword_rate(self) -> numpy.typing.NDArray[numpy.float64]:
         """Per-topic keyword switch rate (0 for regular topics)."""

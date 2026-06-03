@@ -5775,6 +5775,9 @@ pub struct KeyATM {
     phi: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     corpus: Option<corpus::Corpus>,
+    // Covariate model only: learned λ (K × F+1, intercept first) and column names.
+    feature_effects: Option<Array2<f64>>,
+    feature_names: Vec<String>,
 }
 
 impl KeyATM {
@@ -5825,13 +5828,34 @@ impl KeyATM {
             key_names: names, keywords: words, num_topics: k, alpha, beta, beta_keyword,
             gamma1, gamma2, seed, fitted: false, topic_names: Vec::new(),
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
+            feature_effects: None, feature_names: Vec::new(),
         })
     }
 
     /// Fit by collapsed Gibbs for `iters` sweeps. Keyword topics come first (in
     /// the order given), then any regular topics.
-    #[pyo3(signature = (data, *, iters=1500))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+    ///
+    /// Pass `covariates` (a ``(num_docs, F)`` array or list of float lists) for
+    /// the **covariate** keyATM: the document-topic prior becomes a
+    /// Dirichlet-multinomial regression, ``α_{d,k} = exp(x_d · λ_k)`` (an
+    /// intercept is prepended). `feature_names` (length F) labels the columns;
+    /// the learned `λ` is exposed as `feature_effects`. With no `covariates`,
+    /// this is the base symmetric-α keyATM.
+    #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
+                        optimize_interval=50, burn_in=200, prior_variance=1.0, lbfgs_iters=20))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        iters: usize,
+        covariates: Option<&Bound<'_, PyAny>>,
+        feature_names: Option<Vec<String>>,
+        optimize_interval: usize,
+        burn_in: usize,
+        prior_variance: f64,
+        lbfgs_iters: usize,
+    ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -5849,16 +5873,69 @@ impl KeyATM {
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+
+        // Build the (intercept-prepended) feature matrix if covariates were given.
+        let (feats, cov_names): (Option<Vec<Vec<f64>>>, Vec<String>) = match covariates {
+            Some(c) => {
+                let raw = parse_features(c)?;
+                if raw.len() != corpus.num_docs() {
+                    return Err(PyValueError::new_err(format!(
+                        "covariates has {} rows but corpus has {} documents",
+                        raw.len(),
+                        corpus.num_docs()
+                    )));
+                }
+                let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
+                if raw.iter().any(|r| r.len() != f_in) {
+                    return Err(PyValueError::new_err("all covariate rows must have the same length"));
+                }
+                if let Some(n) = &feature_names {
+                    if n.len() != f_in {
+                        return Err(PyValueError::new_err(format!(
+                            "feature_names has {} entries but covariates has {} columns",
+                            n.len(), f_in
+                        )));
+                    }
+                }
+                let feats: Vec<Vec<f64>> = raw
+                    .iter()
+                    .map(|x| {
+                        let mut v = Vec::with_capacity(f_in + 1);
+                        v.push(1.0);
+                        v.extend_from_slice(x);
+                        v
+                    })
+                    .collect();
+                let mut names = vec!["intercept".to_string()];
+                names.extend(
+                    feature_names.unwrap_or_else(|| (0..f_in).map(|i| format!("feature_{}", i)).collect()),
+                );
+                (Some(feats), names)
+            }
+            None => (None, Vec::new()),
+        };
+
         let (model, corpus) = py.allow_threads(move || {
-            let m = keyatm::fit_keyatm(
-                &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2, iters,
-                &mut rng,
-            );
+            let m = match &feats {
+                Some(f) => keyatm::fit_keyatm_cov(
+                    &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
+                    beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
+                    prior_variance, lbfgs_iters, &mut rng,
+                ),
+                None => keyatm::fit_keyatm(
+                    &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
+                    iters, &mut rng,
+                ),
+            };
             (m, corpus)
         });
         self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
         self.keyword_rate = model.keyword_rate();
+        if let Some(lam) = &model.lambda {
+            self.feature_effects = Some(vecs_to_arr2(lam));
+            self.feature_names = cov_names;
+        }
         let mut names = self.key_names.clone();
         for i in self.key_names.len()..num_topics {
             names.push(format!("topic_{}", i));
@@ -5867,6 +5944,24 @@ impl KeyATM {
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
+    }
+
+    /// Covariate model: learned DMR coefficients λ, shape ``(num_topics, F+1)``;
+    /// column 0 is the intercept. Raises if the model was fit without covariates.
+    #[getter]
+    fn feature_effects<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        self.feature_effects
+            .as_ref()
+            .map(|e| e.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err("model was fit without covariates"))
+    }
+
+    /// Covariate model: names aligned with `feature_effects` columns
+    /// (``"intercept"`` first). Empty for the base model.
+    #[getter]
+    fn feature_names(&self) -> Vec<String> {
+        self.feature_names.clone()
     }
 
     #[getter]
@@ -5938,7 +6033,7 @@ impl KeyATM {
             alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
             gamma2: s.gamma2, seed: s.seed, fitted: s.fitted, topic_names: s.topic_names,
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
-            corpus: s.corpus,
+            corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
         })
     }
 

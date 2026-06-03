@@ -51,6 +51,28 @@ model.fit(docs, iters=1500)
 model.keyword_rate        # per-topic share drawn from the keyword distribution
 ```
 
+### Covariate keyATM
+
+Pass `covariates` to let document metadata shape topic prevalence, the keyATM
+covariate model. The document-topic prior becomes a Dirichlet-multinomial
+regression, `α_{d,k} = exp(x_d · λ_k)` (Mimno & McCallum 2008, the same engine as
+[`DMR`](models.md#dmr)), so you can ask whether a covariate moves a named topic.
+An intercept is prepended; the learned coefficients are in `feature_effects`.
+
+```python
+import numpy as np
+is_dem = np.array([...]).reshape(-1, 1)          # one row per document
+model = topica.KeyATM(seeds, num_topics=2, seed=1)
+model.fit(docs, covariates=is_dem, feature_names=["is_dem"], iters=1000)
+
+model.feature_names       # ['intercept', 'is_dem']
+model.feature_effects     # (num_topics, 2): coefficient of each covariate per topic
+```
+
+A larger `feature_effects[k, j]` means covariate `j` raises topic `k`'s
+prevalence. For uncertainty, pair the fitted `doc_topic` with
+[`estimate_effect`](covariates.md).
+
 ## Which to use
 
 - **`KeyATM`** is the better-validated choice and the one with the political-
