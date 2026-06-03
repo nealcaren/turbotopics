@@ -2,7 +2,7 @@
 
 📖 **[Documentation](https://nealcaren.github.io/topica/)**: guides, a full API reference, worked examples, and a [*Publishing in a social science journal*](https://nealcaren.github.io/topica/publishing/) methodology track.
 
-`topica` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models (from classic LDA to the Structural Topic Model), fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**. It is built for working social scientists: every model ships with the validation, covariate-effect, and reporting tools that contemporary social science journals expect, so the output is an analysis that holds up in peer review, not a quick demonstration. Pass pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
+`topica` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models (from classic LDA to the Structural Topic Model), fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit deterministic for a given seed. It is built for working social scientists, pairing each model with the validation, covariate-effect, and reporting tools to meet the standards reviewers expect. Pass pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
 
 ```bash
 pip install topica            # once published; pre-built abi3 wheels, no Rust toolchain needed
