@@ -1,7 +1,7 @@
 use rand::Rng;
 use crate::corpus::Corpus;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TopicModel {
     pub num_topics: usize,
     pub num_types: usize,

@@ -45,6 +45,120 @@ fn io_err(e: std::io::Error) -> PyErr {
 }
 
 // ---------------------------------------------------------------------------
+// Model serialization (save / load)
+// ---------------------------------------------------------------------------
+
+/// Serializable form of an ndarray `Array2` (shape + row-major data).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Arr2 {
+    rows: usize,
+    cols: usize,
+    data: Vec<f64>,
+}
+/// Serializable form of an ndarray `Array3`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Arr3 {
+    d0: usize,
+    d1: usize,
+    d2: usize,
+    data: Vec<f64>,
+}
+
+fn arr2_opt(a: &Option<Array2<f64>>) -> Option<Arr2> {
+    a.as_ref().map(|m| Arr2 { rows: m.nrows(), cols: m.ncols(), data: m.iter().copied().collect() })
+}
+fn arr2_back(s: Option<Arr2>) -> Option<Array2<f64>> {
+    s.map(|a| Array2::from_shape_vec((a.rows, a.cols), a.data).unwrap())
+}
+fn arr3_opt(a: &Option<Array3<f64>>) -> Option<Arr3> {
+    a.as_ref().map(|m| {
+        let d = m.dim();
+        Arr3 { d0: d.0, d1: d.1, d2: d.2, data: m.iter().copied().collect() }
+    })
+}
+fn arr3_back(s: Option<Arr3>) -> Option<Array3<f64>> {
+    s.map(|a| Array3::from_shape_vec((a.d0, a.d1, a.d2), a.data).unwrap())
+}
+fn arr1_opt(a: &Option<Array1<f64>>) -> Option<Vec<f64>> {
+    a.as_ref().map(|m| m.to_vec())
+}
+fn arr1_back(s: Option<Vec<f64>>) -> Option<Array1<f64>> {
+    s.map(Array1::from)
+}
+
+fn write_state<S: serde::Serialize>(path: &str, state: &S) -> PyResult<()> {
+    let bytes = bincode::serialize(state)
+        .map_err(|e| PyValueError::new_err(format!("serialization failed: {e}")))?;
+    std::fs::write(path, bytes).map_err(io_err)
+}
+fn read_state<S: serde::de::DeserializeOwned>(path: &str) -> PyResult<S> {
+    let bytes = std::fs::read(path).map_err(io_err)?;
+    bincode::deserialize(&bytes)
+        .map_err(|e| PyValueError::new_err(format!("not a valid turbotopics model file: {e}")))
+}
+
+// Per-model serializable snapshots (ndarray fields stored as Arr2/Arr3/Vec).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LdaState {
+    num_topics: usize, alpha_sum: Option<f64>, beta: f64, optimize_interval: usize,
+    burn_in: usize, seed: u64, num_threads: usize, fitted: bool,
+    phi: Option<Arr2>, theta: Option<Arr2>, model: Option<TopicModel>,
+    corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DmrState {
+    num_topics: usize, beta: f64, optimize_interval: usize, burn_in: usize, seed: u64,
+    prior_variance: f64, lbfgs_iters: usize, fitted: bool,
+    phi: Option<Arr2>, theta: Option<Arr2>, feature_effects: Option<Arr2>,
+    feature_names: Vec<String>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LabeledState {
+    alpha: f64, beta: f64, seed: u64, fitted: bool, num_topics: usize,
+    phi: Option<Arr2>, theta: Option<Arr2>, label_vocab: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SageState {
+    num_topics: usize, alpha: f64, prior_variance: f64, optimize_interval: usize,
+    burn_in: usize, seed: u64, lbfgs_iters: usize, fitted: bool, num_groups: usize,
+    beta: Vec<Vec<f64>>, theta: Option<Arr2>, group_names: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CtmState {
+    num_topics: usize, sigma_shrink: f64, seed: u64, init_spectral: bool, fitted: bool,
+    beta: Option<Arr2>, theta: Option<Arr2>, corr: Option<Arr2>,
+    eta_mean: Option<Arr2>, eta_cov: Option<Arr3>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StmState {
+    num_topics: usize, sigma_shrink: f64, seed: u64, init_spectral: bool, fitted: bool,
+    beta: Option<Arr2>, theta: Option<Arr2>, corr: Option<Arr2>,
+    eta_mean: Option<Arr2>, eta_cov: Option<Arr3>, gamma: Option<Arr2>,
+    feature_names: Vec<String>, content_beta: Option<Vec<Vec<Vec<f64>>>>,
+    group_names: Vec<String>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HdpState {
+    alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool, fitted: bool,
+    num_topics: usize, learned_alpha: f64, learned_gamma: f64,
+    beta: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DtmState {
+    num_topics: usize, alpha: f64, chain_variance: f64, obs_variance: f64, seed: u64,
+    fitted: bool, num_times: usize, bound: f64,
+    topic_words: Option<Vec<Vec<Vec<f64>>>>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SldaState {
+    num_topics: usize, alpha: f64, seed: u64, fitted: bool, sigma2: f64,
+    eta: Option<Vec<f64>>, beta: Option<Arr2>, theta: Option<Arr2>,
+    log_beta: Option<Vec<Vec<f64>>>, corpus: Option<corpus::Corpus>,
+}
+
+// ---------------------------------------------------------------------------
 // Corpus building from in-memory tokenised documents
 // ---------------------------------------------------------------------------
 
@@ -1060,6 +1174,30 @@ impl LDA {
         Ok(PyList::new_bound(py, items))
     }
 
+    /// Save the fitted model to `path` (compact binary). Reload with `LDA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &LdaState {
+            num_topics: self.num_topics, alpha_sum: self.alpha_sum, beta: self.beta,
+            optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
+            num_threads: self.num_threads, fitted: self.fitted,
+            phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
+            model: self.model.clone(), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: LdaState = read_state(path)?;
+        Ok(LDA {
+            num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
+            optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
+            num_threads: s.num_threads, fitted: s.fitted,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta), model: s.model, corpus: s.corpus,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "LDA(num_topics={}, beta={}, fitted={})",
@@ -1908,6 +2046,33 @@ impl DMR {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Save the fitted model to `path` (compact binary). Reload with `DMR.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &DmrState {
+            num_topics: self.num_topics, beta: self.beta,
+            optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
+            prior_variance: self.prior_variance, lbfgs_iters: self.lbfgs_iters, fitted: self.fitted,
+            phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
+            feature_effects: arr2_opt(&self.feature_effects),
+            feature_names: self.feature_names.clone(), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: DmrState = read_state(path)?;
+        Ok(DMR {
+            num_topics: s.num_topics, beta: s.beta, optimize_interval: s.optimize_interval,
+            burn_in: s.burn_in, seed: s.seed, prior_variance: s.prior_variance,
+            lbfgs_iters: s.lbfgs_iters, fitted: s.fitted,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            feature_effects: arr2_back(s.feature_effects),
+            feature_names: s.feature_names, corpus: s.corpus,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("DMR(num_topics={}, fitted={})", self.num_topics, self.fitted)
     }
@@ -2213,6 +2378,27 @@ impl LabeledLDA {
         let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `LabeledLDA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &LabeledState {
+            alpha: self.alpha, beta: self.beta, seed: self.seed, fitted: self.fitted,
+            num_topics: self.num_topics, phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
+            label_vocab: self.label_vocab.clone(), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: LabeledState = read_state(path)?;
+        Ok(LabeledLDA {
+            alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
+            num_topics: s.num_topics, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            label_vocab: s.label_vocab, corpus: s.corpus,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -2617,6 +2803,30 @@ impl SAGE {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Save the fitted model to `path`. Reload with `SAGE.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &SageState {
+            num_topics: self.num_topics, alpha: self.alpha, prior_variance: self.prior_variance,
+            optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
+            lbfgs_iters: self.lbfgs_iters, fitted: self.fitted, num_groups: self.num_groups,
+            beta: self.beta.clone(), theta: arr2_opt(&self.theta),
+            group_names: self.group_names.clone(), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: SageState = read_state(path)?;
+        Ok(SAGE {
+            num_topics: s.num_topics, alpha: s.alpha, prior_variance: s.prior_variance,
+            optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
+            lbfgs_iters: s.lbfgs_iters, fitted: s.fitted, num_groups: s.num_groups,
+            beta: s.beta, theta: arr2_back(s.theta), group_names: s.group_names, corpus: s.corpus,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "SAGE(num_topics={}, num_groups={}, fitted={})",
@@ -2898,6 +3108,30 @@ impl CTM {
         let tops = top_word_ids_phi(self.beta.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `CTM.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &CtmState {
+            num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
+            init_spectral: self.init_spectral, fitted: self.fitted,
+            beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: CtmState = read_state(path)?;
+        Ok(CTM {
+            num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
+            init_spectral: s.init_spectral, fitted: s.fitted,
+            beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
+            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov), corpus: s.corpus,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -3369,6 +3603,34 @@ impl STM {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Save the fitted model to `path`. Reload with `STM.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &StmState {
+            num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
+            init_spectral: self.init_spectral, fitted: self.fitted,
+            beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            gamma: arr2_opt(&self.gamma), feature_names: self.feature_names.clone(),
+            content_beta: self.content_beta.clone(), group_names: self.group_names.clone(),
+            corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: StmState = read_state(path)?;
+        Ok(STM {
+            num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
+            init_spectral: s.init_spectral, fitted: s.fitted,
+            beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
+            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            gamma: arr2_back(s.gamma), feature_names: s.feature_names,
+            content_beta: s.content_beta, group_names: s.group_names, corpus: s.corpus,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("STM(num_topics={}, fitted={})", self.num_topics, self.fitted)
     }
@@ -3623,6 +3885,29 @@ impl HDP {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Save the fitted model to `path`. Reload with `HDP.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &HdpState {
+            alpha: self.alpha, gamma: self.gamma, eta: self.eta, seed: self.seed,
+            resample_conc: self.resample_conc, fitted: self.fitted, num_topics: self.num_topics,
+            learned_alpha: self.learned_alpha, learned_gamma: self.learned_gamma,
+            beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: HdpState = read_state(path)?;
+        Ok(HDP {
+            alpha: s.alpha, gamma: s.gamma, eta: s.eta, seed: s.seed,
+            resample_conc: s.resample_conc, fitted: s.fitted, num_topics: s.num_topics,
+            learned_alpha: s.learned_alpha, learned_gamma: s.learned_gamma,
+            beta: arr2_back(s.beta), theta: arr2_back(s.theta), corpus: s.corpus,
+        })
+    }
+
     fn __repr__(&self) -> String {
         if self.fitted {
             format!("HDP(num_topics={} [inferred], fitted=true)", self.num_topics)
@@ -3865,6 +4150,28 @@ impl DTM {
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+
+    /// Save the fitted model to `path`. Reload with `DTM.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &DtmState {
+            num_topics: self.num_topics, alpha: self.alpha, chain_variance: self.chain_variance,
+            obs_variance: self.obs_variance, seed: self.seed, fitted: self.fitted,
+            num_times: self.num_times, bound: self.bound,
+            topic_words: self.topic_words.clone(), corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: DtmState = read_state(path)?;
+        Ok(DTM {
+            num_topics: s.num_topics, alpha: s.alpha, chain_variance: s.chain_variance,
+            obs_variance: s.obs_variance, seed: s.seed, fitted: s.fitted,
+            num_times: s.num_times, bound: s.bound, topic_words: s.topic_words, corpus: s.corpus,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -4135,6 +4442,28 @@ impl SupervisedLDA {
         let tops = top_word_ids_phi(self.beta.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `SupervisedLDA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &SldaState {
+            num_topics: self.num_topics, alpha: self.alpha, seed: self.seed, fitted: self.fitted,
+            sigma2: self.sigma2, eta: arr1_opt(&self.eta), beta: arr2_opt(&self.beta),
+            theta: arr2_opt(&self.theta), log_beta: self.log_beta.clone(),
+            corpus: self.corpus.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: SldaState = read_state(path)?;
+        Ok(SupervisedLDA {
+            num_topics: s.num_topics, alpha: s.alpha, seed: s.seed, fitted: s.fitted,
+            sigma2: s.sigma2, eta: arr1_back(s.eta), beta: arr2_back(s.beta),
+            theta: arr2_back(s.theta), log_beta: s.log_beta, corpus: s.corpus,
+        })
     }
 
     fn __repr__(&self) -> String {

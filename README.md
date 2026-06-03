@@ -461,6 +461,27 @@ The `.corp` format is shared with the `preprocess`/`train`/`show`/`analyze` CLI 
 
 ---
 
+## Saving and loading models
+
+Every fitted model serializes to a compact binary file with `save(path)` and reloads with the class's `load(path)` — so you train once and reuse the model later without refitting:
+
+```python
+from turbotopics import LDA
+
+model = LDA(num_topics=50, seed=1)
+model.fit(documents, iterations=1000)
+model.save("my_model.tt")
+
+# ...later, or in another process:
+model = LDA.load("my_model.tt")
+print(model.topic_word.shape)
+theta = model.transform(new_documents)   # inference still works after loading
+```
+
+This works for **every model** (`LDA`, `DMR`, `LabeledLDA`, `SAGE`, `CTM`, `STM`, `HDP`, `DTM`, `SupervisedLDA`). The full fitted state is preserved — including each model's distinguishing outputs (STM's variational posterior `eta_mean`/`eta_cov` and prevalence effects, SupervisedLDA's regression coefficients, the LDA sampler state needed for `transform`, etc.). Saving an unfitted model raises; loading a corrupt or non-model file raises `ValueError`.
+
+---
+
 ## Labeled LDA: supervised topics from document labels
 
 Labeled LDA (Ramage et al. 2009) is a supervised extension of LDA where each document carries a set of string labels. Every distinct label becomes a topic, and a document's tokens are constrained to be assigned only to its labels' topics. This means the model learns a dedicated word distribution for each label — making topic interpretation straightforward — and the `doc_topic` matrix gives the per-label proportions for every document.
