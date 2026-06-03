@@ -2,8 +2,8 @@
 
 The Structural Topic Model lets topics depend on document metadata in two ways:
 **prevalence** (how much a document discusses each topic) and **content** (how a
-topic is worded). For the publication-grade version of this workflow — proper
-uncertainty, clustered errors — see [Measure effects properly](../publishing/effects.md).
+topic is worded). For the publication-grade version of this workflow, with proper
+uncertainty and clustered errors, see [Measure effects properly](../publishing/effects.md).
 
 ## Prevalence covariates
 
@@ -35,8 +35,8 @@ model.topic_word_by_group        # per-group β
 
 ## Estimating effects
 
-Regress topic proportions on covariates with honest uncertainty — the method of
-composition, optionally with clustered standard errors and GLM links:
+Regress topic proportions on covariates with honest uncertainty, using the method
+of composition, optionally with clustered standard errors and GLM links:
 
 ```python
 from turbotopics import stm
@@ -57,5 +57,5 @@ Full detail and the journal-grade treatment are in the
 
 ## Choosing K for STM
 
-Use `search_k`, the coherence×exclusivity frontier, and an `HDP` sanity check —
-see [Choose and justify K](../publishing/choosing-k.md).
+Use `search_k`, the coherence×exclusivity frontier, and an `HDP` sanity check.
+See [Choose and justify K](../publishing/choosing-k.md).

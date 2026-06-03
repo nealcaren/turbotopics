@@ -1,7 +1,7 @@
 # 5. Report and make reproducible
 
-The last step is writing it up so a reader can evaluate — and a replicator can
-rerun — your analysis.
+The last step is writing it up so a reader can evaluate your analysis and a
+replicator can rerun it.
 
 ## Methods section
 
@@ -11,9 +11,9 @@ A complete methods section covers the corpus, the preprocessing, the model and
 > We used [LDA / STM / …] to identify latent topics in a corpus of **N**
 > documents drawn from [population], covering [time span]. The unit of analysis
 > is the [article / paragraph / speech]; long documents were segmented into
-> chunks of ≤ **W** words. After preprocessing — lowercasing, removing
+> chunks of ≤ **W** words. After preprocessing (lowercasing, removing
 > punctuation and a [SMART + custom] stopword list, pruning terms in fewer than
-> **a** documents or more than **b**% of documents, and detecting collocations —
+> **a** documents or more than **b**% of documents, and detecting collocations),
 > the vocabulary contained **M** terms and **T** tokens.
 >
 > We estimated models with **K = [value]** topics. [Rationale: theory + a
@@ -32,7 +32,7 @@ A complete methods section covers the corpus, the preprocessing, the model and
 - A **topic table**: each topic's label, its top **probability** and **FREX**
   words, and its overall prevalence.
 - **Covariate effects** with (clustered) standard errors and intervals.
-- **Representative quotes** for the topics you interpret — close reading, not
+- **Representative quotes** for the topics you interpret: close reading, not
   just word lists.
 
 ```python
@@ -71,8 +71,8 @@ model.save("model.tt")                                    # full state, reloadab
 
 - **Fix every seed.** turbotopics fits are bit-for-bit deterministic for a given
   `seed`, across machines and core counts. State the seeds you used.
-- **Script the whole pipeline** end to end — raw text → preprocessing → fit →
-  tables/figures — so it runs from one command.
+- **Script the whole pipeline** end to end, from raw text → preprocessing → fit →
+  tables/figures, so it runs from one command.
 - **Pin versions.** Record the turbotopics and NumPy versions
   (`turbotopics.__version__`).
 - **Share the model.** `model.save(path)` writes the complete fitted state;

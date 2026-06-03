@@ -1,6 +1,6 @@
 # Diagnostics & validation
 
-All of these are **model-agnostic** — they take any fitted model's `topic_word` /
+All of these are **model-agnostic**: they take any fitted model's `topic_word` /
 `doc_topic`, so they work the same across LDA, STM, HDP, and the rest. They're
 exported at the top level (`tt.<name>`) and in `turbotopics.diagnostics`. For how
 to *use* them to make an analysis publishable, see

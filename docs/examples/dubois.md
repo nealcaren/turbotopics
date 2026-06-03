@@ -1,7 +1,7 @@
 # W.E.B. Du Bois in *The Crisis*
 
 A full end-to-end analysis on a real corpus: **704 articles from *The Crisis***,
-the NAACP magazine Du Bois edited from 1910 to 1934. It walks the whole library —
+the NAACP magazine Du Bois edited from 1910 to 1934. It walks the whole library:
 preprocessing, phrase detection, LDA, STM with decade prevalence, dynamic topics,
 HDP, and held-out inference.
 
@@ -28,8 +28,8 @@ HDP, and held-out inference.
    communism rises** (Du Bois's economic turn) and **women's suffrage falls**
    (the 19th Amendment passed in 1920).
 5. **DTM** — word trajectories across decades. **War** recedes after the WWI
-   1910s; **labor** climbs toward the 1930s; **Africa** peaks in the Pan-African
-   1920s.
+   1910s, **labor** climbs toward the 1930s, and **Africa** peaks in the
+   Pan-African 1920s.
 6. **HDP** — independently infers ≈ 17 topics, close to the `K=15` chosen for
    LDA.
 7. **Utilities** — `summary`, save/load, pyLDAvis, and held-out `transform`.
@@ -58,5 +58,4 @@ T 8: labor, industry, industrial, capital, economic, workers, wages
 ...
 ```
 
-The notebook applies the full [publishing workflow](../publishing/index.md) — it
-is the reference for what a careful turbotopics analysis looks like.
+The notebook applies the full [publishing workflow](../publishing/index.md).

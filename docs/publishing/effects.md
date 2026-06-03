@@ -1,7 +1,7 @@
 # 4. Measure effects properly
 
-Most social-science topic-model papers don't stop at "here are the themes" —
-they ask **how topic prevalence relates to something**: time, group, treatment,
+Most social-science topic-model papers don't stop at "here are the themes."
+They ask **how topic prevalence relates to something**: time, group, treatment,
 ideology. Doing this credibly means modeling the relationship *and* reporting
 honest uncertainty.
 
@@ -21,7 +21,7 @@ model.fit(docs, prevalence=X, prevalence_names=names)
 ## Estimate effects with honest uncertainty
 
 A naive regression of point topic proportions on covariates treats θ as if it
-were observed exactly — it isn't. R's `stm` uses the **method of composition**
+were observed exactly. It isn't. R's `stm` uses the **method of composition**
 (Treier & Jackman 2008): draw θ from the model's posterior, regress each draw,
 and pool by Rubin's rules so the standard errors include topic-estimation
 uncertainty. turbotopics does the same:
@@ -38,13 +38,13 @@ for e in effects:
 ```
 
 For non-linear time trends and interactions, build the design matrix with
-`stm.spline` and `stm.interaction` — the same `~ s(year)` and `~ a*b` you'd write
+`stm.spline` and `stm.interaction`, the same `~ s(year)` and `~ a*b` you'd write
 in R.
 
 ## Cluster your standard errors
 
 Text data is almost always **nested**: multiple speeches by the same legislator,
-many tweets per user, several articles per outlet — or, if you
+many tweets per user, several articles per outlet, or, if you
 [split long documents](corpus.md), many chunks per source document. Ignoring this
 nesting understates uncertainty and is a common reason reviewers reject a result.
 
@@ -57,7 +57,7 @@ effects = stm.estimate_effect(
 )
 ```
 
-This composes with the method of composition — each posterior draw is clustered,
+This composes with the method of composition: each posterior draw is clustered,
 then the per-draw covariances are Rubin-pooled.
 
 ## Keep predictions in bounds: GLM links
@@ -85,7 +85,7 @@ for e in effects:
 table = pd.DataFrame(rows)
 ```
 
-Report point estimates, (clustered) standard errors, and confidence intervals —
+Report point estimates, (clustered) standard errors, and confidence intervals,
 and say plainly which effects clear conventional thresholds and which don't.
 
 → Next: [Report and make reproducible](reporting.md).

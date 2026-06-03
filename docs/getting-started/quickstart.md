@@ -1,7 +1,7 @@
 # Quickstart
 
-Every model takes pre-tokenized documents — a `list[list[str]]` (or a
-[`Corpus`](../guides/preprocessing.md)) — and returns NumPy arrays.
+Every model takes pre-tokenized documents, a `list[list[str]]` or a
+[`Corpus`](../guides/preprocessing.md), and returns NumPy arrays.
 
 ## Fit a model
 
@@ -55,7 +55,7 @@ print(theta.argmax(axis=1))                     # dominant topic per document
 
 ## Where to go next
 
-- [The models](../guides/models.md) — pick the right one for your question.
-- [Covariates & STM](../guides/covariates.md) — relate topics to metadata.
-- [Diagnostics & validation](../guides/diagnostics.md) — choose `K`, prove stability.
-- [Worked example: Du Bois in *The Crisis*](../examples/dubois.md) — the whole workflow end to end.
+- [The models](../guides/models.md): pick the right one for your question.
+- [Covariates & STM](../guides/covariates.md): relate topics to metadata.
+- [Diagnostics & validation](../guides/diagnostics.md): choose `K`, prove stability.
+- [Worked example: Du Bois in *The Crisis*](../examples/dubois.md): the whole workflow end to end.

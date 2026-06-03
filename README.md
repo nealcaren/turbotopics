@@ -2,7 +2,7 @@
 
 📖 **Documentation: [nealcaren.github.io/turbotopics](https://nealcaren.github.io/turbotopics/)** — guides, a full API reference, and a [*Publishing in a social science journal*](https://nealcaren.github.io/turbotopics/publishing/) methodology track.
 
-`turbotopics` is a topic-modeling library with a Rust core and a clean, numpy-native Python API. It gathers a broad family of models — from classic LDA to the Structural Topic Model — under one roof, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
+`turbotopics` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models, from classic LDA to the Structural Topic Model, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
 
 **Models:**
 
@@ -22,9 +22,9 @@
 | **`PA`** | Pachinko Allocation: super-/sub-topic hierarchy |
 | **`HLDA`** | Hierarchical LDA over a nested-CRP topic tree |
 
-Everything takes pre-tokenized `list[list[str]]` (or a `Corpus`) and returns numpy arrays ready for downstream analysis, plus general model-agnostic diagnostics (coherence, exclusivity, FREX/labeling, intrusion tests, topic alignment, Fighting Words), an `stm`-style toolkit (covariate effects with clustered SEs and GLM links, topic correlation, `searchK`), and fit diagnostics (held-out perplexity). The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores automatically while staying bit-for-bit deterministic.
+Every model takes pre-tokenized `list[list[str]]` (or a `Corpus`) and returns numpy arrays for downstream analysis, plus model-agnostic diagnostics (coherence, exclusivity, FREX/labeling, intrusion tests, topic alignment, Fighting Words), an `stm`-style toolkit (covariate effects with clustered SEs and GLM links, topic correlation, `searchK`), and fit diagnostics (held-out perplexity). The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores automatically while staying bit-for-bit deterministic.
 
-The implementations are faithful and validated, not approximations: the `LDA` core binds David Mimno's [RustMallet](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit, while the other models are original Rust ports checked against their reference implementations — Java MALLET, the R `stm` package, and Blei's dynamic-topic-model code.
+The implementations are validated, not approximations. The `LDA` core binds David Mimno's [RustMallet](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit; the other models are Rust ports checked against their reference implementations: Java MALLET, the R `stm` package, and Blei's dynamic-topic-model code.
 
 ---
 
@@ -87,13 +87,13 @@ Topic 1: planet(0.396)  star(0.199)  moon(0.199)  rocket(0.199)  cat(0.002)
 
 ### A full worked example
 
-[**`examples/dubois_tutorial.ipynb`**](examples/dubois_tutorial.ipynb) is an end-to-end notebook that runs the whole library — preprocessing, phrase detection, LDA, STM (topic prevalence over time via the method of composition), DTM, HDP, and held-out `transform` — over a real corpus of 706 W.E.B. Du Bois articles from *The Crisis* (1910–1951), bundled as [`examples/dubois_crisis.csv`](examples/dubois_crisis.csv). It renders with outputs on GitHub; a script version is in [`examples/dubois_tutorial.py`](examples/dubois_tutorial.py).
+[**`examples/dubois_tutorial.ipynb`**](examples/dubois_tutorial.ipynb) is an end-to-end notebook that runs the whole library (preprocessing, phrase detection, LDA, STM with topic prevalence over time via the method of composition, DTM, HDP, and held-out `transform`) over a corpus of 706 W.E.B. Du Bois articles from *The Crisis* (1910–1951), bundled as [`examples/dubois_crisis.csv`](examples/dubois_crisis.csv). It renders with outputs on GitHub; a script version is in [`examples/dubois_tutorial.py`](examples/dubois_tutorial.py).
 
 ---
 
 ## STM: Structural Topic Model (covariate-aware correlated topics)
 
-The Structural Topic Model (Roberts, Stewart & Tingley) extends the Correlated Topic Model with **prevalence covariates**: the prior mean over latent topic weights is a regression on document-level variables, `μ_d = X_d γ`. In practical terms, covariates (publication year, author group, treatment condition, etc.) shift *which* topics a document discusses. The model fits the CTM's variational E-step per document, then refits γ by ridge regression each M-step.
+The Structural Topic Model (Roberts, Stewart & Tingley) extends the Correlated Topic Model with **prevalence covariates**: the prior mean over latent topic weights is a regression on document-level variables, `μ_d = X_d γ`. Covariates (publication year, author group, treatment condition, etc.) shift *which* topics a document discusses. The model fits the CTM's variational E-step per document, then refits γ by ridge regression each M-step.
 
 **When to use STM:** when you want correlated topics *and* you have metadata that explains variation in topic use. Use CTM when you only want the correlation structure; use DMR when you want covariate-driven topic prevalence under a Gibbs sampler.
 
@@ -148,7 +148,7 @@ Topic 0  R²=0.99  is_policy: coef=+0.71  z=+8418.6
 Topic 1  R²=0.99  is_policy: coef=-0.71  z=-8418.6
 ```
 
-The `stm.estimate_effect` function (see the [stm analysis toolkit section](#stm-style-analysis-toolkit)) performs OLS of each topic's θ on the covariates. A large positive z for a topic means that covariate strongly predicts higher prevalence of that topic. Use `feature_names=["is_policy"]` (length F, not including intercept) to label the columns.
+The `stm.estimate_effect` function (see the [stm analysis toolkit section](#stm-style-analysis-toolkit)) performs OLS of each topic's θ on the covariates. A large positive z for a topic means that covariate predicts higher prevalence of that topic. Use `feature_names=["is_policy"]` (length F, not including intercept) to label the columns.
 
 ### Key properties
 
@@ -164,7 +164,7 @@ The `stm.estimate_effect` function (see the [stm analysis toolkit section](#stm-
 
 ### Covariate effects with proper uncertainty (method of composition)
 
-`estimate_effect` on the point `doc_topic` gives OLS standard errors — but those treat θ as if it were observed exactly, understating uncertainty. R `stm` instead uses the **method of composition**: draw θ from the model's posterior, run the regression on each draw, and pool by Rubin's rules. turbotopics exposes the STM/CTM variational posterior (`eta_mean`, `eta_cov`), so you can do exactly that:
+`estimate_effect` on the point `doc_topic` gives OLS standard errors, but those treat θ as if it were observed exactly, understating uncertainty. R `stm` instead uses the **method of composition**: draw θ from the model's posterior, run the regression on each draw, and pool by Rubin's rules. turbotopics exposes the STM/CTM variational posterior (`eta_mean`, `eta_cov`), so you can do the same:
 
 ```python
 from turbotopics import STM, stm
@@ -199,7 +199,7 @@ Identical to CTM: shrinks Σ toward its diagonal at each M-step. Default `0.0` l
 
 ### STM content covariates: topic wording varies by group
 
-In addition to (or instead of) prevalence covariates, STM supports a `content` covariate: one group label per document. When `content` is supplied, the model learns per-group word distributions for each topic — the same topic uses different vocabulary in different groups (a SAGE model embedded inside the STM variational inference engine). This is useful when you want to ask *how* a topic is expressed differently across groups (political parties, languages, time periods, outlets) rather than just *how prevalent* each topic is.
+In addition to (or instead of) prevalence covariates, STM supports a `content` covariate: one group label per document. When `content` is supplied, the model learns per-group word distributions for each topic, so the same topic uses different vocabulary in different groups (a SAGE model embedded inside the STM variational inference engine). Use it when you want to ask *how* a topic is expressed differently across groups (political parties, languages, time periods, outlets) rather than just *how prevalent* each topic is.
 
 Pass a list of group labels (strings or ints) as `content=`. Use `content_names` to fix a specific group order; otherwise groups are sorted.
 
@@ -309,11 +309,11 @@ Returns the `n` words that most distinguish how `topic` is worded in `group_a` v
 
 ## CTM: correlated topics (the STM core)
 
-The Correlated Topic Model (Blei & Lafferty 2007) places a **logistic-normal prior** with a full covariance matrix Σ over the per-document topic proportions. Because documents draw from a multivariate normal before the softmax, topics can be positively or negatively correlated — something LDA's Dirichlet prior cannot represent. `CTM` is the only variational (non-Gibbs) model in `turbotopics`.
+The Correlated Topic Model (Blei & Lafferty 2007) places a **logistic-normal prior** with a full covariance matrix Σ over the per-document topic proportions. Because documents draw from a multivariate normal before the softmax, topics can be positively or negatively correlated, which LDA's Dirichlet prior cannot represent. `CTM` is the only variational (non-Gibbs) model in `turbotopics`.
 
-The model is fit by **variational EM**: the E-step approximates each document's posterior over latent topic weights via Newton's method (a faithful port of STM's `lhoodcpp`/`gradcpp`/`hpbcpp` Laplace approximation); the M-step updates the global topic-word distributions β and the covariance Σ. This is exactly the inference engine that STM's prevalence and content covariate models build on.
+The model is fit by **variational EM**: the E-step approximates each document's posterior over latent topic weights via Newton's method (a port of STM's `lhoodcpp`/`gradcpp`/`hpbcpp` Laplace approximation); the M-step updates the global topic-word distributions β and the covariance Σ. This is the inference engine that STM's prevalence and content covariate models build on.
 
-The headline output is `topic_correlation`: a `(num_topics, num_topics)` matrix giving the Pearson correlation of θ across documents. Topics that tend to co-occur in the same documents get a higher (less negative) correlation; topics that rarely co-occur get a lower (more negative) correlation. Note that all correlations may be negative because topic proportions live on a simplex — what matters is the *relative* ordering.
+The main output is `topic_correlation`: a `(num_topics, num_topics)` matrix giving the Pearson correlation of θ across documents. Topics that tend to co-occur in the same documents get a higher (less negative) correlation; topics that rarely co-occur get a lower (more negative) correlation. All correlations may be negative because topic proportions live on a simplex, so what matters is the *relative* ordering.
 
 ### Example
 
@@ -370,7 +370,7 @@ topic_correlation:
  [-0.602 -0.304  1.   ]]
 ```
 
-Here A (topic 1) and B (topic 2) have correlation −0.30, while A–C and B–C are −0.58 and −0.60. The A/B pair is far less anti-correlated than either pair involving C — exactly the co-occurrence structure we built in.
+Here A (topic 1) and B (topic 2) have correlation −0.30, while A–C and B–C are −0.58 and −0.60. The A/B pair is far less anti-correlated than either pair involving C, the co-occurrence structure we built in.
 
 ### When to use CTM vs LDA
 
@@ -473,7 +473,7 @@ The `.corp` format is shared with the `preprocess`/`train`/`show`/`analyze` CLI 
 
 ## Saving and loading models
 
-Every fitted model serializes to a compact binary file with `save(path)` and reloads with the class's `load(path)` — so you train once and reuse the model later without refitting:
+Every fitted model serializes to a compact binary file with `save(path)` and reloads with the class's `load(path)`, so you train once and reuse the model later without refitting:
 
 ```python
 from turbotopics import LDA
@@ -488,15 +488,15 @@ print(model.topic_word.shape)
 theta = model.transform(new_documents)   # inference still works after loading
 ```
 
-This works for **every model** (`LDA`, `DMR`, `LabeledLDA`, `SAGE`, `CTM`, `STM`, `HDP`, `DTM`, `SupervisedLDA`). The full fitted state is preserved — including each model's distinguishing outputs (STM's variational posterior `eta_mean`/`eta_cov` and prevalence effects, SupervisedLDA's regression coefficients, the LDA sampler state needed for `transform`, etc.). Saving an unfitted model raises; loading a corrupt or non-model file raises `ValueError`.
+This works for **every model** (`LDA`, `DMR`, `LabeledLDA`, `SAGE`, `CTM`, `STM`, `HDP`, `DTM`, `SupervisedLDA`). The full fitted state is preserved, including each model's distinguishing outputs: STM's variational posterior `eta_mean`/`eta_cov` and prevalence effects, SupervisedLDA's regression coefficients, the LDA sampler state needed for `transform`, and so on. Saving an unfitted model raises; loading a corrupt or non-model file raises `ValueError`.
 
 ---
 
 ## Labeled LDA: supervised topics from document labels
 
-Labeled LDA (Ramage et al. 2009) is a supervised extension of LDA where each document carries a set of string labels. Every distinct label becomes a topic, and a document's tokens are constrained to be assigned only to its labels' topics. This means the model learns a dedicated word distribution for each label — making topic interpretation straightforward — and the `doc_topic` matrix gives the per-label proportions for every document.
+Labeled LDA (Ramage et al. 2009) is a supervised extension of LDA where each document carries a set of string labels. Every distinct label becomes a topic, and a document's tokens are constrained to be assigned only to its labels' topics. The model learns a dedicated word distribution for each label, which keeps topic interpretation straightforward, and the `doc_topic` matrix gives the per-label proportions for every document.
 
-**When to use Labeled LDA:** when you have pre-existing label annotations on documents (e.g. tags, categories, codes) and want to learn the vocabulary associated with each label, or to measure each document's mixture across its assigned labels. The number of topics is determined automatically from the labels — you do not specify it.
+**When to use Labeled LDA:** when you have pre-existing label annotations on documents (e.g. tags, categories, codes) and want to learn the vocabulary associated with each label, or to measure each document's mixture across its assigned labels. The number of topics is set automatically from the labels; you do not specify it.
 
 ### Example
 
@@ -556,7 +556,7 @@ model.fit(docs, labels, label_names=["tech", "sports", "politics"])
 
 ### Unconstrained documents
 
-A document with an empty label list `[]` is treated as unconstrained — all topics are allowed. This is useful when some documents lack annotations:
+A document with an empty label list `[]` is treated as unconstrained: all topics are allowed. This is useful when some documents lack annotations:
 
 ```python
 labels_with_missing = [["sports"], ["politics"], []]   # third doc unconstrained
@@ -584,7 +584,7 @@ log β_{k,g,v} = m_v + κT_{k,v} + κC_{g,v} + κI_{k,g,v}
 
 where `m_v` is a corpus background, `κT_{k,v}` is the topic deviation, `κC_{g,v}` is the group deviation, and `κI_{k,g,v}` is their interaction. The κ deviations are MAP-estimated by L-BFGS with a Gaussian (L2) prior.
 
-**When to use SAGE:** when you want to ask *how* a topic is expressed differently across groups, not just *how prevalent* a topic is. Classic use cases include comparing how different political parties discuss the same issue, how the same themes appear in texts from different time periods or languages, or how news outlets frame shared topics with different vocabulary.
+**When to use SAGE:** when you want to ask *how* a topic is expressed differently across groups, not just *how prevalent* a topic is. Typical uses: comparing how different political parties discuss the same issue, how the same themes appear in texts from different time periods or languages, or how news outlets frame shared topics with different vocabulary.
 
 **SAGE vs DMR:** DMR models variation in topic *prevalence* (the document-topic prior shifts by covariates). SAGE models variation in topic *content* (the same topic uses different words in different groups). Use DMR when you want to know whether a covariate predicts topic proportions; use SAGE when you want to know whether a covariate predicts topic vocabulary.
 
@@ -699,11 +699,11 @@ Dirichlet-Multinomial Regression (DMR; Mimno & McCallum, 2008) is an extension o
 α_{d,t} = exp(λ_t · x_d)
 ```
 
-where `x_d` is a vector of document features (year, author group, treatment condition, outlet, etc.) and `λ_t` is a learned weight vector for topic `t`. The weights `λ` are estimated by L-BFGS during Gibbs sampling, with a Gaussian prior on the weights for regularization. The `feature_effects` property holds the learned `λ` matrix — its values tell you which covariates raise or lower each topic's prevalence.
+where `x_d` is a vector of document features (year, author group, treatment condition, outlet, etc.) and `λ_t` is a learned weight vector for topic `t`. The weights `λ` are estimated by L-BFGS during Gibbs sampling, with a Gaussian prior on the weights for regularization. The `feature_effects` property holds the learned `λ` matrix; its values tell you which covariates raise or lower each topic's prevalence.
 
-**When to use DMR:** when you want covariate-aware topics — for example, to ask whether news articles from different outlets have different topic distributions, whether topic prevalence changes over time, or whether a treatment group produces different topic patterns than a control group.
+**When to use DMR:** when you want covariate-aware topics, for example to ask whether news articles from different outlets have different topic distributions, whether topic prevalence changes over time, or whether a treatment group produces different topic patterns than a control group.
 
-**Fidelity note:** DMR involves L-BFGS optimization of the feature weights, so (unlike plain LDA) it is **not** bit-identical to Java MALLET. Fidelity is validated statistically — covariate recovery and comparable perplexity — not byte-for-byte.
+**Fidelity note:** DMR involves L-BFGS optimization of the feature weights, so (unlike plain LDA) it is **not** bit-identical to Java MALLET. Fidelity is validated statistically, by covariate recovery and comparable perplexity, not byte-for-byte.
 
 ### Example
 
@@ -787,9 +787,9 @@ matrix, names = one_hot(values, drop_first=True, prefix="outlet_")
 
 The Hierarchical Dirichlet Process topic model (Teh, Jordan, Beal & Blei 2006) is **nonparametric LDA**: instead of fixing `num_topics`, it *infers* how many topics the corpus supports. A corpus-level Dirichlet process (concentration `gamma`) defines a shared, unbounded menu of topics; each document is its own Dirichlet process (concentration `alpha`) drawing a mixture from that menu. New topics appear as the data demands and unused ones die off, so `K` is learned rather than chosen.
 
-It is fit by the **direct-assignment Gibbs sampler** (the Chinese Restaurant Franchise), with a sequential-CRF initialization that grows a compact, well-separated topic set, and — by default — data-driven resampling of both concentration parameters (a faithful port of the `blei-lab/hdp` updates). You usually don't tune `alpha`/`gamma`; pass a corpus and read `num_topics` off the fitted model.
+It is fit by the **direct-assignment Gibbs sampler** (the Chinese Restaurant Franchise), with a sequential-CRF initialization that grows a compact, well-separated topic set, and by default resamples both concentration parameters from the data (a port of the `blei-lab/hdp` updates). You usually don't tune `alpha`/`gamma`; pass a corpus and read `num_topics` off the fitted model.
 
-**When to use HDP:** when you don't know `K` and want the model to find it, or to sanity-check a `K` you picked for LDA/CTM. (HDP tends to slightly over-segment, which is normal — treat the inferred `K` as a well-grounded estimate, not an exact count.)
+**When to use HDP:** when you don't know `K` and want the model to find it, or to sanity-check a `K` you picked for LDA/CTM. HDP tends to slightly over-segment, which is normal; treat the inferred `K` as a grounded estimate, not an exact count.
 
 ### Example
 
@@ -826,11 +826,11 @@ Methods: `fit(data, *, iters=150)`, `top_words(n=10, *, topic=None)`, `coherence
 
 ## DTM: topics that evolve over time
 
-The Dynamic Topic Model (Blei & Lafferty 2006) lets a topic's vocabulary **drift across time**. You split the corpus into ordered time slices (years, say); each topic's word distribution at slice *t* is tied to its distribution at slice *t−1* through a Gaussian random walk, so the topic evolves smoothly rather than being re-estimated independently per slice. The result lets you trace *how* a topic's language changes over time — which words rise and fall within a coherent, persistent theme.
+The Dynamic Topic Model (Blei & Lafferty 2006) lets a topic's vocabulary **drift across time**. You split the corpus into ordered time slices (years, say); each topic's word distribution at slice *t* is tied to its distribution at slice *t−1* through a Gaussian random walk, so the topic evolves smoothly rather than being re-estimated independently per slice. You can then trace *how* a topic's language changes over time: which words rise and fall within a persistent theme.
 
-Inference is variational with Kalman smoothing over the slices — a faithful port of Blei's C `dtm` and its gensim `LdaSeqModel` reincarnation: a per-document LDA variational E-step against each slice's topics, and a per-topic state-space M-step (optimized here with L-BFGS on the same `f_obs`/`df_obs` objective gensim hands to its conjugate-gradient solver).
+Inference is variational with Kalman smoothing over the slices, a port of Blei's C `dtm` and its gensim `LdaSeqModel` reincarnation: a per-document LDA variational E-step against each slice's topics, and a per-topic state-space M-step (optimized here with L-BFGS on the same `f_obs`/`df_obs` objective gensim hands to its conjugate-gradient solver).
 
-**When to use DTM:** when documents are timestamped and you care about *change* — how a topic's terminology shifts year to year — not just which topics exist. The key knob is `chain_variance`: small (the 0.005 default) keeps topics nearly stationary; larger values let them move more freely between slices.
+**When to use DTM:** when documents are timestamped and you care about *change*, how a topic's terminology shifts year to year, not just which topics exist. The key knob is `chain_variance`: small (the 0.005 default) keeps topics nearly stationary; larger values let them move more freely between slices.
 
 ### Example
 
@@ -873,9 +873,9 @@ Fitting is deterministic for a fixed `seed`.
 
 ## Supervised LDA: topics that predict a response
 
-Supervised LDA (Blei & McAuliffe 2007) attaches a **real-valued response** to each document and fits the topics so they *predict* it. The response is modeled as `y_d ~ N(ηᵀ z̄_d, σ²)`, a linear regression on the document's empirical topic frequencies `z̄_d`. Because the response feeds back into inference, topics are pulled toward directions that explain `y` — and the fitted coefficients `η` tell you how each topic moves the response. You can then `predict` the response for new, unlabeled documents.
+Supervised LDA (Blei & McAuliffe 2007) attaches a **real-valued response** to each document and fits the topics so they *predict* it. The response is modeled as `y_d ~ N(ηᵀ z̄_d, σ²)`, a linear regression on the document's empirical topic frequencies `z̄_d`. Because the response feeds back into inference, topics are pulled toward directions that explain `y`, and the fitted coefficients `η` tell you how each topic moves the response. You can then `predict` the response for new, unlabeled documents.
 
-Use it when documents come with an outcome you care about — a rating, a price, a sentiment score, a vote share — and you want topics that are both interpretable *and* predictive, plus a per-topic read on which themes push the outcome up or down.
+Use it when documents come with an outcome you care about (a rating, a price, a sentiment score, a vote share) and you want topics that are both interpretable *and* predictive, plus a per-topic read on which themes push the outcome up or down.
 
 Inference is the variational EM of Blei & McAuliffe: a per-document coordinate ascent on the variational parameters (with the response-coupling term that ties a document's words together through `η`/`σ²`), then an M-step that re-estimates the topics `β`, the coefficients `η` (by the regression normal equations), and the noise variance `σ²`.
 
@@ -920,7 +920,7 @@ Fitting is deterministic for a fixed `seed`.
 
 ## Inferring topics for new documents
 
-After fitting a model, use `transform()` to infer the document-topic distribution (θ) for documents that were not part of training — for example a held-out test set or freshly collected texts. The fitted topic-word distributions (φ) are held fixed; only the new documents' topic assignments are inferred.
+After fitting a model, use `transform()` to infer the document-topic distribution (θ) for documents that were not part of training, such as a held-out test set or freshly collected texts. The fitted topic-word distributions (φ) are held fixed; only the new documents' topic assignments are inferred.
 
 ```python
 from turbotopics import LDA, tokenize
@@ -954,7 +954,7 @@ print(dominant_topics)       # e.g. [3, 7, 3, 12, ...]
 | `DMR` | collapsed Gibbs with `α_d = exp(Xγ)` | pass held-out `features` to set the prior, else the intercept-only baseline is used |
 | `CTM`, `STM` | Laplace **variational** E-step against fixed β and the logistic-normal prior | reproduces the model's own training θ to ~1e-3; `STM` uses the covariate-free baseline μ |
 
-For `CTM`/`STM` the variational `transform` is the *same* inference R's `stm` runs in `fitNewDocuments`, so held-out θ is consistent with the fitted document-topic matrix rather than an approximation.
+For `CTM`/`STM` the variational `transform` is the *same* inference R's `stm` runs in `fitNewDocuments`, so held-out θ is consistent with the fitted document-topic matrix.
 
 ---
 
@@ -1063,21 +1063,21 @@ model = LDA(num_topics=50, num_threads=8)
 model.fit(documents, iterations=1000)
 ```
 
-**`num_threads=1` (default)** — the exact, single-threaded SparseLDA sampler. Results are bit-identical to the upstream `train` CLI for the same corpus, seed, and parameters.
+**`num_threads=1` (default):** the exact, single-threaded SparseLDA sampler. Results are bit-identical to the upstream `train` CLI for the same corpus, seed, and parameters.
 
-**`num_threads>1`** — MALLET-style approximate parallel Gibbs sampling. During each sweep, documents are partitioned across worker threads; each thread samples against a private copy of the topic-word counts, then changes are reconciled. This is an *approximation*: results will differ from the single-threaded path. However:
+**`num_threads>1`:** MALLET-style approximate parallel Gibbs sampling. During each sweep, documents are partitioned across worker threads; each thread samples against a private copy of the topic-word counts, then changes are reconciled. This is an *approximation*: results will differ from the single-threaded path. But:
 
 - **Deterministic for a fixed `(num_threads, seed)` pair.** Two fits with the same `num_threads` and `seed` produce identical `topic_word` matrices.
 - **Valid token bookkeeping.** `doc_topic` rows still sum to 1; all downstream methods (`transform`, `coherence`, `diagnostics`, `perplexity`, etc.) work normally.
 - **Comparable topic quality.** Held-out perplexity and topic coherence are on par with the sequential path; the approximation does not degrade topic recovery.
 
-**Speedup** is corpus- and hardware-dependent. On a ~5 000-document / 627 000-token corpus, roughly 2.5–3.5× has been observed at 8 threads, with better scaling when there are more topics and more tokens per thread. Gains tend to taper past ~8 threads when the vocabulary is large, because each worker must copy the topic-word count table per sweep.
+**Speedup** is corpus- and hardware-dependent. On a ~5 000-document / 627 000-token corpus, roughly 2.5–3.5× has been observed at 8 threads, with better scaling when there are more topics and more tokens per thread. Gains taper past ~8 threads when the vocabulary is large, because each worker must copy the topic-word count table per sweep.
 
 **Tradeoff summary:** not bit-identical to the single-threaded / CLI path, but deterministic for a fixed `num_threads`+`seed`, and produces coherent topics suitable for downstream analysis.
 
 ### Variational models parallelize automatically (and exactly)
 
-The variational-EM models — `CTM`, `STM`, `SupervisedLDA`, and `DTM` — parallelize their per-document E-step across all available cores with no configuration. Because each document's variational update is independent, the work fans out across a thread pool and the resulting sufficient statistics are then summed back in document order. Unlike the approximate LDA parallel sampler above, **this is exact: the fit is bit-for-bit identical regardless of how many threads run it.** Determinism for a fixed `seed` holds across machines and core counts.
+The variational-EM models (`CTM`, `STM`, `SupervisedLDA`, and `DTM`) parallelize their per-document E-step across all available cores with no configuration. Because each document's variational update is independent, the work fans out across a thread pool and the resulting sufficient statistics are then summed back in document order. Unlike the approximate LDA parallel sampler above, **this is exact: the fit is bit-for-bit identical regardless of how many threads run it.** Determinism for a fixed `seed` holds across machines and core counts.
 
 Control the thread count with the standard `RAYON_NUM_THREADS` environment variable (e.g. `RAYON_NUM_THREADS=1` to force single-threaded). The E-step is the dominant per-iteration cost, so on a multicore machine this is roughly a several-fold speedup; the exact factor is hardware- and corpus-dependent.
 
@@ -1111,7 +1111,7 @@ print(f"\nBest k: {best_k}")
 
 `perplexity()` uses the Wallach (2009) left-to-right particle-filter estimator. The `num_particles` parameter controls the accuracy/speed trade-off; 10 is a reasonable default. Results are deterministic for a fixed `seed`.
 
-Out-of-vocabulary (OOV) tokens — words absent from the training vocabulary — are dropped silently and counted in `evaluate()`'s `num_oov` field. If all tokens in the held-out set are OOV, `perplexity` is `nan` and `num_tokens` is 0.
+Out-of-vocabulary (OOV) tokens, words absent from the training vocabulary, are dropped silently and counted in `evaluate()`'s `num_oov` field. If all tokens in the held-out set are OOV, `perplexity` is `nan` and `num_tokens` is 0.
 
 ```python
 # Full diagnostics from evaluate()
@@ -1122,7 +1122,7 @@ print(result)
 
 ### Topic coherence
 
-Every model has a built-in `coherence(n=10)` method that returns per-topic **UMass** coherence (Mimno et al. 2011) — an intrinsic measure computed directly from training-corpus co-occurrence; higher (closer to 0) is more coherent.
+Every model has a built-in `coherence(n=10)` method that returns per-topic **UMass** coherence (Mimno et al. 2011), an intrinsic measure computed directly from training-corpus co-occurrence; higher (closer to 0) is more coherent.
 
 ```python
 import numpy as np
@@ -1132,7 +1132,7 @@ print(c)                     # e.g. [-2.1, -1.1]  — all values <= 0
 print("Mean coherence:", np.mean(c))
 ```
 
-For the windowed, PMI-based measures that correlate better with human judgement — and that anyone coming from gensim's `CoherenceModel` will expect — use the module-level `turbotopics.coherence(...)` with a `coherence_type=` switch:
+For the windowed, PMI-based measures that correlate better with human judgement (and that anyone coming from gensim's `CoherenceModel` will expect), use the module-level `turbotopics.coherence(...)` with a `coherence_type=` switch:
 
 ```python
 import turbotopics as tt
@@ -1154,7 +1154,7 @@ print("C_v per topic:", np.round(cv, 3), "  mean:", cv.mean())
 | `"c_uci"` | Mean pairwise PMI (Newman et al. 2010) | 10 | unbounded |
 | `"u_mass"` | Document co-occurrence (Mimno 2011) | — | `(-inf, 0]` |
 
-The first argument is a fitted model (its top words are read automatically) or an explicit list of word lists. Override the sliding window with `window_size=`. Pair coherence with **topic diversity** (Dieng et al. 2020) — the fraction of unique words across all topics' top-N (1.0 = no repetition):
+The first argument is a fitted model (its top words are read automatically) or an explicit list of word lists. Override the sliding window with `window_size=`. Pair coherence with **topic diversity** (Dieng et al. 2020), the fraction of unique words across all topics' top-N (1.0 = no repetition):
 
 ```python
 print("Topic diversity:", tt.topic_diversity(model, topn=25))
@@ -1162,7 +1162,7 @@ print("Topic diversity:", tt.topic_diversity(model, topn=25))
 
 ### Exclusivity and the coherence–exclusivity plot
 
-`tt.exclusivity(model, n=10)` returns per-topic **exclusivity** — how concentrated each topic's top words are in that topic rather than shared across topics. It's the companion to per-topic coherence in the standard STM topic-quality workflow: plot one against the other and good topics sit toward the upper-right (coherent *and* distinctive).
+`tt.exclusivity(model, n=10)` returns per-topic **exclusivity**: how concentrated each topic's top words are in that topic rather than shared across topics. It is the companion to per-topic coherence in the standard STM topic-quality workflow: plot one against the other and good topics sit toward the upper-right (coherent *and* distinctive).
 
 ```python
 import numpy as np
@@ -1176,7 +1176,7 @@ for t, (c, e) in enumerate(zip(coh, excl)):
 
 ### Human validation: intrusion tests
 
-The intrusion tests of Chang et al. (2009, *Reading Tea Leaves*) are the standard way social scientists validate that topics are humanly interpretable — and they work on any fitted model.
+The intrusion tests of Chang et al. (2009, *Reading Tea Leaves*) are the standard way social scientists validate that topics are humanly interpretable, and they work on any fitted model.
 
 `tt.word_intrusion(model, n_words=5, seed=0)` builds, per topic, its top words plus one **intruder** (a word salient in another topic but rare here). Show the shuffled `words` to a human; if they can reliably pick the `intruder`, the topic is coherent.
 
@@ -1216,9 +1216,9 @@ print(df[["topic", "coherence", "exclusivity", "effective_words", "rank1_docs", 
 
 ## stm-style analysis toolkit
 
-`turbotopics.stm` is a pure-Python (numpy) post-hoc analysis toolkit that mirrors the user-facing functions of the R `stm` (Structural Topic Model) package. It operates on the `topic_word` (φ) and `doc_topic` (θ) arrays produced by any fitted turbotopics model — `LDA`, `DMR`, or `LabeledLDA` — so no extra fitting step is needed.
+`turbotopics.stm` is a pure-Python (numpy) post-hoc analysis toolkit that mirrors the user-facing functions of the R `stm` (Structural Topic Model) package. It operates on the `topic_word` (φ) and `doc_topic` (θ) arrays produced by any fitted turbotopics model (`LDA`, `DMR`, or `LabeledLDA`), so no extra fitting step is needed.
 
-**Uncertainty:** `estimate_effect` does ordinary OLS when given a point θ, or — given posterior draws of θ from an `STM`/`CTM` fit — the **method of composition** that R `stm` uses: each draw is regressed and the results are pooled by Rubin's rules, so the standard errors propagate topic-estimation uncertainty (not just OLS sampling error). See [Covariate effects with proper uncertainty](#covariate-effects-with-proper-uncertainty-method-of-composition) below. Confidence intervals use a normal approximation (no scipy dependency).
+**Uncertainty:** `estimate_effect` does ordinary OLS when given a point θ. Given posterior draws of θ from an `STM`/`CTM` fit, it instead uses the **method of composition** that R `stm` uses: each draw is regressed and the results are pooled by Rubin's rules, so the standard errors propagate topic-estimation uncertainty, not just OLS sampling error. See [Covariate effects with proper uncertainty](#covariate-effects-with-proper-uncertainty-method-of-composition) below. Confidence intervals use a normal approximation (no scipy dependency).
 
 ### Quick example
 
@@ -1303,7 +1303,7 @@ for row in results:
 
 ### API summary
 
-turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc analyses — labeling, interpretation, comparison, visualization — are exported at the **top level** (and also live in `turbotopics.diagnostics`). They take any fitted model's `topic_word`/`doc_topic`, not just an STM. The handful of genuinely *structural* operations (regressing topics on covariates) stay in the `turbotopics.stm` submodule.
+turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc analyses (labeling, interpretation, comparison, visualization) are exported at the **top level** (and also live in `turbotopics.diagnostics`). They take any fitted model's `topic_word`/`doc_topic`, not just an STM. The handful of genuinely *structural* operations (regressing topics on covariates) stay in the `turbotopics.stm` submodule.
 
 **General diagnostics** (`tt.<name>`, also `tt.diagnostics.<name>`; the `stm.<name>` aliases still work):
 
@@ -1417,7 +1417,7 @@ All properties below raise `RuntimeError("model is not fitted yet; call fit() fi
 
 Dirichlet-Multinomial Regression topic model. Per-document topic prior `α_{d,t} = exp(λ_t · x_d)` learned by L-BFGS from document features. See the [DMR section](#dmr-topics-conditioned-on-document-metadata) for a usage guide.
 
-**Not bit-identical to Java MALLET** — L-BFGS optimization makes byte-for-byte reproducibility impossible; fidelity is validated statistically (covariate recovery, comparable perplexity).
+**Not bit-identical to Java MALLET.** L-BFGS optimization makes byte-for-byte reproducibility impossible; fidelity is validated statistically (covariate recovery, comparable perplexity).
 
 #### Constructor
 
@@ -1494,7 +1494,7 @@ All properties below raise `RuntimeError("model is not fitted yet; call fit() fi
 
 ### `CTM`
 
-Correlated Topic Model (Blei & Lafferty 2007). Topics drawn from a logistic-normal prior with full covariance — topics can correlate, unlike LDA. The only variational (non-Gibbs) model in `turbotopics`. See the [CTM section](#ctm-correlated-topics-the-stm-core) for a usage guide.
+Correlated Topic Model (Blei & Lafferty 2007). Topics drawn from a logistic-normal prior with full covariance, so they can correlate, unlike LDA. The only variational (non-Gibbs) model in `turbotopics`. See the [CTM section](#ctm-correlated-topics-the-stm-core) for a usage guide.
 
 #### Constructor
 
@@ -1738,7 +1738,7 @@ SupervisedLDA(num_topics: int, *, alpha: float = 0.1, seed: int = 42)
 
 ## Performance
 
-turbotopics fits in native Rust, and its variational models parallelize the per-document E-step across cores (deterministically — the result is bit-for-bit identical regardless of thread count). In practice this makes the Structural Topic Model substantially faster than the reference R `stm` package on the same data.
+turbotopics fits in native Rust, and its variational models parallelize the per-document E-step across cores (deterministically: the result is bit-for-bit identical regardless of thread count). This makes the Structural Topic Model substantially faster than the reference R `stm` package on the same data.
 
 The table times **STM fit only** (excluding startup), matched on `K`, EM iterations (30), and Spectral initialization, on fixed-seed synthetic corpora. R `stm` is single-threaded by design, so turbotopics is shown both pinned to one core (apples-to-apples) and on all cores (its default). Measured on a 14-core machine:
 
@@ -1748,9 +1748,9 @@ The table times **STM fit only** (excluding startup), matched on `K`, EM iterati
 | 2,000 | 2,000 | 10 |  6.7s | 1.41s — **4.6×** | 0.43s — **16×** |
 | 5,000 | 5,000 | 20 | 26.6s | 8.95s — **3.0×** | 2.67s — **10×** |
 
-Even on a single core, turbotopics runs roughly **3–6× faster per iteration** than R `stm` — the native Rust inner loop with no per-iteration interpreter overhead. Spreading the E-step across cores (the default) brings it to **~10–25×** in these configurations.
+Even on a single core, turbotopics runs roughly **3–6× faster per iteration** than R `stm`, from the native Rust inner loop with no per-iteration interpreter overhead. Spreading the E-step across cores (the default) brings it to **~10–25×** in these configurations.
 
-**Caveats, stated plainly:** this compares *per-iteration* cost (both run a fixed 30 EM iterations rather than to convergence), on synthetic data, on one machine. Treat the numbers as indicative, not a guarantee — speed depends on corpus, vocabulary, `K`, and hardware. The benchmark is in the repo, so you can run your own regime:
+**Caveats, stated plainly:** this compares *per-iteration* cost (both run a fixed 30 EM iterations rather than to convergence), on synthetic data, on one machine. Treat the numbers as indicative, not a guarantee: speed depends on corpus, vocabulary, `K`, and hardware. The benchmark is in the repo, so you can run your own regime:
 
 ```bash
 python benchmarks/bench_stm.py                      # turbotopics on all cores
@@ -1780,7 +1780,7 @@ RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single-threaded
 
 ## Relationship to Upstream RustMallet
 
-This package wraps the library crate of [RustMallet](https://github.com/mimno/RustMallet), David Mimno's Rust reimplementation of MALLET's SparseLDA sampler. The upstream project also ships four standalone CLI tools — `preprocess`, `analyze`, `train`, and `show` — that form a pipeline for working with text files directly. Those tools remain available; the Python bindings here provide the same algorithm as a library you can call from code.
+This package wraps the library crate of [RustMallet](https://github.com/mimno/RustMallet), David Mimno's Rust reimplementation of MALLET's SparseLDA sampler. The upstream project also ships four standalone CLI tools (`preprocess`, `analyze`, `train`, and `show`) that form a pipeline for working with text files directly. Those tools remain available; the Python bindings here provide the same algorithm as a library you can call from code.
 
 ---
 

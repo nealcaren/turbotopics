@@ -1,8 +1,8 @@
 # turbotopics
 
 **Fast, all-purpose topic modeling for Python.** A Rust core gives you MALLET's
-algorithm without the JVM, the Structural Topic Model without R, and a unified
-toolkit of diagnostics, validation, and covariate analysis — all returning plain
+algorithm without the JVM and the Structural Topic Model without R, plus
+diagnostics, validation, and covariate analysis. Everything returns plain
 NumPy arrays.
 
 ```bash
@@ -24,12 +24,12 @@ for i, words in enumerate(model.top_words(5)):
 
 - **One package, many models.** LDA, DMR, Labeled LDA, SAGE, CTM, the full STM
   (prevalence **and** content covariates), HDP, dynamic topics, supervised LDA,
-  and short-text models — see [the models](guides/models.md).
+  and short-text models. See [the models](guides/models.md).
 - **Built for social science.** Covariate effects with the method of
   composition, **clustered standard errors**, GLM links, Fighting Words,
-  intrusion tests, bootstrap stability, and `searchK` — the things reviewers ask
+  intrusion tests, bootstrap stability, and `searchK`: the things reviewers ask
   for. See [covariates](guides/covariates.md) and [diagnostics](guides/diagnostics.md).
-- **Fast and deterministic.** A Rust core with bit-for-bit reproducible fits; the
+- **Fast and deterministic.** A Rust core with bit-for-bit reproducible fits. The
   variational models parallelize across cores automatically.
 - **No heavy dependencies.** NumPy only. Optional integrations (pyLDAvis,
   matplotlib) light up if installed.
@@ -54,11 +54,11 @@ for i, words in enumerate(model.top_words(5)):
 
 Three end-to-end analyses on real, redistributable corpora:
 
-- [**W.E.B. Du Bois in *The Crisis***](examples/dubois.md) — 704 articles,
-  1910–1934: the full workflow from preprocessing to dynamic topics.
-- [**Gadarian immigration experiment**](examples/gadarian.md) — the canonical STM
+- [**W.E.B. Du Bois in *The Crisis***](examples/dubois.md): 704 articles,
+  1910–1934, the full workflow from preprocessing to dynamic topics.
+- [**Gadarian immigration experiment**](examples/gadarian.md): the canonical STM
   vignette, reproduced.
-- [**Political blogs**](examples/poliblog.md) — STM with ideology and time
+- [**Political blogs**](examples/poliblog.md): STM with ideology and time
   covariates.
 
 ---

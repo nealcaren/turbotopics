@@ -9,8 +9,8 @@ question is whether the prime changed *what people wrote about*.
 
 !!! info "Focus of this example"
     Model choice (an experiment ⟶ STM) · effect estimation by the method of
-    composition. The randomized design means responses are independent, so —
-    unlike [Poliblog](poliblog.md) — no clustering is needed. For validation and
+    composition. The randomized design means responses are independent, so no
+    clustering is needed, unlike [Poliblog](poliblog.md). For validation and
     nested-data clustering see [Poliblog](poliblog.md); for corpus building see
     [Du Bois](dubois.md).
 
@@ -58,10 +58,10 @@ T2: coef=-0.076  z=-2.4  [difficult, away, process, low, looking]
 ```
 
 The anxiety prime **significantly raises** prevalence of the threat/benefits-of-
-control frame and **lowers** a more procedural frame — the substantive finding
-of the original study. Because treatment was randomized and each respondent
-contributes one independent response, ordinary method-of-composition standard
-errors are appropriate; no clustering is needed.
+control frame and **lowers** a more procedural frame. This is the substantive
+finding of the original study. Because treatment was randomized and each
+respondent contributes one independent response, ordinary method-of-composition
+standard errors are appropriate; no clustering is needed.
 
 ## Robustness
 

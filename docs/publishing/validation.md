@@ -10,7 +10,7 @@ The field-standard test (Chang et al. 2009, *Reading Tea Leaves*) asks whether a
 human can tell a topic apart from noise. turbotopics builds both variants for
 you, with an answer key.
 
-**Word intrusion** — each topic's top words plus one intruder from another topic:
+**Word intrusion**: each topic's top words plus one intruder from another topic.
 
 ```python
 import turbotopics as tt
@@ -25,9 +25,9 @@ for t in tests:
 Show the shuffled `words` to coders (hide the key); a topic where coders reliably
 spot the intruder is coherent.
 
-**Document intrusion** — a topic's representative documents plus one where the
-topic is nearly absent. Tests whether the topic captures real document
-similarity:
+**Document intrusion**: a topic's representative documents plus one where the
+topic is nearly absent. This tests whether the topic captures real document
+similarity.
 
 ```python
 tests = tt.document_intrusion(model, texts=texts, n_docs=3, seed=0)
@@ -38,7 +38,7 @@ supplementary materials.
 
 ## Computational validation: coherence and exclusivity
 
-Per-topic metrics complement the human tests. Report both together — a good
+Per-topic metrics complement the human tests. Report both together: a good
 topic is coherent **and** exclusive.
 
 ```python
@@ -51,7 +51,7 @@ frontier = tt.quality_frontier(model, n=10)      # tidy: coherence, exclusivity,
 
 `c_v` correlates best with human judgement; UMass is a fast intrinsic check;
 NPMI is the normalized middle ground. The coherence×exclusivity scatter is the
-canonical STM quality plot — weak topics sit in the lower-left.
+canonical STM quality plot: weak topics sit in the lower-left.
 
 ## Stability: answer the "fishing expedition" critique head-on
 
@@ -81,8 +81,8 @@ across resamples and we interpret them cautiously" is *more* credible, not less.
 ## Interpretation: close reading, not just top words
 
 Distant reading (top words) and **close reading** (the actual documents) are both
-required. Pull a topic's most representative documents and read them — with the
-topic's words highlighted, right in your notebook:
+required. Pull a topic's most representative documents and read them, with the
+topic's words highlighted in your notebook:
 
 ```python
 labels = tt.label_topics(model.topic_word, model.vocabulary, n=8)  # prob & FREX
@@ -90,13 +90,13 @@ html = tt.find_thoughts_html(model, texts, n_docs=3, n_words=8)    # highlighted
 ```
 
 Use **FREX** (frequent *and* exclusive) words, not just the most probable ones,
-when labeling — they are far more evocative of what makes a topic distinctive.
+when labeling. They are far more evocative of what makes a topic distinctive.
 
 !!! danger "What topics are NOT"
     Topics are statistical patterns of word co-occurrence. They are **not**
     necessarily coherent concepts, and **not** necessarily what a document is
     "about." Write *"this document has high probability for Topic 3"* and *"words
-    associated with Topic 3 suggest…"* — never *"the model discovered that…"* or
+    associated with Topic 3 suggest…"* Never write *"the model discovered that…"* or
     *"this document is about Topic 3."*
 
 ## Common problems and what to do

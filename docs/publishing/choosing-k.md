@@ -5,7 +5,7 @@
     are often defensible; your job is to pick one for a reason and show your
     conclusions don't hinge on it.
 
-`K` sets the *granularity* of your themes — roughly, `K=10` for broad themes,
+`K` sets the *granularity* of your themes: roughly, `K=10` for broad themes,
 `K=30` for specific topics, `K=100` for fine distinctions. There is no single
 "correct" `K`, and you should resist any procedure that pretends otherwise.
 
@@ -52,7 +52,7 @@ for r in results:
 ```
 
 Then, for the two or three best candidates, fit the model and **read the
-topics** — count how many you can label, and look at the coherence×exclusivity
+topics**. Count how many you can label, and look at the coherence×exclusivity
 spread per topic:
 
 ```python
@@ -64,8 +64,8 @@ frontier = tt.quality_frontier(model, n=10)   # per-topic coherence & exclusivit
 # weak topics cluster in the lower-left.
 ```
 
-A nonparametric model is a useful sanity check on your choice — it *infers* a
-topic count rather than taking one:
+A nonparametric model is a useful sanity check on your choice: it *infers* a
+topic count rather than taking one.
 
 ```python
 hdp = tt.HDP(eta=0.3, seed=1)
@@ -75,7 +75,7 @@ print("HDP suggests ~", hdp.num_topics, "topics")
 
 ## Report sensitivity
 
-Pick the `K` that balances metrics, interpretability, and theory — then **show
+Pick the `K` that balances metrics, interpretability, and theory, then **show
 your finding survives nearby `K`**. Re-run the headline result at `K-5` and
 `K+5`; if a covariate effect or a key topic only appears at one exact `K`, say
 so. Reviewers read "we used K=20" charitably only when followed by "results were

@@ -1,15 +1,15 @@
 # What you can do
 
-turbotopics is a general topic-modeling toolkit. This section is the tour of its
-capabilities; if your goal is a publishable analysis, pair it with
+turbotopics is a general topic-modeling toolkit. This section tours what it does.
+If your goal is a publishable analysis, pair it with
 [Publishing in a journal](../publishing/index.md).
 
 <div class="grid cards" markdown>
 
 - :material-shape: **[The models](../guides/models.md)**
 
-    Thirteen model families — LDA through STM, HDP, dynamic and supervised
-    topics, and short-text models — with one consistent API.
+    Thirteen model families, from LDA through STM, HDP, dynamic and supervised
+    topics, to short-text models, all with one consistent API.
 
 - :material-broom: **[Preprocessing](../guides/preprocessing.md)**
 
@@ -18,13 +18,13 @@ capabilities; if your goal is a publishable analysis, pair it with
 
 - :material-chart-bell-curve: **[Covariates & STM](../guides/covariates.md)**
 
-    Relate topics to document metadata — prevalence and content covariates,
+    Relate topics to document metadata: prevalence and content covariates,
     effect estimation, clustered SEs, GLM links.
 
 - :material-check-decagram: **[Diagnostics & validation](../guides/diagnostics.md)**
 
     Coherence, exclusivity, intrusion tests, stability, alignment, FREX labels,
-    pyLDAvis — all model-agnostic.
+    and pyLDAvis, all model-agnostic.
 
 - :material-compare: **[Distinguishing words](../guides/keywords.md)**
 

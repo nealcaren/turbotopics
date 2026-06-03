@@ -7,7 +7,7 @@ review in sociology, political science, communication, or a related field.
 The single biggest critique of topic modeling in the social sciences is that it
 can become a *fishing expedition*: run a model, read the topics, tell a story.
 Reviewers know this, and they push back. A publishable analysis answers their
-objections before they raise them — it treats the topic model as a **measurement
+objections before they raise them. It treats the topic model as a **measurement
 instrument** that must be specified, validated, and used with honest uncertainty.
 
 This is a six-step workflow. Each step maps onto specific turbotopics functions.
@@ -36,7 +36,7 @@ This is a six-step workflow. Each step maps onto specific turbotopics functions.
 
 - :material-chart-line: **[5. Measure effects properly](effects.md)**
 
-    Relate topics to covariates with honest uncertainty — the method of
+    Relate topics to covariates with honest uncertainty: the method of
     composition, **clustered standard errors**, and bounded GLM links.
 
 - :material-file-document-check: **[6. Report and make reproducible](reporting.md)**
@@ -49,8 +49,7 @@ This is a six-step workflow. Each step maps onto specific turbotopics functions.
 ## Three worked examples, together covering it all
 
 No single analysis shows every technique, but the [worked examples](../examples/dubois.md)
-are designed so that **together** they demonstrate the whole workflow on real,
-redistributable data:
+**together** demonstrate the whole workflow on real, redistributable data:
 
 | Workflow step | [Du Bois](../examples/dubois.md) | [Gadarian](../examples/gadarian.md) | [Poliblog](../examples/poliblog.md) |
 |---------------|:------:|:------:|:------:|
@@ -85,5 +84,5 @@ redistributable data:
 
 Treat the model's output as *"this document has high probability for Topic 3"*,
 never *"this document **is about** Topic 3."* Topics are statistical patterns of
-word co-occurrence — sometimes coherent concepts, sometimes not. Your job is to
+word co-occurrence: sometimes coherent concepts, sometimes not. Your job is to
 demonstrate which.

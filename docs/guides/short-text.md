@@ -41,7 +41,7 @@ model.fit(short_docs, iters=1000)
 - **`GSDMM`** when each short text is plausibly about one thing (most tweets,
   most survey answers) and you want the model to find how many groups there are.
 - **`PT`** when texts may still blend a few topics and you want LDA-style mixed
-  membership with short-text robustness.
+  membership that holds up on short texts.
 
 Both feed the same [diagnostics](diagnostics.md) and
 [validation](../publishing/validation.md) as every other model.

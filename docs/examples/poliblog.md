@@ -2,7 +2,7 @@
 
 This example carries the **validation** and **effects** load of the
 [publishing workflow](../publishing/index.md): choosing `K` with a scan,
-validating topics, and — the headline — estimating covariate effects with
+validating topics, and the headline task of estimating covariate effects with
 **clustered standard errors** for nested data. The corpus is `poliblog5k` from
 the R `stm` package: 2,000 political-blog posts (2008 U.S. campaign), each tagged
 with the blog's `rating` (Conservative / Liberal), the `day`, and the `blog` it
@@ -19,8 +19,8 @@ came from.
 ## 1–2. Corpus and model
 
 The posts nest within six blogs, and we want to know how topic prevalence differs
-by ideology — a covariate question — so the [right model](../publishing/choosing-model.md)
-is the STM.
+by ideology. That covariate question makes the
+[right model](../publishing/choosing-model.md) the STM.
 
 ```python
 import csv, numpy as np, turbotopics as tt
@@ -58,7 +58,7 @@ boot = tt.bootstrap_stability(docs, k=15, n_boot=30, iterations=600)
 print("mean topic stability:", round(boot["mean"], 2))
 ```
 
-The topics are readable — foreign policy (*isra, israel, iran*), the VP race
+The topics are readable: foreign policy (*isra, israel, iran*), the VP race
 (*lieberman, mccain, biden*), the Obama–Wright story, social issues (*school,
 abort, gay*), the financial crisis (*billion, market*).
 
@@ -90,19 +90,19 @@ Clustering inflates the standard errors **three- to six-fold**. The Rove/torture
 topic looks overwhelmingly liberal under iid errors (z ≈ −10) but is **not
 significant** once we acknowledge that all those posts come from a handful of
 blogs (z = −1.9). Conservatives reliably talk more about Israel/Iran and the
-Obama–Wright story; the apparent torture effect does not survive honest
+Obama–Wright story. The apparent torture effect does not survive honest
 uncertainty.
 
 !!! warning "Report the caveat"
     With only **six** clusters, cluster-robust inference is itself approximate
     (CR1 wants ~30+ clusters). Say so. A careful paper reports the clustered
-    result *and* notes the small number of clusters — which is far more credible
-    than quietly using iid errors that assume 2,000 independent observations.
+    result *and* notes the small number of clusters. That is far more credible
+    than using iid errors that assume 2,000 independent observations.
 
 ## 6. Report
 
 Bounded inference (topic proportions live in `[0,1]`) via a fractional-logit
-link, a topic table with FREX labels and prevalence, and the saved model — see
+link, a topic table with FREX labels and prevalence, and the saved model. See
 [Report and make reproducible](../publishing/reporting.md).
 
 ```python

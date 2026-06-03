@@ -1,6 +1,6 @@
 # Installation
 
-turbotopics ships as a compiled wheel — no Rust toolchain or JVM required.
+turbotopics ships as a compiled wheel. No Rust toolchain or JVM required.
 
 ```bash
 pip install turbotopics

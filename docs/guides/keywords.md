@@ -2,7 +2,7 @@
 
 Sometimes the question isn't "what are the topics" but "which words separate
 these two groups." **Fighting Words** (Monroe, Colaresi & Quinn 2008) answers
-that with statistical significance — and, unlike a raw log-odds ratio, it doesn't
+that with statistical significance, and, unlike a raw log-odds ratio, it doesn't
 let rare words dominate.
 
 ```python
@@ -32,7 +32,7 @@ print("liberal:     ", [w for w, _ in top["b"]])
 ## Informative prior
 
 By default the prior is a symmetric pseudocount. Pass `informative=True` to scale
-the prior by each word's overall frequency — Monroe et al.'s informative
+the prior by each word's overall frequency: Monroe et al.'s informative
 Dirichlet prior, which pulls extreme estimates toward the corpus background:
 
 ```python

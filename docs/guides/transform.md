@@ -1,7 +1,7 @@
 # Held-out inference
 
 After fitting, `transform` infers topic proportions (θ) for **new, unseen**
-documents while holding the fitted topics (φ) fixed — a held-out test set, or
+documents while holding the fitted topics (φ) fixed: a held-out test set, or
 freshly collected texts.
 
 ```python
@@ -30,7 +30,7 @@ Each model uses the same inference it uses at fit time:
 | `CTM`, `STM` | Laplace **variational** E-step against the logistic-normal prior |
 
 For `CTM` / `STM`, the variational `transform` reproduces the model's own
-training θ to ~`1e-3` — it is the same inference R's `stm` runs in
+training θ to ~`1e-3`. It is the same inference R's `stm` runs in
 `fitNewDocuments`, not an approximation.
 
 ```python

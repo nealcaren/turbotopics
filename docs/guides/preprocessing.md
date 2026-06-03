@@ -1,6 +1,6 @@
 # Preprocessing
 
-turbotopics takes pre-tokenized documents — a `list[list[str]]` — or a `Corpus`.
+turbotopics takes pre-tokenized documents, a `list[list[str]]`, or a `Corpus`.
 You control tokenization and vocabulary, because those choices are part of your
 method (see [Build a defensible corpus](../publishing/corpus.md)).
 
@@ -58,5 +58,5 @@ chunks, chunk_meta = tt.split_documents(
 # chunk_meta[j] = the source row + {"parent": i, "chunk": j}
 ```
 
-Remember that chunks from the same source are **nested** — use
+Chunks from the same source are **nested**, so use
 [clustered standard errors](../publishing/effects.md) when you model effects.

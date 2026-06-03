@@ -1,7 +1,7 @@
 # 1. Build a defensible corpus
 
 Before any modeling, a reviewer wants to know exactly what you fed the model and
-why. Preprocessing choices change topics, so they are part of your method — not
+why. Preprocessing choices change topics, so they are part of your method, not
 plumbing to hide.
 
 ## State the population and the unit
@@ -9,16 +9,16 @@ plumbing to hide.
 Report, in prose and with counts:
 
 - **What population** the documents are drawn from, and how they were sampled.
-- **The unit of analysis** — an article? a paragraph? a speech? a tweet? This is
+- **The unit of analysis.** An article? A paragraph? A speech? A tweet? This is
   a substantive choice, not a technical one.
 - **The time span and any covariates** you will use later.
 
-## Choose the unit deliberately — split long documents
+## Choose the unit deliberately: split long documents
 
 LDA and STM assume documents are roughly comparable bags of words. A corpus of
 60-word tweets *and* 6,000-word transcripts violates that badly. If your
-documents are long and heterogeneous, segment them into comparable chunks —
-while keeping each chunk tied to its source document's metadata.
+documents are long and heterogeneous, segment them into comparable chunks,
+keeping each chunk tied to its source document's metadata.
 
 ```python
 import turbotopics as tt
@@ -33,10 +33,10 @@ chunks, chunk_meta = tt.split_documents(
 ```
 
 Report the splitting rule and how many chunks resulted. When you analyze effects
-later, remember that chunks from the same source document are **nested** — which
+later, remember that chunks from the same source document are **nested**, which
 is exactly when you'll want [clustered standard errors](effects.md).
 
-## Tokenize and prune the vocabulary — and say how
+## Tokenize and prune the vocabulary, and say how
 
 ```python
 from turbotopics import Corpus, tokenize

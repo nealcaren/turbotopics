@@ -23,8 +23,8 @@ Every model shares the same shape: construct with hyperparameters and a `seed`,
 ## LDA
 
 Classic Latent Dirichlet Allocation via MALLET's fast SparseLDA collapsed-Gibbs
-sampler — bit-for-bit reproducible, with optional approximate multi-threaded
-training.
+sampler. Fits are bit-for-bit reproducible, with optional approximate
+multi-threaded training.
 
 ```python
 import turbotopics as tt
@@ -53,7 +53,7 @@ labels. Empty labels fall back to unconstrained LDA.
 
 ## SAGE
 
-Content-covariate topics via an additive log-linear model — the *same* topic is
+Content-covariate topics via an additive log-linear model: the *same* topic is
 worded differently across groups. `word_contrast(topic, a, b)` shows the words
 that most distinguish two groups' phrasing.
 
@@ -65,7 +65,7 @@ learned structure. Fit by parallel variational EM.
 
 ## STM
 
-The full Structural Topic Model — CTM core plus **prevalence** and **content**
+The full Structural Topic Model: CTM core plus **prevalence** and **content**
 covariates. This is the workhorse for social science; it has its own
 [guide](covariates.md).
 
@@ -93,12 +93,12 @@ dtm.fit(docs, times, em_iters=20)   # `times` = per-doc slice index
 
 ## SupervisedLDA
 
-Topics shaped to predict a per-document real-valued response (Blei & McAuliffe):
+Topics shaped to predict a per-document real-valued response (Blei & McAuliffe).
 `coefficients` give each topic's pull on the outcome, and `predict` scores new
 documents.
 
 ## Short-text and hierarchy models
 
-`PT` and `GSDMM` are built for short documents — see the
+`PT` and `GSDMM` are built for short documents; see the
 [short-text guide](short-text.md). `PA` (Pachinko Allocation) and `HLDA`
 (hierarchical, nested-CRP) recover super-/sub-topic structure.
