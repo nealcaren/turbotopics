@@ -28,7 +28,9 @@ Repository = "https://github.com/nealcaren/topica"
 Documentation = "https://nealcaren.github.io/topica/"
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+# R-style formula interface (topica.design_matrix, estimate_effect(formula=...)).
+formula = ["formulaic>=0.6", "pandas>=1.3"]
+test = ["pytest>=7", "pandas>=1.3", "formulaic>=0.6"]
 
 [tool.maturin]
 # Mixed Rust/Python layout: pure-Python wrapper in python/, compiled ext as topica._topica.

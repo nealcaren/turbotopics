@@ -151,8 +151,10 @@ def _fit_one(y, X, *, link, groups, hat, XtX_inv, dof):
 
 def estimate_effect(
     doc_topic,
-    X,
+    X=None,
     *,
+    data=None,
+    formula=None,
     feature_names=None,
     topics=None,
     add_intercept=True,
@@ -205,6 +207,19 @@ def estimate_effect(
         One regression per topic. ``[e.as_dict() for e in result]`` builds a table.
     """
     from math import sqrt
+
+    # Formula path: build X and feature_names from an R-style formula + a
+    # DataFrame. A string `cluster` is read as a column of that frame.
+    if formula is not None:
+        if data is None:
+            raise ValueError("formula= requires data= (a pandas DataFrame).")
+        from .formulas import design_matrix
+
+        X, feature_names = design_matrix(formula, data)
+        if isinstance(cluster, str):
+            cluster = np.asarray(data[cluster])
+    elif X is None:
+        raise ValueError("provide X (a design matrix), or formula= with data=.")
 
     theta = np.asarray(doc_topic, dtype=np.float64)
     pooled = theta.ndim == 3
