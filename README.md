@@ -72,12 +72,14 @@ Topica stands on a generation of open topic-modeling research and code. The `LDA
 - [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab): the CTM, Dynamic Topic Model, and HDP samplers
 - [**gensim**](https://github.com/piskvorky/gensim): coherence measures and the `LdaSeqModel` DTM reference
 - [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min): API conventions (`summary`, short-text models)
-- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki): keyword-assisted topic models
+- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki): the full keyword-assisted family. `KeyATM` ports their base, covariate, and dynamic models, including the information-theory token weighting and the Chib (1998) change-point HMM for topic prevalence over time, validated against the package
 - [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe): seeded LDA
 - [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al.): the alias-table Metropolis-Hastings sampler
 - **GSDMM** (Yin & Wang 2014): the movie-group-process mixture for short text
 
-Underlying methods are credited to their authors in the [documentation](https://nealcaren.github.io/topica/) and the source. The SparseLDA scheme is Yao, Mimno & McCallum (KDD 2009).
+Underlying methods are credited to their authors in the [documentation](https://nealcaren.github.io/topica/) and the source. The SparseLDA scheme is Yao, Mimno & McCallum (KDD 2009). If you use `KeyATM`, please cite the original work:
+
+> Eshima, S., Imai, K., & Sasaki, T. (2024). Keyword-Assisted Topic Models. *American Journal of Political Science*, 68(2), 730–750. [doi:10.1111/ajps.12779](https://doi.org/10.1111/ajps.12779)
 
 ## License
 
