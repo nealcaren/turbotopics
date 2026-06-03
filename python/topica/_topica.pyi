@@ -99,6 +99,17 @@ class Corpus:
         ...
 
     @property
+    def kept_indices(self) -> list[int]:
+        """Original document indices that survived pruning, parallel to the rows
+        of this corpus. Use to realign an external covariate array/DataFrame:
+        ``X = X[corpus.kept_indices]`` (see :func:`topica.align`)."""
+        ...
+
+    metadata: object | None
+    """Optional per-document metadata aligned to the surviving rows (a pandas
+    DataFrame, set by :func:`topica.from_dataframe`, or assigned directly)."""
+
+    @property
     def doc_names(self) -> list[str]:
         """Document identifiers, one per document."""
         ...

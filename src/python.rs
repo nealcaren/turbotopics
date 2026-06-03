@@ -221,7 +221,7 @@ fn build_corpus_from_docs(
     max_doc_fraction: f64,
     min_cf: u32,
     rm_top: usize,
-) -> PyResult<corpus::Corpus> {
+) -> PyResult<(corpus::Corpus, Vec<usize>)> {
     let n = docs_in.len();
     if let Some(names) = &doc_names_in {
         if names.len() != n {
@@ -308,14 +308,18 @@ fn build_corpus_from_docs(
         .collect();
 
     if keep.iter().all(|&k| k) {
-        return Ok(corpus::Corpus {
-            id_to_word,
-            docs,
-            doc_names,
-            doc_labels,
-            doc_freqs,
-            total_freqs,
-        });
+        let n = docs.len();
+        return Ok((
+            corpus::Corpus {
+                id_to_word,
+                docs,
+                doc_names,
+                doc_labels,
+                doc_freqs,
+                total_freqs,
+            },
+            (0..n).collect(),
+        ));
     }
 
     // Remap surviving vocabulary to a dense id range.
@@ -341,30 +345,36 @@ fn build_corpus_from_docs(
         })
         .collect();
 
-    // Drop documents emptied by pruning, keeping names/labels aligned.
+    // Drop documents emptied by pruning, keeping names/labels aligned and
+    // recording which original document indices survived (so callers can align
+    // external covariates/metadata).
     let mut final_docs: Vec<Vec<u32>> = Vec::new();
     let mut final_names: Vec<String> = Vec::new();
     let mut final_labels: Vec<String> = Vec::new();
-    for ((doc, name), label) in new_docs
+    let mut kept_indices: Vec<usize> = Vec::new();
+    for (orig_idx, ((doc, name), label)) in new_docs
         .into_iter()
         .zip(doc_names.into_iter())
         .zip(doc_labels.into_iter())
+        .enumerate()
     {
         if !doc.is_empty() {
             final_docs.push(doc);
             final_names.push(name);
             final_labels.push(label);
+            kept_indices.push(orig_idx);
         }
     }
 
-    Ok(corpus::Corpus {
+    let corpus = corpus::Corpus {
         id_to_word: new_id_to_word,
         docs: final_docs,
         doc_names: final_names,
         doc_labels: final_labels,
         doc_freqs: new_doc_freqs,
         total_freqs: new_total_freqs,
-    })
+    };
+    Ok((corpus, kept_indices))
 }
 
 // ---------------------------------------------------------------------------
@@ -378,9 +388,25 @@ fn build_corpus_from_docs(
 /// :meth:`Corpus.from_text_file`, or load a binary corpus written by the
 /// ``preprocess`` CLI with :meth:`Corpus.load`.
 #[pyclass(module = "topica")]
-#[derive(Clone)]
 pub struct Corpus {
     inner: corpus::Corpus,
+    // Original document indices that survived pruning (parallel to the rows of
+    // the corpus). Lets callers realign external covariate/metadata arrays.
+    kept_indices: Vec<usize>,
+    // Optional per-document metadata (e.g. a pandas DataFrame), already filtered
+    // to the surviving rows. Round-tripped as a plain Python object.
+    metadata: Option<PyObject>,
+}
+
+// Manual Clone: PyObject needs the GIL to bump its refcount, so it can't derive.
+impl Clone for Corpus {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Corpus {
+            inner: self.inner.clone(),
+            kept_indices: self.kept_indices.clone(),
+            metadata: self.metadata.as_ref().map(|m| m.clone_ref(py)),
+        })
+    }
 }
 
 #[pymethods]
@@ -410,7 +436,7 @@ impl Corpus {
         rm_top: usize,
     ) -> PyResult<Self> {
         let stop: HashSet<String> = stopwords.unwrap_or_default().into_iter().collect();
-        let inner = build_corpus_from_docs(
+        let (inner, kept_indices) = build_corpus_from_docs(
             documents,
             doc_names,
             doc_labels,
@@ -420,7 +446,7 @@ impl Corpus {
             min_cf,
             rm_top,
         )?;
-        Ok(Corpus { inner })
+        Ok(Corpus { inner, kept_indices, metadata: None })
     }
 
     /// Load and tokenise a raw text file (MALLET-style), matching the
@@ -471,7 +497,8 @@ impl Corpus {
             max_doc_fraction,
         };
         let inner = corpus::load_text_file(Path::new(path), &opts).map_err(io_err)?;
-        Ok(Corpus { inner })
+        let kept_indices = (0..inner.num_docs()).collect();
+        Ok(Corpus { inner, kept_indices, metadata: None })
     }
 
     /// Load a binary corpus file written by the ``preprocess`` CLI or
@@ -479,7 +506,8 @@ impl Corpus {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let inner = corpus::load_corpus(Path::new(path)).map_err(io_err)?;
-        Ok(Corpus { inner })
+        let kept_indices = (0..inner.num_docs()).collect();
+        Ok(Corpus { inner, kept_indices, metadata: None })
     }
 
     /// Write this corpus to a binary file (the ``preprocess`` format), so it
@@ -506,6 +534,27 @@ impl Corpus {
     #[getter]
     fn vocabulary(&self) -> Vec<String> {
         self.inner.id_to_word.clone()
+    }
+
+    /// Original document indices that survived pruning, parallel to the rows of
+    /// this corpus. Use it to realign an external covariate array or DataFrame
+    /// to the documents the corpus actually kept: ``X = X[corpus.kept_indices]``.
+    #[getter]
+    fn kept_indices(&self) -> Vec<usize> {
+        self.kept_indices.clone()
+    }
+
+    /// Optional per-document metadata, already aligned to the surviving rows
+    /// (set by :func:`topica.from_dataframe`, or assign your own). ``None`` if
+    /// unset.
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> Option<PyObject> {
+        self.metadata.as_ref().map(|m| m.clone_ref(py))
+    }
+
+    #[setter]
+    fn set_metadata(&mut self, value: Option<PyObject>) {
+        self.metadata = value;
     }
 
     #[getter]
@@ -755,7 +804,7 @@ impl LDA {
                     "fit() expects a Corpus or a list of token lists (list[list[str]])",
                 )
             })?;
-            build_corpus_from_docs(docs, None, None, HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, HashSet::new(), 1, 1.0, 0, 0)?.0
         };
 
         if corpus.num_docs() == 0 {
@@ -2099,7 +2148,7 @@ impl DMR {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -2578,7 +2627,7 @@ impl LabeledLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -2980,7 +3029,7 @@ impl SAGE {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -3471,7 +3520,7 @@ impl CTM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -3798,7 +3847,7 @@ impl STM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -4341,7 +4390,7 @@ impl HDP {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -4619,7 +4668,7 @@ impl DTM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -4924,7 +4973,7 @@ impl SupervisedLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -5219,7 +5268,7 @@ impl PT {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -5365,7 +5414,7 @@ impl GSDMM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -5599,7 +5648,7 @@ impl SeededLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -5789,7 +5838,7 @@ impl KeyATM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -5958,7 +6007,7 @@ impl PA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -6124,7 +6173,7 @@ impl HLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
