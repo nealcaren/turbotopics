@@ -1,0 +1,91 @@
+# 4. Measure effects properly
+
+Most social-science topic-model papers don't stop at "here are the themes" —
+they ask **how topic prevalence relates to something**: time, group, treatment,
+ideology. Doing this credibly means modeling the relationship *and* reporting
+honest uncertainty.
+
+## Make prevalence depend on covariates: STM
+
+The Structural Topic Model lets a document's topic proportions depend on its
+metadata. Fit prevalence as a regression on your covariates:
+
+```python
+import turbotopics as tt
+
+X, names = tt.one_hot(party)                     # or build any design matrix
+model = tt.STM(num_topics=20, seed=1)
+model.fit(docs, prevalence=X, prevalence_names=names)
+```
+
+## Estimate effects with honest uncertainty
+
+A naive regression of point topic proportions on covariates treats θ as if it
+were observed exactly — it isn't. R's `stm` uses the **method of composition**
+(Treier & Jackman 2008): draw θ from the model's posterior, regress each draw,
+and pool by Rubin's rules so the standard errors include topic-estimation
+uncertainty. turbotopics does the same:
+
+```python
+from turbotopics import stm
+
+draws = stm.posterior_theta_samples(model, nsims=50, seed=0)   # (50, D, K)
+effects = stm.estimate_effect(draws, X, feature_names=names)
+for e in effects:
+    d = e.as_dict()
+    print(f"Topic {d['topic']}: {names[0]} coef={d[names[0]]['coef']:+.4f} "
+          f"z={d[names[0]]['z']:+.2f}")
+```
+
+For non-linear time trends and interactions, build the design matrix with
+`stm.spline` and `stm.interaction` — the same `~ s(year)` and `~ a*b` you'd write
+in R.
+
+## Cluster your standard errors
+
+Text data is almost always **nested**: multiple speeches by the same legislator,
+many tweets per user, several articles per outlet — or, if you
+[split long documents](corpus.md), many chunks per source document. Ignoring this
+nesting understates uncertainty and is a common reason reviewers reject a result.
+
+Pass a `cluster` variable and the standard errors become cluster-robust (CR1):
+
+```python
+effects = stm.estimate_effect(
+    draws, X, feature_names=names,
+    cluster=speaker_id,        # one label per document
+)
+```
+
+This composes with the method of composition — each posterior draw is clustered,
+then the per-draw covariances are Rubin-pooled.
+
+## Keep predictions in bounds: GLM links
+
+Topic proportions live in `[0, 1]`, but OLS on θ can predict values outside that
+range. For a bounded model, use a fractional-logit link (Papke & Wooldridge),
+fit by quasi-likelihood with robust standard errors:
+
+```python
+effects = stm.estimate_effect(draws, X, feature_names=names, link="logit")
+# link="log" gives a quasi-Poisson alternative.
+```
+
+## Report effects as a table
+
+```python
+import pandas as pd
+rows = []
+for e in effects:
+    d = e.as_dict()
+    for feat in e.feature_names:
+        rows.append({"topic": d["topic"], "term": feat,
+                     "estimate": d[feat]["coef"], "se": d[feat]["se"],
+                     "z": d[feat]["z"]})
+table = pd.DataFrame(rows)
+```
+
+Report point estimates, (clustered) standard errors, and confidence intervals —
+and say plainly which effects clear conventional thresholds and which don't.
+
+→ Next: [Report and make reproducible](reporting.md).

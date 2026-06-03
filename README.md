@@ -1,5 +1,7 @@
 # turbotopics — fast, all-purpose topic modeling for Python
 
+📖 **Documentation: [nealcaren.github.io/turbotopics](https://nealcaren.github.io/turbotopics/)** — guides, a full API reference, and a [*Publishing in a social science journal*](https://nealcaren.github.io/turbotopics/publishing/) methodology track.
+
 `turbotopics` is a topic-modeling library with a Rust core and a clean, numpy-native Python API. It gathers a broad family of models — from classic LDA to the Structural Topic Model — under one roof, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
 
 **Models:**

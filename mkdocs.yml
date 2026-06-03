@@ -1,0 +1,102 @@
+site_name: turbotopics
+site_description: Fast, all-purpose topic modeling for Python — a Rust core with the MALLET, STM, tomotopy, and gensim toolkits in one package.
+site_url: https://nealcaren.github.io/turbotopics/
+repo_url: https://github.com/nealcaren/turbotopics
+repo_name: nealcaren/turbotopics
+edit_uri: ""
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.arithmatex:
+      generic: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            force_inspection: true
+            show_source: false
+            show_root_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            heading_level: 2
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - What you can do:
+      - Overview: can-do/index.md
+      - The models: guides/models.md
+      - Preprocessing: guides/preprocessing.md
+      - Covariates & STM: guides/covariates.md
+      - Diagnostics & validation: guides/diagnostics.md
+      - Distinguishing words: guides/keywords.md
+      - Short text: guides/short-text.md
+      - Held-out inference: guides/transform.md
+  - Publishing in a journal:
+      - Overview: publishing/index.md
+      - 1. Build a defensible corpus: publishing/corpus.md
+      - 2. Pick the right model: publishing/choosing-model.md
+      - 3. Choose and justify K: publishing/choosing-k.md
+      - 4. Validate the topics: publishing/validation.md
+      - 5. Measure effects properly: publishing/effects.md
+      - 6. Report and make reproducible: publishing/reporting.md
+  - Examples:
+      - Du Bois in The Crisis: examples/dubois.md
+      - Gadarian (STM vignette): examples/gadarian.md
+      - Political blogs: examples/poliblog.md
+  - API reference:
+      - Models: api/models.md
+      - Diagnostics: api/diagnostics.md
+      - STM toolkit: api/stm.md
+      - Keywords & preprocessing: api/keywords.md
