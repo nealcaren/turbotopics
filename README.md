@@ -19,6 +19,8 @@
 | **`SupervisedLDA`** | Topics shaped to predict a per-document response |
 | **`PT`** | Pseudo-document topics for short texts (Zuo et al. 2016) |
 | **`GSDMM`** | One-topic-per-document mixture for short texts — tweets, survey answers (Yin & Wang 2014) |
+| **`SeededLDA`** | Guided topics steered by seed words (seededlda; Watanabe) |
+| **`KeyATM`** | Keyword-assisted topics (Eshima, Imai & Sasaki 2024) |
 | **`PA`** | Pachinko Allocation: super-/sub-topic hierarchy |
 | **`HLDA`** | Hierarchical LDA over a nested-CRP topic tree |
 

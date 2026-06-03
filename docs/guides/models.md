@@ -17,6 +17,7 @@ Every model shares the same shape: construct with hyperparameters and a `seed`,
 | Track topics that drift over time | [`DTM`](#dtm) |
 | Tie topics to known labels | [`LabeledLDA`](#labeledlda) |
 | Shape topics to predict an outcome | [`SupervisedLDA`](#supervisedlda) |
+| Steer topics with known keywords | [`SeededLDA`, `KeyATM`](guided.md) |
 | Model short texts (tweets, answers) | [`PT`, `GSDMM`](short-text.md) |
 | Build a topic hierarchy | `PA`, `HLDA` |
 
@@ -101,6 +102,10 @@ print("falling:", [w for w, _ in drift["falling"][:5]])
 Topics shaped to predict a per-document real-valued response (Blei & McAuliffe).
 `coefficients` give each topic's pull on the outcome, and `predict` scores new
 documents.
+
+## Guided topics
+
+`SeededLDA` and `KeyATM` steer named topics with a few seed words each, for when you know the themes you expect. See the [guided-topics guide](guided.md).
 
 ## Short-text and hierarchy models
 

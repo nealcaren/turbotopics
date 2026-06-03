@@ -48,6 +48,7 @@ for i, words in enumerate(model.top_words(5)):
 | [`DTM`](api/models.md#turbotopics.DTM) | Dynamic topics that evolve across time slices |
 | [`SupervisedLDA`](api/models.md#turbotopics.SupervisedLDA) | Topics shaped to predict a per-document response |
 | [`PT`](guides/short-text.md) / [`GSDMM`](guides/short-text.md) | Short-text models for tweets, survey answers |
+| [`SeededLDA`](guides/guided.md) / [`KeyATM`](guides/guided.md) | Guided topics steered by seed words |
 | `PA` / `HLDA` | Topic hierarchies (Pachinko, nested-CRP) |
 
 ## Worked examples

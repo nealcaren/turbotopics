@@ -94,6 +94,33 @@ def label_topics(topic_word, vocabulary, *, n=10):
     return out
 
 
+def topic_table(model, *, n=7):
+    """A publication-ready topic table: one row per topic with its prevalence and
+    its top probability and FREX words.
+
+    Returns a list of dicts with ``topic``, ``prevalence`` (mean θ), ``prob`` (the
+    top-`n` highest-probability words), and ``frex`` (the top-`n` FREX words —
+    usually the better label). Hand it to ``pandas.DataFrame`` for the table that
+    goes in a results section.
+
+    `model` is any fitted model exposing ``topic_word``, ``doc_topic``, and
+    ``vocabulary``.
+    """
+    phi = _as_topic_word(model)
+    prevalence = _as_doc_topic(model).mean(axis=0)
+    vocab = list(model.vocabulary)
+    labels = label_topics(phi, vocab, n=n)
+    return [
+        {
+            "topic": t,
+            "prevalence": float(prevalence[t]),
+            "prob": [w for w, _ in labels[t]["prob"]],
+            "frex": [w for w, _ in labels[t]["frex"]],
+        }
+        for t in range(len(labels))
+    ]
+
+
 # ---------------------------------------------------------------------------
 # topicCorr: topic-correlation network
 # ---------------------------------------------------------------------------
@@ -157,32 +184,49 @@ def search_k(
     docs,
     ks,
     *,
+    model="lda",
+    prevalence=None,
     held_out=None,
     iterations=500,
+    em_iters=30,
     num_samples=3,
     sample_interval=10,
     seed=42,
     coherence_n=10,
 ):
-    """Fit an :class:`~turbotopics.LDA` for each K and report quality metrics.
+    """Fit a model for each K and report quality metrics (stm's ``searchK``).
+
+    With ``model="lda"`` (default) fits an :class:`~turbotopics.LDA` per K. With
+    ``model="stm"`` fits an :class:`~turbotopics.STM` per K — pass ``prevalence``
+    (a covariate design matrix) to scan K for the model you'll actually report.
 
     Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass),
-    ``exclusivity`` (mean top-word exclusivity), and — when ``held_out`` is
-    provided — ``perplexity`` (held-out). Mirrors the semantic-coherence /
-    exclusivity trade-off plot from stm's ``searchK``.
+    ``exclusivity`` (mean top-word exclusivity), and — for ``model="lda"`` with
+    ``held_out`` — ``perplexity`` (held-out). The coherence/exclusivity trade-off
+    is the signal: there is rarely a single best K, so read it alongside
+    interpretability (see the K guide).
     """
-    from . import LDA  # local import to avoid a cycle at module load
+    from . import LDA, STM  # local import to avoid a cycle at module load
+
+    if model not in ("lda", "stm"):
+        raise ValueError("model must be 'lda' or 'stm'")
 
     rows = []
     for k in ks:
-        model = LDA(num_topics=k, seed=seed)
-        model.fit(docs, iterations=iterations, num_samples=num_samples,
+        if model == "stm":
+            m = STM(num_topics=k, seed=seed)
+            m.fit(docs, prevalence, em_iters=em_iters)
+        else:
+            m = LDA(num_topics=k, seed=seed)
+            m.fit(docs, iterations=iterations, num_samples=num_samples,
                   sample_interval=sample_interval)
-        coh = float(np.mean(model.coherence(coherence_n)))
-        excl = _mean_exclusivity(model.topic_word, coherence_n)
-        row = {"k": k, "coherence": coh, "exclusivity": excl}
-        if held_out is not None:
-            row["perplexity"] = float(model.perplexity(held_out, seed=seed))
+        row = {
+            "k": k,
+            "coherence": float(np.mean(m.coherence(coherence_n))),
+            "exclusivity": _mean_exclusivity(m.topic_word, coherence_n),
+        }
+        if model == "lda" and held_out is not None:
+            row["perplexity"] = float(m.perplexity(held_out, seed=seed))
         rows.append(row)
     return rows
 
@@ -743,6 +787,7 @@ __all__ = [
     "TopicCorrelation",
     "find_thoughts",
     "find_thoughts_html",
+    "topic_table",
     "quality_frontier",
     "bootstrap_stability",
     "search_k",

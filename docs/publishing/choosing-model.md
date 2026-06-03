@@ -31,6 +31,7 @@ data structure.
 | "How many themes are there?" | **`HDP`** | Infers `K` nonparametrically (a check on your `K`) |
 | "How does theme *vocabulary* drift over time?" | **`DTM`** | Topics evolve across ordered time slices |
 | "Do themes predict an outcome?" | **`SupervisedLDA`** / `DMR` | Response- or covariate-conditioned topics |
+| "I already know the themes I expect" | **`KeyATM`**, **`SeededLDA`** | Seed words steer named topics — better validity and reproducibility ([guided topics](../guides/guided.md)) |
 | Tweets / survey answers / headlines | **`GSDMM`**, **`PT`** | Built for short, sparse documents |
 
 ## Why STM is the social-science default

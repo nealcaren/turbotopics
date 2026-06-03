@@ -81,6 +81,7 @@ nav:
       - Covariates & STM: guides/covariates.md
       - Diagnostics & validation: guides/diagnostics.md
       - Distinguishing words: guides/keywords.md
+      - Guided topics (seed words): guides/guided.md
       - Short text: guides/short-text.md
       - Held-out inference: guides/transform.md
   - Publishing in a journal:

@@ -26,6 +26,10 @@ All models share the same shape of API: construct with hyperparameters and a
 
 ::: turbotopics.GSDMM
 
+::: turbotopics.SeededLDA
+
+::: turbotopics.KeyATM
+
 ::: turbotopics.PA
 
 ::: turbotopics.HLDA

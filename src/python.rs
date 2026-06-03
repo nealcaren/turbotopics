@@ -24,6 +24,8 @@ use crate::dmr;
 use crate::dtm;
 use crate::gsdmm;
 use crate::hdp;
+use crate::keyatm;
+use crate::seeded;
 use crate::hlda;
 use crate::pa;
 use crate::pt;
@@ -174,6 +176,18 @@ struct GsdmmState {
     k_max: usize, alpha: f64, beta: f64, seed: u64, fitted: bool, num_used: usize,
     phi: Option<Arr2>, theta: Option<Arr2>, doc_cluster: Vec<usize>,
     corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SeededState {
+    num_topics: usize, alpha: f64, beta: f64, weight: f64, seed: u64, fitted: bool,
+    topic_names: Vec<String>, phi: Option<Arr2>, theta: Option<Arr2>,
+    corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KeyAtmState {
+    num_topics: usize, alpha: f64, beta: f64, beta_keyword: f64, gamma1: f64, gamma2: f64,
+    seed: u64, fitted: bool, topic_names: Vec<String>, keyword_rate: Vec<f64>,
+    phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PaState {
@@ -5366,6 +5380,419 @@ impl GSDMM {
 }
 
 // ---------------------------------------------------------------------------
+// SeededLDA: guided topics via seed-word priors
+// ---------------------------------------------------------------------------
+
+/// Parse a ``{topic_name: [words]}`` dict into ordered (names, word-lists),
+/// preserving insertion order.
+fn parse_seed_dict(d: &Bound<'_, PyDict>) -> PyResult<(Vec<String>, Vec<Vec<String>>)> {
+    let mut names = Vec::new();
+    let mut words = Vec::new();
+    for (k, v) in d.iter() {
+        names.push(k.extract::<String>().map_err(|_| {
+            PyValueError::new_err("seed/keyword dict keys must be strings (topic names)")
+        })?);
+        words.push(v.extract::<Vec<String>>().map_err(|_| {
+            PyValueError::new_err("seed/keyword dict values must be lists of strings")
+        })?);
+    }
+    if names.is_empty() {
+        return Err(PyValueError::new_err("provide at least one seeded/keyword topic"));
+    }
+    Ok((names, words))
+}
+
+/// Map per-topic seed/keyword *words* to vocabulary ids (dropping out-of-vocab),
+/// padding with empty lists up to `num_topics` total topics.
+fn seed_word_ids(
+    word_strings: &[Vec<String>],
+    id_to_word: &[String],
+    num_topics: usize,
+) -> Vec<Vec<usize>> {
+    let index: HashMap<&str, usize> =
+        id_to_word.iter().enumerate().map(|(i, w)| (w.as_str(), i)).collect();
+    let mut out: Vec<Vec<usize>> = word_strings
+        .iter()
+        .map(|ws| ws.iter().filter_map(|w| index.get(w.as_str()).copied()).collect())
+        .collect();
+    out.resize(num_topics, Vec::new());
+    out
+}
+
+/// Seeded LDA (guided topic modeling): you supply a few **seed words** per topic
+/// and the model is steered so those topics form around them, while the rest of
+/// each topic's vocabulary (and any `residual` unseeded topics) is still learned.
+/// Useful when theory tells you which themes to expect (Jagarlamudi et al. 2012;
+/// the seeding follows koheiw/seededlda — seed words get a `weight × 100`
+/// prior pseudocount in their topic).
+#[pyclass(module = "turbotopics")]
+pub struct SeededLDA {
+    seed_names: Vec<String>,
+    seed_words: Vec<Vec<String>>,
+    residual: usize,
+    alpha: f64,
+    beta: f64,
+    weight: f64,
+    seed: u64,
+    fitted: bool,
+    topic_names: Vec<String>,
+    phi: Option<Array2<f64>>,
+    theta: Option<Array2<f64>>,
+    corpus: Option<corpus::Corpus>,
+}
+
+impl SeededLDA {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+    fn num_topics_val(&self) -> usize {
+        self.seed_names.len() + self.residual
+    }
+}
+
+#[pymethods]
+impl SeededLDA {
+    /// Create an unfitted model. `seed_words` is ``{topic_name: [words]}``;
+    /// `residual` adds that many extra unseeded topics. `weight` (default 0.01,
+    /// matching the seededlda package) scales the seed prior. `alpha` is the
+    /// per-topic Dirichlet, `beta` the base topic-word smoothing.
+    #[new]
+    #[pyo3(signature = (seed_words, *, residual=0, alpha=0.1, beta=0.01, weight=0.01, seed=42))]
+    fn new(
+        seed_words: &Bound<'_, PyDict>,
+        residual: usize,
+        alpha: f64,
+        beta: f64,
+        weight: f64,
+        seed: u64,
+    ) -> PyResult<Self> {
+        let (names, words) = parse_seed_dict(seed_words)?;
+        if alpha <= 0.0 || beta <= 0.0 {
+            return Err(PyValueError::new_err("alpha and beta must be > 0"));
+        }
+        if names.len() + residual < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics (seeded + residual)"));
+        }
+        Ok(SeededLDA {
+            seed_names: names, seed_words: words, residual, alpha, beta, weight, seed,
+            fitted: false, topic_names: Vec::new(), phi: None, theta: None, corpus: None,
+        })
+    }
+
+    /// Fit by collapsed Gibbs for `iters` sweeps. Seeded topics come first (in
+    /// the order given), then the residual topics.
+    #[pyo3(signature = (data, *, iters=2000))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_topics = self.num_topics_val();
+        let num_types = corpus.num_types();
+        let seeds = seed_word_ids(&self.seed_words, &corpus.id_to_word, num_topics);
+        let (alpha, beta, seed_weight) = (self.alpha, self.beta, self.weight * 100.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = seeded::fit_seeded_lda(
+                &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, iters,
+                &mut rng,
+            );
+            (m, corpus)
+        });
+        self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
+        self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        let mut names = self.seed_names.clone();
+        for i in 0..self.residual {
+            names.push(format!("residual_{}", i + 1));
+        }
+        self.topic_names = names;
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics_val()
+    }
+    /// The topic labels: the seed names you gave, then ``residual_1`` … for any
+    /// unseeded topics.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        topic_words_helper(py, self.phi.as_ref().unwrap(), &self.corpus.as_ref().unwrap().id_to_word, self.num_topics_val(), n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_topics_val(), n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `SeededLDA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &SeededState {
+            num_topics: self.num_topics_val(), alpha: self.alpha, beta: self.beta,
+            weight: self.weight, seed: self.seed, fitted: self.fitted,
+            topic_names: self.topic_names.clone(), phi: arr2_opt(&self.phi),
+            theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: SeededState = read_state(path)?;
+        Ok(SeededLDA {
+            seed_names: Vec::new(), seed_words: Vec::new(),
+            residual: s.num_topics.saturating_sub(s.topic_names.iter().filter(|n| !n.starts_with("residual_")).count()),
+            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, fitted: s.fitted,
+            topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("SeededLDA(seeded={}, residual={}, fitted={})", self.seed_names.len(), self.residual, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KeyATM: keyword-assisted topic model (Eshima, Imai & Sasaki 2024)
+// ---------------------------------------------------------------------------
+
+/// Keyword-Assisted Topic Model (keyATM Base). Like LDA, but some topics carry a
+/// researcher-supplied **keyword** list; a token in a keyword topic comes either
+/// from a distribution over only that topic's keywords or from the topic's full
+/// distribution. This anchors keyword topics to their keywords while still
+/// learning the rest of the vocabulary. Faithful to keyATM/keyATM.
+#[pyclass(module = "turbotopics")]
+pub struct KeyATM {
+    key_names: Vec<String>,
+    keywords: Vec<Vec<String>>,
+    num_topics: usize,
+    alpha: f64,
+    beta: f64,
+    beta_keyword: f64,
+    gamma1: f64,
+    gamma2: f64,
+    seed: u64,
+    fitted: bool,
+    topic_names: Vec<String>,
+    keyword_rate: Vec<f64>,
+    phi: Option<Array2<f64>>,
+    theta: Option<Array2<f64>>,
+    corpus: Option<corpus::Corpus>,
+}
+
+impl KeyATM {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl KeyATM {
+    /// Create an unfitted model. `keywords` is ``{topic_name: [words]}`` (the
+    /// keyword topics, in order). `num_topics` (default = number of keyword
+    /// topics) may be larger to add regular, no-keyword topics. `alpha` is the
+    /// per-topic Dirichlet, `beta`/`beta_keyword` the regular and keyword
+    /// topic-word smoothing, and `gamma1`/`gamma2` the Beta prior on the
+    /// keyword-vs-regular switch.
+    #[new]
+    #[pyo3(signature = (keywords, *, num_topics=None, alpha=0.1, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        keywords: &Bound<'_, PyDict>,
+        num_topics: Option<usize>,
+        alpha: f64,
+        beta: f64,
+        beta_keyword: f64,
+        gamma1: f64,
+        gamma2: f64,
+        seed: u64,
+    ) -> PyResult<Self> {
+        let (names, words) = parse_seed_dict(keywords)?;
+        let k = num_topics.unwrap_or(names.len());
+        if k < names.len() {
+            return Err(PyValueError::new_err(
+                "num_topics must be >= the number of keyword topics",
+            ));
+        }
+        if k < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics"));
+        }
+        if alpha <= 0.0 || beta <= 0.0 || beta_keyword <= 0.0 || gamma1 <= 0.0 || gamma2 <= 0.0 {
+            return Err(PyValueError::new_err("alpha, beta, beta_keyword, gamma1, gamma2 must be > 0"));
+        }
+        Ok(KeyATM {
+            key_names: names, keywords: words, num_topics: k, alpha, beta, beta_keyword,
+            gamma1, gamma2, seed, fitted: false, topic_names: Vec::new(),
+            keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
+        })
+    }
+
+    /// Fit by collapsed Gibbs for `iters` sweeps. Keyword topics come first (in
+    /// the order given), then any regular topics.
+    #[pyo3(signature = (data, *, iters=1500))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_topics = self.num_topics;
+        let num_types = corpus.num_types();
+        let keys = seed_word_ids(&self.keywords, &corpus.id_to_word, num_topics);
+        let (alpha, beta, beta_key, g1, g2) =
+            (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = keyatm::fit_keyatm(
+                &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2, iters,
+                &mut rng,
+            );
+            (m, corpus)
+        });
+        self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
+        self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.keyword_rate = model.keyword_rate();
+        let mut names = self.key_names.clone();
+        for i in self.key_names.len()..num_topics {
+            names.push(format!("topic_{}", i));
+        }
+        self.topic_names = names;
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Per-topic keyword switch rate ``π_k`` (the share of a keyword topic's mass
+    /// drawn from its keyword distribution); 0 for regular topics.
+    #[getter]
+    fn keyword_rate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(self.keyword_rate.clone()).to_pyarray_bound(py))
+    }
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        topic_words_helper(py, self.phi.as_ref().unwrap(), &self.corpus.as_ref().unwrap().id_to_word, self.num_topics, n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_topics, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `KeyATM.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &KeyAtmState {
+            num_topics: self.num_topics, alpha: self.alpha, beta: self.beta,
+            beta_keyword: self.beta_keyword, gamma1: self.gamma1, gamma2: self.gamma2,
+            seed: self.seed, fitted: self.fitted, topic_names: self.topic_names.clone(),
+            keyword_rate: self.keyword_rate.clone(), phi: arr2_opt(&self.phi),
+            theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: KeyAtmState = read_state(path)?;
+        Ok(KeyATM {
+            key_names: Vec::new(), keywords: Vec::new(), num_topics: s.num_topics,
+            alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
+            gamma2: s.gamma2, seed: s.seed, fitted: s.fitted, topic_names: s.topic_names,
+            keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("KeyATM(keyword_topics={}, num_topics={}, fitted={})", self.key_names.len(), self.num_topics, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PA: Pachinko Allocation Model (super-/sub-topic hierarchy)
 // ---------------------------------------------------------------------------
 
@@ -5724,6 +6151,8 @@ fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SupervisedLDA>()?;
     m.add_class::<PT>()?;
     m.add_class::<GSDMM>()?;
+    m.add_class::<SeededLDA>()?;
+    m.add_class::<KeyATM>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;
