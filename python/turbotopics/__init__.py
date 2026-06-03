@@ -83,7 +83,9 @@ def summary(model, topn=8):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from . import phrases  # noqa: E402
 from .coherence import coherence, topic_diversity  # noqa: E402
+from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 
 __all__ = [
     "LDA",
@@ -99,9 +101,13 @@ __all__ = [
     "tokenize",
     "one_hot",
     "stm",
+    "phrases",
     "coherence",
     "topic_diversity",
     "summary",
+    "learn_phrases",
+    "apply_phrases",
+    "Phrases",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
 ]
