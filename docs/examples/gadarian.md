@@ -1,7 +1,7 @@
 # Gadarian: a survey experiment
 
-This is the canonical STM vignette (Roberts, Stewart & Tingley), and it carries
-the **model-choice** and **experimental-effect** load of the
+This worked example is the canonical STM vignette (Roberts, Stewart & Tingley),
+and it carries the **model-choice** and **experimental-effect** load of the
 [publishing workflow](../publishing/index.md). The data are 341 open-ended
 responses from a survey experiment (Gadarian & Albertson): half of respondents
 were primed to feel **anxious** about immigration (`treatment = 1`), half not. The
@@ -17,13 +17,14 @@ question is whether the prime changed *what people wrote about*.
     Data: [`examples/gadarian.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/gadarian.csv) ·
     full script: [`examples/stm_vignette.py`](https://github.com/nealcaren/turbotopics/blob/main/examples/stm_vignette.py)
 
-## Why STM
+## Why STM, and fit it
 
 The design is a randomized experiment with a single binary covariate. We want to
 know how that covariate moves **topic prevalence**, with a valid hypothesis test.
 That is precisely what the [Structural Topic Model](../publishing/choosing-model.md)
 is for: prevalence regressed on `treatment`, plus the method of composition for
-honest standard errors.
+honest standard errors. A small `K` suits short responses and a handful of
+theoretically motivated frames.
 
 ```python
 import csv, numpy as np, turbotopics as tt
@@ -32,41 +33,74 @@ from turbotopics import tokenize, stm
 rows = list(csv.DictReader(open("examples/gadarian.csv")))
 docs = [tokenize(r["open.ended.response"], stopwords=stop, min_length=3) for r in rows]
 treatment = np.array([float(r["treatment"]) for r in rows]).reshape(-1, 1)
+print("treated:", int(treatment.sum()), "control:", int((1 - treatment).sum()))
 
 model = tt.STM(num_topics=3, seed=1)
 model.fit(docs, treatment, prevalence_names=["treatment"], em_iters=40)
 ```
 
-A small `K` is appropriate here: short responses, a simple design, and a
-theoretically motivated handful of frames.
+```
+treated: 171 control: 170
+```
+
+## The three frames
+
+Read the topics with both highest-probability and FREX words:
+
+```python
+labels = stm.label_topics(model.topic_word, model.vocabulary, n=7)
+for t in range(3):
+    print(f"T{t}  prob: " + ", ".join(w for w, _ in labels[t]["prob"]))
+    print(f"     frex: " + ", ".join(w for w, _ in labels[t]["frex"]))
+```
+
+```
+T0  prob: citizens, illegals, way, free, benefits, services, crime
+     frex: benefits, using, fact, never, issue, years, medical
+T1  prob: illegal, border, welfare, coming, language, care, health
+     frex: assimilate, help, society, wages, well, mexican, control
+T2  prob: people, immigrants, immigration, jobs, country, think, english
+     frex: difficult, away, process, low, looking, born, wage
+```
 
 ## The treatment effect
 
 ```python
 draws = stm.posterior_theta_samples(model, nsims=30, seed=0)
 effects = stm.estimate_effect(draws, treatment, feature_names=["treatment"])
-labels = stm.label_topics(model.topic_word, model.vocabulary, n=6)
 for t, e in enumerate(effects):
     d = e.as_dict()["treatment"]
-    print(f"T{t}: coef={d['coef']:+.3f}  z={d['z']:+.1f}  "
-          f"[{', '.join(w for w, _ in labels[t]['frex'][:5])}]")
+    print(f"T{t}: coef={d['coef']:+.3f}  z={d['z']:+.1f}  ci=({d['ci'][0]:+.3f}, {d['ci'][1]:+.3f})")
 ```
 
 ```
-T0: coef=+0.121  z=+3.9  [benefits, using, fact, never, issue]
-T2: coef=-0.076  z=-2.4  [difficult, away, process, low, looking]
+T0: coef=+0.121  z=+3.9  ci=(+0.059, +0.182)
+T1: coef=-0.044  z=-1.4  ci=(-0.106, +0.018)
+T2: coef=-0.076  z=-2.4  ci=(-0.138, -0.014)
 ```
 
-The anxiety prime **significantly raises** prevalence of the threat/benefits-of-
-control frame and **lowers** a more procedural frame. This is the substantive
-finding of the original study. Because treatment was randomized and each
-respondent contributes one independent response, ordinary method-of-composition
-standard errors are appropriate; no clustering is needed.
+The anxiety prime **raises** prevalence of the threat frame (T0: benefits,
+services, crime) and **lowers** the procedural frame (T2: process, born, wage).
+This is the substantive finding of the original study. Because treatment was
+randomized and each respondent contributes one independent response, ordinary
+method-of-composition standard errors are appropriate; no clustering is needed.
 
-## Robustness
+## Close-read the rising frame
+
+Distant reading should always be checked against the documents. Pull the
+responses most associated with the topic the prime raised:
+
+```python
+texts = [r["open.ended.response"] for r in rows]
+for i, prop, txt in stm.find_thoughts(model.doc_topic, texts=texts, topic=0, n=2):
+    print(f"doc {i} (θ={prop:.2f}): {txt[:80]}")
+```
+
+```
+doc 160 (θ=0.95): i am most worried about the conception that forms in the relation of th
+doc 284 (θ=0.94): the fact that congress doesn't have the balls to enforce the laws alread
+```
 
 The [full vignette script](https://github.com/nealcaren/turbotopics/blob/main/examples/stm_vignette.py)
-adds the rest of the reviewer-proof apparatus on this dataset: FREX labels,
-`findThoughts` representative responses, the topic-correlation network, and a
-`searchK` check. It recovers the published treatment effect and is guarded by the
-test suite.
+adds the rest of the reviewer-proof apparatus on this dataset: the
+topic-correlation network and a `searchK` check. It is guarded by the test suite.

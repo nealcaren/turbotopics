@@ -1,61 +1,131 @@
 # W.E.B. Du Bois in *The Crisis*
 
-A full end-to-end analysis on a real corpus: **704 articles from *The Crisis***,
-the NAACP magazine Du Bois edited from 1910 to 1934. It walks the whole library:
-preprocessing, phrase detection, LDA, STM with decade prevalence, dynamic topics,
-HDP, and held-out inference.
+A worked analysis of **704 articles from *The Crisis***, the NAACP magazine Du
+Bois edited from 1910 to 1934. This example covers corpus building, phrase
+detection, LDA, dynamic topics over the decades, and the nonparametric `HDP`
+check on `K`.
 
 !!! info "Focus of this example"
     Corpus building & cleaning · **temporal / dynamic topics** · using `HDP` as a
     `K` sanity check. For topic validation and clustered errors see
     [Poliblog](poliblog.md); for the experimental effect see [Gadarian](gadarian.md).
 
-> :material-notebook: **[Run the full notebook](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)**
-> ([script version](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.py)) ·
-> data: [`examples/dubois_crisis.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_crisis.csv)
+    Data: [`examples/dubois_crisis.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_crisis.csv) ·
+    full notebook (adds STM decade-prevalence + held-out `transform`):
+    [`dubois_tutorial.ipynb`](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
 
-## What it covers
+## 1. Build the corpus
 
-1. **Preprocess** — tokenize with a stoplist, prune the vocabulary
-   (`min_doc_freq=10`, `rm_top=20`).
-2. **Phrases** — detect 118 collocations (*jim crow*, *booker washington*) before
-   modeling.
-3. **LDA (K=15)** — clean topics: WWI Black regiments, lynching, voting and
-   disfranchisement, education, the NAACP, labor, Africa and the international
-   scene. Scored with `c_v` coherence and topic diversity.
-4. **STM** — topic prevalence on decade, with `estimate_effect` by the method of
-   composition. The significant movers are historically exact: **labor /
-   communism rises** (Du Bois's economic turn) and **women's suffrage falls**
-   (the 19th Amendment passed in 1920).
-5. **DTM** — word trajectories across decades. **War** recedes after the WWI
-   1910s, **labor** climbs toward the 1930s, and **Africa** peaks in the
-   Pan-African 1920s.
-6. **HDP** — independently infers ≈ 17 topics, close to the `K=15` chosen for
-   LDA.
-7. **Utilities** — `summary`, save/load, pyLDAvis, and held-out `transform`.
-
-## A taste
+The articles run 1910–1934, Du Bois's editorship. A few corpus-specific
+stopwords (`crisis`, `negro`, `colored`) would otherwise dominate every topic.
 
 ```python
-import csv, turbotopics as tt
+import csv, numpy as np, turbotopics as tt
 from turbotopics import Corpus, tokenize
 
 rows = list(csv.DictReader(open("examples/dubois_crisis.csv")))
+for r in rows:
+    r["decade"] = int(r["decade"])
+
+EXTRA = ["crisis", "negro", "negroes", "colored", "men", "man", "upon", "us",
+         "one", "two", "shall", "may", "must", "said", "make", "made"]
+stop = sorted(set(open("examples/english-stoplist.txt").read().split()) | set(EXTRA))
 docs = [tokenize(r["text"], stopwords=stop, min_length=3) for r in rows]
+
+by_decade = {}
+for r in rows:
+    by_decade[r["decade"]] = by_decade.get(r["decade"], 0) + 1
+print(len(rows), "articles;", {d: by_decade[d] for d in sorted(by_decade)})
+```
+
+```
+704 articles; {1910: 356, 1920: 276, 1930: 72}
+```
+
+## 2. Phrases, then a pruned corpus
+
+```python
+phrases = tt.learn_phrases(docs, min_count=8, threshold=12.0)
+docs = tt.apply_phrases(docs, phrases)            # "jim crow" -> "jim_crow"
 corpus = Corpus.from_documents(docs, min_doc_freq=10, rm_top=20)
+print("vocab", corpus.num_words)                  # 3418
+```
 
+## 3. LDA
+
+```python
 lda = tt.LDA(num_topics=15, seed=1)
-lda.fit(corpus, iterations=400)
+lda.fit(corpus, iterations=400, num_samples=4, sample_interval=25)
 for t in range(15):
-    print(f"T{t}:", ", ".join(w for w, _ in lda.top_words(8, topic=t)))
+    print(f"T{t:>2}: " + ", ".join(w.replace("_", " ") for w, _ in lda.top_words(8, topic=t)))
+
+print("c_v:", round(float(np.mean(tt.coherence(lda, docs, coherence_type="c_v"))), 3),
+      "diversity:", round(tt.topic_diversity(lda, topn=15), 3))
 ```
 
 ```
-T 3: lynching, southern, state, law, murder, crime, georgia, justice
-T 4: schools, education, children, public, teachers, college, training
-T 6: africa, england, war, india, europe, government, peace, african
-T 8: labor, industry, industrial, capital, economic, workers, wages
-...
+T 1: schools, education, children, public, segregation, training, college, teachers
+T 3: lynching, murder, state, law, crime, case, mob, governor
+T 6: labor, economic, industrial, industry, today, workers, capital, class
+T 8: war, africa, races, england, peace, europe, civilization, government
+T 9: votes, voters, party, political, states, election, state, disfranchisement
+T13: church, committee, organization, conference, general, members, national, board
+T14: officers, french, camp, regiment, general, division, troops, army
+c_v: 0.612 diversity: 0.884
 ```
 
-The notebook applies the full [publishing workflow](../publishing/index.md).
+The topics are recognizable: education, lynching, labor and economics, war and
+Africa, voting and disfranchisement, the NAACP's organizational work, and Black
+WWI regiments.
+
+## 4. Dynamic topics over the decades
+
+The Dynamic Topic Model fixes the topics but lets their vocabulary drift across
+ordered time slices. `chain_variance=0.05` lets real trends show; the default
+0.005 is too stiff for three slices.
+
+```python
+decades = sorted(by_decade)
+times = [decades.index(r["decade"]) for r in rows]
+dtm = tt.DTM(num_topics=8, chain_variance=0.05, seed=1)
+dtm.fit(corpus, times, em_iters=20)
+
+vocab = list(dtm.vocabulary)
+per_time = np.stack([dtm.topic_word(s) for s in range(dtm.num_times)])
+print("           " + "   ".join(f"{d}s" for d in decades))
+for w in ["war", "labor", "africa", "schools"]:
+    wid = vocab.index(w)
+    topic = int(per_time[:, :, wid].mean(0).argmax())
+    evo = dtm.word_evolution(topic, w)
+    print(f"  {w:8s}: " + "   ".join(f"{1000 * float(p):5.1f}" for p in evo))
+```
+
+```
+           1910s   1920s   1930s
+  war     :   7.3     6.5     6.3
+  labor   :  13.1    15.4    18.6
+  africa  :  15.9    21.7    23.9
+  schools :  16.8    16.2    14.1
+```
+
+The trajectories track Du Bois's intellectual arc: **labor** and **Africa** rise
+steadily across his editorship (his economic turn and the Pan-African
+Congresses), while **war** recedes after the WWI 1910s and **schools** drifts
+down.
+
+## 5. How many topics? Ask HDP
+
+The Hierarchical Dirichlet Process infers the topic count rather than taking one.
+It is a check on the `K = 15` chosen above.
+
+```python
+hdp = tt.HDP(eta=0.3, seed=1)
+hdp.fit(corpus, iters=150)
+print("HDP inferred K =", hdp.num_topics)          # 17
+```
+
+`HDP` lands on 17, close to the 15 used for LDA. The
+[full notebook](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
+continues with STM decade-prevalence (labor rises, women's suffrage falls after
+1920) and held-out `transform`, following the
+[publishing workflow](../publishing/index.md) end to end.
