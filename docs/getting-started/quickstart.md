@@ -6,13 +6,13 @@ Every model takes pre-tokenized documents, a `list[list[str]]` or a
 ## Fit a model
 
 ```python
-import topica as tt
+import topica
 
 animal_docs = [["cat", "dog", "fish", "cat", "dog"]] * 15
 space_docs  = [["planet", "star", "moon", "rocket", "planet"]] * 15
 documents   = animal_docs + space_docs
 
-model = tt.LDA(num_topics=2, seed=42)
+model = topica.LDA(num_topics=2, seed=42)
 model.fit(documents, iterations=1000)
 ```
 
@@ -38,11 +38,11 @@ Fits are deterministic for a fixed `seed`.
 ```python
 # Per-topic coherence and exclusivity — the standard quality pair.
 coherence   = model.coherence(n=10)             # UMass, per topic
-exclusivity = tt.exclusivity(model, n=10)       # per topic
-diversity   = tt.topic_diversity(model, topn=25)
+exclusivity = topica.exclusivity(model, n=10)       # per topic
+diversity   = topica.topic_diversity(model, topn=25)
 
 # Windowed, human-aligned coherence (gensim-style):
-cv = tt.coherence(model, documents, coherence_type="c_v", topn=10)
+cv = topica.coherence(model, documents, coherence_type="c_v", topn=10)
 ```
 
 ## Infer topics for new documents

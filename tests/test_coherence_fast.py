@@ -4,7 +4,7 @@ fallback exactly, and must be the path used when the extension is present."""
 import numpy as np
 import pytest
 
-import topica as tt
+import topica
 import topica._topica as ext
 
 
@@ -16,17 +16,17 @@ DOCS = (
 
 
 def _fit():
-    m = tt.LDA(num_topics=4, seed=1)
+    m = topica.LDA(num_topics=4, seed=1)
     m.fit(DOCS, iterations=200)
     return m
 
 
 def _both_paths(model, ct, **kw):
-    fast = tt.coherence(model, DOCS, coherence_type=ct, **kw)
+    fast = topica.coherence(model, DOCS, coherence_type=ct, **kw)
     saved = ext.window_cooccurrence
     try:
         del ext.window_cooccurrence  # force the pure-Python fallback
-        slow = tt.coherence(model, DOCS, coherence_type=ct, **kw)
+        slow = topica.coherence(model, DOCS, coherence_type=ct, **kw)
     finally:
         ext.window_cooccurrence = saved
     return fast, slow

@@ -11,10 +11,10 @@ The Structural Topic Model lets a document's topic proportions depend on its
 metadata. Fit prevalence as a regression on your covariates:
 
 ```python
-import topica as tt
+import topica
 
-X, names = tt.one_hot(party)                     # or build any design matrix
-model = tt.STM(num_topics=20, seed=1)
+X, names = topica.one_hot(party)                     # or build any design matrix
+model = topica.STM(num_topics=20, seed=1)
 model.fit(docs, prevalence=X, prevalence_names=names)
 ```
 

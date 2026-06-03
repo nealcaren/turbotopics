@@ -37,9 +37,9 @@ A complete methods section covers the corpus, the preprocessing, the model and
 
 ```python
 import pandas as pd
-import topica as tt
+import topica
 
-labels = tt.label_topics(model.topic_word, model.vocabulary, n=7)
+labels = topica.label_topics(model.topic_word, model.vocabulary, n=7)
 prevalence = model.doc_topic.mean(axis=0)
 table = pd.DataFrame({
     "topic": range(model.num_topics),

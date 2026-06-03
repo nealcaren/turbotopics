@@ -36,7 +36,7 @@ import tempfile
 
 import numpy as np
 
-import topica as tt
+import topica
 from topica import Corpus, DTM, HDP, LDA, STM, stm, tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -121,8 +121,8 @@ def main():
     #    with "_". We then rebuild the Corpus from the phrased documents.
     # ------------------------------------------------------------------ #
     banner("[2] Phrases: detect collocations before modeling")
-    phrase_model = tt.learn_phrases(docs, min_count=8, threshold=12.0)
-    phrased_docs = tt.apply_phrases(docs, phrase_model)
+    phrase_model = topica.learn_phrases(docs, min_count=8, threshold=12.0)
+    phrased_docs = topica.apply_phrases(docs, phrase_model)
     detected = sorted({w for d in phrased_docs for w in d if "_" in w})
     print(f"Detected {len(detected)} multiword phrases. A sample:")
     # surface a few historically resonant ones if present, else the first 12
@@ -157,8 +157,8 @@ def main():
 
     # coherence/topic_diversity accept the fitted model directly; coherence
     # needs the reference texts (our phrased documents).
-    coh = tt.coherence(lda, phrased_docs, coherence_type="c_v", topn=10)
-    div = tt.topic_diversity(lda, topn=15)
+    coh = topica.coherence(lda, phrased_docs, coherence_type="c_v", topn=10)
+    div = topica.topic_diversity(lda, topn=15)
     print(f"\nMean c_v coherence: {coh.mean():.3f}  "
           f"(best topic {coh.argmax()} = {coh.max():.3f}, "
           f"worst topic {coh.argmin()} = {coh.min():.3f})")
@@ -182,7 +182,7 @@ def main():
     # ------------------------------------------------------------------ #
     banner("[4] STM: prevalence ~ decade, then topic trends over time")
     Ks = 12
-    X_decade, decade_names = tt.one_hot([r["decade"] for r in rows], prefix="dec")
+    X_decade, decade_names = topica.one_hot([r["decade"] for r in rows], prefix="dec")
     print(f"Prevalence design: {X_decade.shape[1]} decade dummies "
           f"({', '.join(decade_names)}); reference decade dropped.")
     stm_model = STM(num_topics=Ks, seed=1)
@@ -306,7 +306,7 @@ def main():
         "voting":    ["vote", "votes", "ballot", "suffrage", "franchise"],
         "africa":    ["africa", "african", "congo", "liberia", "empire"],
     }
-    ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+    ka = topica.KeyATM(seeds, num_topics=8, seed=1)
     ka.fit(phrased_docs, iters=800)         # ~1500+ iters for a real run
     print("Seeded topics (and how much each leans on its keywords):")
     for t in range(len(seeds)):
@@ -324,7 +324,7 @@ def main():
 
     # summary() — a tomotopy-style one-shot overview of a fitted model.
     print("topica.summary(lda):\n")
-    print(tt.summary(lda, topn=6))
+    print(topica.summary(lda, topn=6))
 
     # save/load — persist a fitted model and read it straight back.
     model_path = os.path.join(tempfile.gettempdir(), "dubois_lda.bin")

@@ -8,14 +8,14 @@ uncertainty and clustered errors, see [Measure effects properly](../publishing/e
 ## Prevalence covariates
 
 ```python
-import topica as tt
+import topica
 
-X, names = tt.one_hot(party)                      # design matrix + column names
-model = tt.STM(num_topics=20, seed=1)
+X, names = topica.one_hot(party)                      # design matrix + column names
+model = topica.STM(num_topics=20, seed=1)
 model.fit(docs, prevalence=X, prevalence_names=names)
 
 model.prevalence_effects        # learned γ
-tt.topic_correlation(model.doc_topic)
+topica.topic_correlation(model.doc_topic)
 ```
 
 ## Content covariates
@@ -25,7 +25,7 @@ mechanism), so the same topic is phrased differently across, say, conservative
 and liberal sources:
 
 ```python
-model = tt.STM(num_topics=20, seed=1)
+model = topica.STM(num_topics=20, seed=1)
 model.fit(docs, prevalence=X, content=source, content_names=groups)
 
 model.topic_word_by_group        # per-group β

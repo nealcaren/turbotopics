@@ -37,12 +37,12 @@ artifacts)? Do topics split and merge sensibly as `K` grows?
 ## A concrete procedure
 
 ```python
-import topica as tt
+import topica
 import numpy as np
 
 # 1) Scan a theoretically plausible range.
 held_out = test_docs                     # a held-out split for perplexity
-results = tt.search_k(
+results = topica.search_k(
     train_docs, ks=[10, 15, 20, 25, 30],
     held_out=held_out, iterations=800,
 )
@@ -56,10 +56,10 @@ topics**. Count how many you can label, and look at the coherence×exclusivity
 spread per topic:
 
 ```python
-model = tt.STM(num_topics=20, seed=1)
+model = topica.STM(num_topics=20, seed=1)
 model.fit(docs, prevalence=X)
 
-frontier = tt.quality_frontier(model, n=10)   # per-topic coherence & exclusivity
+frontier = topica.quality_frontier(model, n=10)   # per-topic coherence & exclusivity
 # scatter frontier["coherence"] vs frontier["exclusivity"];
 # weak topics cluster in the lower-left.
 ```
@@ -68,7 +68,7 @@ A nonparametric model is a useful sanity check on your choice: it *infers* a
 topic count rather than taking one.
 
 ```python
-hdp = tt.HDP(eta=0.3, seed=1)
+hdp = topica.HDP(eta=0.3, seed=1)
 hdp.fit(docs, iters=300)
 print("HDP suggests ~", hdp.num_topics, "topics")
 ```

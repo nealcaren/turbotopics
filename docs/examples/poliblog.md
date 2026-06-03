@@ -23,7 +23,7 @@ by ideology. That covariate question makes the
 [right model](../publishing/choosing-model.md) the STM.
 
 ```python
-import csv, numpy as np, topica as tt
+import csv, numpy as np, topica
 from topica import Corpus, stm
 
 rows = list(csv.DictReader(open("examples/poliblog.csv")))
@@ -39,7 +39,7 @@ print(corpus.num_docs, "docs, vocab", corpus.num_words)
 ## 3. Choose and justify K
 
 ```python
-for r in tt.search_k(docs, ks=[10, 15, 20], iterations=500):
+for r in topica.search_k(docs, ks=[10, 15, 20], iterations=500):
     print(f"K={r['k']:>2}  coherence={r['coherence']:.1f}  exclusivity={r['exclusivity']:.3f}")
 ```
 
@@ -58,7 +58,7 @@ and we confirm the substantive effects below survive `K ∈ {10, 20}`.
 
 ```python
 conservative = np.array([r["rating"] == "Conservative" for r in rows], float).reshape(-1, 1)
-model = tt.STM(num_topics=15, seed=1)
+model = topica.STM(num_topics=15, seed=1)
 model.fit(docs, conservative, prevalence_names=["conservative"], em_iters=25)
 
 labels = stm.label_topics(model.topic_word, model.vocabulary, n=6)
@@ -82,11 +82,11 @@ the financial crisis, the primaries. Validate them with a human intrusion test
 and with bootstrap stability:
 
 ```python
-print(tt.word_intrusion(model, n_words=5, seed=0)[0])
+print(topica.word_intrusion(model, n_words=5, seed=0)[0])
 # {'topic': 0, 'words': ['voter','mccain','poll','state','obama','investig'],
 #  'intruder': 'investig', 'intruder_index': 5}
 
-boot = tt.bootstrap_stability(docs, k=15, n_boot=20, iterations=400)
+boot = topica.bootstrap_stability(docs, k=15, n_boot=20, iterations=400)
 print("mean topic stability:", round(boot["mean"], 2))   # 0.36
 ```
 
@@ -159,7 +159,7 @@ seeds = {
     "social":         ["abort", "gay", "marriag", "religi", "church"],
     "campaign":       ["poll", "vote", "campaign", "candid", "elect"],
 }
-ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+ka = topica.KeyATM(seeds, num_topics=8, seed=1)
 ka.fit(docs, iters=800)
 for t in range(4):
     print(f"{ka.topic_names[t]:15s}", [w for w, _ in ka.top_words(7, topic=t)])

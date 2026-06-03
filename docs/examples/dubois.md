@@ -20,7 +20,7 @@ The articles run 1910–1934, Du Bois's editorship. A few corpus-specific
 stopwords (`crisis`, `negro`, `colored`) would otherwise dominate every topic.
 
 ```python
-import csv, numpy as np, topica as tt
+import csv, numpy as np, topica
 from topica import Corpus, tokenize
 
 rows = list(csv.DictReader(open("examples/dubois_crisis.csv")))
@@ -45,8 +45,8 @@ print(len(rows), "articles;", {d: by_decade[d] for d in sorted(by_decade)})
 ## 2. Phrases, then a pruned corpus
 
 ```python
-phrases = tt.learn_phrases(docs, min_count=8, threshold=12.0)
-docs = tt.apply_phrases(docs, phrases)            # "jim crow" -> "jim_crow"
+phrases = topica.learn_phrases(docs, min_count=8, threshold=12.0)
+docs = topica.apply_phrases(docs, phrases)            # "jim crow" -> "jim_crow"
 corpus = Corpus.from_documents(docs, min_doc_freq=10, rm_top=20)
 print("vocab", corpus.num_words)                  # 3418
 ```
@@ -54,13 +54,13 @@ print("vocab", corpus.num_words)                  # 3418
 ## 3. LDA
 
 ```python
-lda = tt.LDA(num_topics=15, seed=1)
+lda = topica.LDA(num_topics=15, seed=1)
 lda.fit(corpus, iterations=400, num_samples=4, sample_interval=25)
 for t in range(15):
     print(f"T{t:>2}: " + ", ".join(w.replace("_", " ") for w, _ in lda.top_words(8, topic=t)))
 
-print("c_v:", round(float(np.mean(tt.coherence(lda, docs, coherence_type="c_v"))), 3),
-      "diversity:", round(tt.topic_diversity(lda, topn=15), 3))
+print("c_v:", round(float(np.mean(topica.coherence(lda, docs, coherence_type="c_v"))), 3),
+      "diversity:", round(topica.topic_diversity(lda, topn=15), 3))
 ```
 
 ```
@@ -87,7 +87,7 @@ ordered time slices. `chain_variance=0.05` lets real trends show; the default
 ```python
 decades = sorted(by_decade)
 times = [decades.index(r["decade"]) for r in rows]
-dtm = tt.DTM(num_topics=8, chain_variance=0.05, seed=1)
+dtm = topica.DTM(num_topics=8, chain_variance=0.05, seed=1)
 dtm.fit(corpus, times, em_iters=20)
 
 vocab = list(dtm.vocabulary)
@@ -139,7 +139,7 @@ The Hierarchical Dirichlet Process infers the topic count rather than taking one
 It is a check on the `K = 15` chosen above.
 
 ```python
-hdp = tt.HDP(eta=0.3, seed=1)
+hdp = topica.HDP(eta=0.3, seed=1)
 hdp.fit(corpus, iters=150)
 print("HDP inferred K =", hdp.num_topics)          # 17
 ```
@@ -160,7 +160,7 @@ seeds = {
     "voting":    ["vote", "votes", "ballot", "suffrage", "franchise"],
     "africa":    ["africa", "african", "congo", "liberia", "empire"],
 }
-ka = tt.KeyATM(seeds, num_topics=8, seed=1)
+ka = topica.KeyATM(seeds, num_topics=8, seed=1)
 ka.fit(phrased_docs, iters=800)
 for t in range(4):
     print(f"{ka.topic_names[t]:10s}", [w for w, _ in ka.top_words(7, topic=t)])

@@ -21,10 +21,10 @@ documents are long and heterogeneous, segment them into comparable chunks,
 keeping each chunk tied to its source document's metadata.
 
 ```python
-import topica as tt
+import topica
 
 # `texts` are long documents; `meta` is one dict of covariates per document.
-chunks, chunk_meta = tt.split_documents(
+chunks, chunk_meta = topica.split_documents(
     texts, meta,
     max_words=200,     # target chunk length
     min_words=50,      # merge a short tail back rather than drop it
@@ -76,8 +76,8 @@ meaning together than apart. Detect them first so a topic can be about the
 phrase, not its scattered parts.
 
 ```python
-phrase_model = tt.learn_phrases(docs, min_count=8, threshold=12.0)
-docs = tt.apply_phrases(docs, phrase_model)
+phrase_model = topica.learn_phrases(docs, min_count=8, threshold=12.0)
+docs = topica.apply_phrases(docs, phrase_model)
 ```
 
 ## Inspect what survived

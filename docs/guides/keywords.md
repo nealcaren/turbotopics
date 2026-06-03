@@ -6,12 +6,12 @@ that with statistical significance, and, unlike a raw log-odds ratio, it doesn't
 let rare words dominate.
 
 ```python
-import topica as tt
+import topica
 
 conservative = [tokenize(t) for t in con_texts]
 liberal      = [tokenize(t) for t in lib_texts]
 
-scored = tt.fighting_words(conservative, liberal, prior=0.05)
+scored = topica.fighting_words(conservative, liberal, prior=0.05)
 # sorted by z-score: corpus-A markers at the top, corpus-B at the bottom
 for word, z in scored[:10]:
     print(f"{word:20s} {z:+.1f}")     # |z| > 1.96 ~ significant at 95%
@@ -24,7 +24,7 @@ the z-score already accounts for how much evidence each word carries.
 ## Top words per side
 
 ```python
-top = tt.top_fighting_words(conservative, liberal, n=15)
+top = topica.top_fighting_words(conservative, liberal, n=15)
 print("conservative:", [w for w, _ in top["a"]])
 print("liberal:     ", [w for w, _ in top["b"]])
 ```
@@ -36,7 +36,7 @@ the prior by each word's overall frequency: Monroe et al.'s informative
 Dirichlet prior, which pulls extreme estimates toward the corpus background:
 
 ```python
-tt.fighting_words(conservative, liberal, prior=0.01, informative=True)
+topica.fighting_words(conservative, liberal, prior=0.01, informative=True)
 ```
 
 This pairs naturally with [SAGE / content STM](covariates.md), which find

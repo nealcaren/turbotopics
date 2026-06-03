@@ -28,8 +28,8 @@ sampler. Fits are bit-for-bit reproducible, with optional approximate
 multi-threaded training.
 
 ```python
-import topica as tt
-model = tt.LDA(num_topics=20, seed=42)
+import topica
+model = topica.LDA(num_topics=20, seed=42)
 model.fit(docs, iterations=1000)
 model.top_words(10)
 ```
@@ -51,7 +51,7 @@ model.top_words(10)
   large vocabularies — where SparseLDA's buckets stop being sparse.
 
 ```python
-model = tt.LDA(num_topics=500, seed=1, sampler="lightlda", mh_steps=2)
+model = topica.LDA(num_topics=500, seed=1, sampler="lightlda", mh_steps=2)
 model.fit(docs, iterations=1000)
 ```
 
@@ -68,8 +68,8 @@ shift topic propensity.
 
 ```python
 import numpy as np
-X, names = tt.one_hot(party)
-model = tt.DMR(num_topics=20, seed=1)
+X, names = topica.one_hot(party)
+model = topica.DMR(num_topics=20, seed=1)
 model.fit(docs, X, feature_names=names)
 ```
 
@@ -102,7 +102,7 @@ A nonparametric model that **infers** the number of topics rather than taking
 `K` as input. Useful as a sanity check on the `K` you chose elsewhere.
 
 ```python
-hdp = tt.HDP(eta=0.3, seed=1)
+hdp = topica.HDP(eta=0.3, seed=1)
 hdp.fit(docs, iters=300)
 print(hdp.num_topics, "topics inferred")
 ```
@@ -115,7 +115,7 @@ word's probability through time, and `word_drift(topic)` reports *which* words
 rose and fell most within a topic — what makes its vocabulary evolve.
 
 ```python
-dtm = tt.DTM(num_topics=10, chain_variance=0.05, seed=1)
+dtm = topica.DTM(num_topics=10, chain_variance=0.05, seed=1)
 dtm.fit(docs, times, em_iters=20)   # `times` = per-doc slice index
 
 drift = dtm.word_drift(topic=3)     # first vs last slice by default

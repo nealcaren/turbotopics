@@ -12,9 +12,9 @@ topic. You give it an upper bound `K`; empty clusters die out during sampling, s
 it effectively **infers** the number of topics.
 
 ```python
-import topica as tt
+import topica
 
-model = tt.GSDMM(num_topics=30, seed=1)     # 30 is the MAX number of clusters
+model = topica.GSDMM(num_topics=30, seed=1)     # 30 is the MAX number of clusters
 model.fit(short_docs, iters=30)
 
 print(model.num_topics, "clusters used")    # usually far fewer than 30
@@ -32,7 +32,7 @@ smaller set of **pseudo-documents**, recovering the longer-document statistics
 LDA needs while still mixing topics within a text.
 
 ```python
-model = tt.PT(num_topics=20, num_pseudo=100, seed=1)
+model = topica.PT(num_topics=20, num_pseudo=100, seed=1)
 model.fit(short_docs, iters=1000)
 ```
 

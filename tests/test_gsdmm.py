@@ -4,7 +4,7 @@ shapes, one-topic-per-document assignment, determinism, and save/load."""
 import numpy as np
 import pytest
 
-import topica as tt
+import topica
 
 
 def _short_corpus(seed=0, n=150):
@@ -22,14 +22,14 @@ def _short_corpus(seed=0, n=150):
 class TestGSDMM:
     def test_infers_fewer_than_k_max(self):
         docs = _short_corpus()
-        m = tt.GSDMM(num_topics=15, seed=1)
+        m = topica.GSDMM(num_topics=15, seed=1)
         m.fit(docs, iters=40)
         # Empty clusters die out -> effective K is below the cap.
         assert 0 < m.num_topics <= 15
 
     def test_output_shapes(self):
         docs = _short_corpus()
-        m = tt.GSDMM(num_topics=15, seed=1)
+        m = topica.GSDMM(num_topics=15, seed=1)
         m.fit(docs, iters=40)
         k = m.num_topics
         assert m.topic_word.shape == (k, len(m.vocabulary))
@@ -39,7 +39,7 @@ class TestGSDMM:
 
     def test_hard_assignment(self):
         docs = _short_corpus()
-        m = tt.GSDMM(num_topics=15, seed=1)
+        m = topica.GSDMM(num_topics=15, seed=1)
         m.fit(docs, iters=40)
         dc = m.doc_cluster
         assert dc.shape == (len(docs),)
@@ -47,7 +47,7 @@ class TestGSDMM:
 
     def test_recovers_blocks(self):
         docs = _short_corpus()
-        m = tt.GSDMM(num_topics=15, seed=1)
+        m = topica.GSDMM(num_topics=15, seed=1)
         m.fit(docs, iters=60)
         blocks = [{"cat", "dog", "pet", "vet"},
                   {"star", "moon", "sky", "sun"},
@@ -62,23 +62,23 @@ class TestGSDMM:
 
     def test_deterministic(self):
         docs = _short_corpus()
-        a = tt.GSDMM(num_topics=12, seed=3); a.fit(docs, iters=30)
-        b = tt.GSDMM(num_topics=12, seed=3); b.fit(docs, iters=30)
+        a = topica.GSDMM(num_topics=12, seed=3); a.fit(docs, iters=30)
+        b = topica.GSDMM(num_topics=12, seed=3); b.fit(docs, iters=30)
         assert a.num_topics == b.num_topics
         assert np.array_equal(a.topic_word, b.topic_word)
         assert np.array_equal(a.doc_cluster, b.doc_cluster)
 
     def test_save_load(self, tmp_path):
         docs = _short_corpus()
-        m = tt.GSDMM(num_topics=12, seed=1); m.fit(docs, iters=30)
+        m = topica.GSDMM(num_topics=12, seed=1); m.fit(docs, iters=30)
         p = str(tmp_path / "gsdmm.tt"); m.save(p)
-        ld = tt.GSDMM.load(p)
+        ld = topica.GSDMM.load(p)
         assert ld.num_topics == m.num_topics
         assert np.array_equal(ld.topic_word, m.topic_word)
         assert np.array_equal(ld.doc_cluster, m.doc_cluster)
 
     def test_bad_params(self):
         with pytest.raises(ValueError):
-            tt.GSDMM(num_topics=1)
+            topica.GSDMM(num_topics=1)
         with pytest.raises(ValueError):
-            tt.GSDMM(num_topics=10, alpha=0.0)
+            topica.GSDMM(num_topics=10, alpha=0.0)

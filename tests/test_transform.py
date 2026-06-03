@@ -14,7 +14,7 @@ same Laplace variational inference used at fit time.
 import numpy as np
 import pytest
 
-import topica as tt
+import topica
 
 
 A = ["cat", "dog", "pet", "kitten", "puppy", "vet"]
@@ -51,44 +51,44 @@ def _check_basic(theta, k=2):
 class TestVariationalTransform:
     def test_ctm(self):
         docs, _ = _two_topic_corpus()
-        m = tt.CTM(num_topics=2, seed=1)
+        m = topica.CTM(num_topics=2, seed=1)
         m.fit(docs, em_iters=60)
         _check_basic(m.transform(NEW))
 
     def test_ctm_reproduces_training_theta(self):
         # The held-out E-step on the training docs matches the stored θ.
         docs, _ = _two_topic_corpus()
-        m = tt.CTM(num_topics=2, seed=1)
+        m = topica.CTM(num_topics=2, seed=1)
         m.fit(docs, em_iters=60)
         np.testing.assert_allclose(m.transform(docs), m.doc_topic, atol=1e-3)
 
     def test_stm_prevalence(self):
         docs, is_a = _two_topic_corpus()
         x = is_a.astype(float).reshape(-1, 1)
-        m = tt.STM(num_topics=2, seed=1)
+        m = topica.STM(num_topics=2, seed=1)
         m.fit(docs, prevalence=x)
         _check_basic(m.transform(NEW))
 
     def test_save_load_parity(self, tmp_path):
         docs, _ = _two_topic_corpus()
-        m = tt.CTM(num_topics=2, seed=1)
+        m = topica.CTM(num_topics=2, seed=1)
         m.fit(docs, em_iters=40)
         p = str(tmp_path / "ctm.tt")
         m.save(p)
-        loaded = tt.CTM.load(p)
+        loaded = topica.CTM.load(p)
         np.testing.assert_array_equal(m.transform(NEW), loaded.transform(NEW))
 
 
 class TestGibbsTransform:
     def test_lda(self):
         docs, _ = _two_topic_corpus()
-        m = tt.LDA(num_topics=2, seed=1)
+        m = topica.LDA(num_topics=2, seed=1)
         m.fit(docs, iterations=300)
         _check_basic(m.transform(NEW))
 
     def test_hdp(self):
         docs, _ = _two_topic_corpus()
-        m = tt.HDP(seed=1)
+        m = topica.HDP(seed=1)
         m.fit(docs, iters=300)
         theta = m.transform(NEW)
         k = m.num_topics
@@ -99,21 +99,21 @@ class TestGibbsTransform:
     def test_labeled_lda(self):
         docs, is_a = _two_topic_corpus()
         labels = [["animal"] if a else ["space"] for a in is_a]
-        m = tt.LabeledLDA(seed=1)
+        m = topica.LabeledLDA(seed=1)
         m.fit(docs, labels)
         _check_basic(m.transform(NEW))
 
     def test_supervised_lda(self):
         docs, is_a = _two_topic_corpus()
         y = np.where(is_a, 1.0, -1.0)
-        m = tt.SupervisedLDA(num_topics=2, seed=1)
+        m = topica.SupervisedLDA(num_topics=2, seed=1)
         m.fit(docs, y)
         _check_basic(m.transform(NEW))
 
     def test_dmr_baseline_and_covariate(self):
         docs, is_a = _two_topic_corpus()
         x = is_a.astype(float).reshape(-1, 1)
-        m = tt.DMR(num_topics=2, seed=1)
+        m = topica.DMR(num_topics=2, seed=1)
         m.fit(docs, x)
         # Intercept-only baseline prior. (DMR's learned prior is asymmetric, so
         # the all-OOV doc returns that skewed prior rather than a uniform one —
@@ -131,7 +131,7 @@ class TestGibbsTransform:
     def test_dmr_covariate_shape_validation(self):
         docs, is_a = _two_topic_corpus()
         x = is_a.astype(float).reshape(-1, 1)
-        m = tt.DMR(num_topics=2, seed=1)
+        m = topica.DMR(num_topics=2, seed=1)
         m.fit(docs, x)
         with pytest.raises(ValueError):
             m.transform(NEW, np.zeros((2, 1)))  # wrong number of rows
@@ -141,15 +141,15 @@ class TestGibbsTransform:
 
 def test_transform_accepts_corpus_object():
     docs, _ = _two_topic_corpus()
-    m = tt.LDA(num_topics=2, seed=1)
+    m = topica.LDA(num_topics=2, seed=1)
     m.fit(docs, iterations=200)
-    corpus = tt.Corpus.from_documents(NEW)
+    corpus = topica.Corpus.from_documents(NEW)
     theta = m.transform(corpus)
     assert theta.shape[0] == len(NEW)
 
 
 def test_transform_deterministic():
     docs, _ = _two_topic_corpus()
-    m = tt.LDA(num_topics=2, seed=1)
+    m = topica.LDA(num_topics=2, seed=1)
     m.fit(docs, iterations=200)
     np.testing.assert_array_equal(m.transform(NEW, seed=7), m.transform(NEW, seed=7))

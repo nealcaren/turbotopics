@@ -5,9 +5,9 @@ documents while holding the fitted topics (φ) fixed: a held-out test set, or
 freshly collected texts.
 
 ```python
-import topica as tt
+import topica
 
-model = tt.LDA(num_topics=20, seed=42)
+model = topica.LDA(num_topics=20, seed=42)
 model.fit(train_docs, iterations=1000)
 
 theta = model.transform(new_docs, seed=0)     # (len(new_docs), num_topics)

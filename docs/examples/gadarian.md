@@ -27,7 +27,7 @@ honest standard errors. A small `K` suits short responses and a handful of
 theoretically motivated frames.
 
 ```python
-import csv, numpy as np, topica as tt
+import csv, numpy as np, topica
 from topica import tokenize, stm
 
 rows = list(csv.DictReader(open("examples/gadarian.csv")))
@@ -35,7 +35,7 @@ docs = [tokenize(r["open.ended.response"], stopwords=stop, min_length=3) for r i
 treatment = np.array([float(r["treatment"]) for r in rows]).reshape(-1, 1)
 print("treated:", int(treatment.sum()), "control:", int((1 - treatment).sum()))
 
-model = tt.STM(num_topics=3, seed=1)
+model = topica.STM(num_topics=3, seed=1)
 model.fit(docs, treatment, prevalence_names=["treatment"], em_iters=40)
 ```
 

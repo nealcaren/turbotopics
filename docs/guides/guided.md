@@ -17,9 +17,9 @@ freely. Faithful to the `seededlda` package (Watanabe): a seed word gets a
 `weight × 100` prior pseudocount in its topic, plus seeded initialization.
 
 ```python
-import topica as tt
+import topica
 
-model = tt.SeededLDA(
+model = topica.SeededLDA(
     {"economy": ["jobs", "wages", "tax"],
      "immigration": ["border", "visa", "deport"]},
     residual=3,           # 3 extra unseeded topics
@@ -40,7 +40,7 @@ distribution over only that topic's keywords or from the topic's full
 distribution; the learned mix is the **keyword rate**.
 
 ```python
-model = tt.KeyATM(
+model = topica.KeyATM(
     {"economy": ["jobs", "wages", "tax"],
      "immigration": ["border", "visa", "deport"]},
     num_topics=10,        # 2 keyword topics + 8 regular topics

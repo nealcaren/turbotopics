@@ -41,9 +41,9 @@ Fixed expressions carry meaning together. Detect collocations and rewrite the
 tokens before modeling:
 
 ```python
-import topica as tt
-phrases = tt.learn_phrases(docs, min_count=8, threshold=12.0)
-docs = tt.apply_phrases(docs, phrases)            # "health care" -> "health_care"
+import topica
+phrases = topica.learn_phrases(docs, min_count=8, threshold=12.0)
+docs = topica.apply_phrases(docs, phrases)            # "health care" -> "health_care"
 ```
 
 ## Split long documents
@@ -52,7 +52,7 @@ Long, heterogeneous documents violate the bag-of-words assumption. Segment them
 into comparable chunks, copying each source's metadata onto every chunk:
 
 ```python
-chunks, chunk_meta = tt.split_documents(
+chunks, chunk_meta = topica.split_documents(
     texts, metadata, max_words=200, min_words=50,
 )
 # chunk_meta[j] = the source row + {"parent": i, "chunk": j}
