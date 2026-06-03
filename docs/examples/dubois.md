@@ -113,6 +113,26 @@ steadily across his editorship (his economic turn and the Pan-African
 Congresses), while **war** recedes after the WWI 1910s and **schools** drifts
 down.
 
+`word_evolution` traces one word you already have in mind. To see *which* words
+drive a topic's drift, use `word_drift`:
+
+```python
+labor_topic = int(per_time[:, :, vocab.index("labor")].mean(0).argmax())
+drift = dtm.word_drift(labor_topic, n=6)      # first slice (1910s) vs last (1930s)
+print("rising :", [w for w, _ in drift["rising"]])
+print("falling:", [w for w, _ in drift["falling"]])
+```
+
+```
+rising : ['industry', 'labor', 'workers', 'capital', 'communists', 'economic']
+falling: ['business', 'pay', 'union', 'modern', 'service', 'movement']
+```
+
+The labor topic's vocabulary shifts from *business, pay, union* toward *industry,
+workers, capital, communists*. The topic doesn't just grow; its language moves
+from a reformist register to a Marxist one, which is Du Bois's own trajectory in
+these years.
+
 ## 5. How many topics? Ask HDP
 
 The Hierarchical Dirichlet Process infers the topic count rather than taking one.

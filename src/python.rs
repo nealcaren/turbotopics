@@ -4619,6 +4619,54 @@ impl DTM {
         Ok(idx.into_iter().take(n).map(|w| (vocab[w].clone(), row[w])).collect())
     }
 
+    /// Which words inside `topic` drift most between two time slices.
+    ///
+    /// For each word, the change in its probability within the topic from
+    /// `from_time` to `to_time` (defaults: the first and last slices) is
+    /// computed. Returns a dict with two keys, ``"rising"`` and ``"falling"``,
+    /// each a list of ``(word, delta)`` pairs (largest gain first; largest drop
+    /// first). This is how you see *what* makes a topic's vocabulary evolve, not
+    /// just that it does.
+    #[pyo3(signature = (topic, *, n=10, from_time=0, to_time=None))]
+    fn word_drift<'py>(
+        &self,
+        py: Python<'py>,
+        topic: usize,
+        n: usize,
+        from_time: usize,
+        to_time: Option<usize>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        self.require_fitted()?;
+        if topic >= self.num_topics {
+            return Err(PyValueError::new_err("topic out of range"));
+        }
+        let to = to_time.unwrap_or(self.num_times - 1);
+        if from_time >= self.num_times || to >= self.num_times {
+            return Err(PyValueError::new_err("time slice out of range"));
+        }
+        let vocab = &self.corpus.as_ref().unwrap().id_to_word;
+        let tw = self.topic_words.as_ref().unwrap();
+        let a = &tw[from_time][topic];
+        let b = &tw[to][topic];
+        let mut deltas: Vec<(usize, f64)> = (0..a.len()).map(|w| (w, b[w] - a[w])).collect();
+        deltas.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap()); // descending by delta
+
+        let to_pairs = |items: Vec<(usize, f64)>| -> Vec<(String, f64)> {
+            items.into_iter().map(|(w, d)| (vocab[w].clone(), d)).collect()
+        };
+        let rising = to_pairs(
+            deltas.iter().filter(|&&(_, d)| d > 0.0).take(n).copied().collect(),
+        );
+        let falling = to_pairs(
+            deltas.iter().rev().filter(|&&(_, d)| d < 0.0).take(n).copied().collect(),
+        );
+
+        let out = PyDict::new_bound(py);
+        out.set_item("rising", rising)?;
+        out.set_item("falling", falling)?;
+        Ok(out)
+    }
+
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics

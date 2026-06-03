@@ -851,6 +851,10 @@ for t in range(model.num_times):
 # Trace one word's probability within a topic over time (great for plotting):
 traj = model.word_evolution(topic=0, word="climate")   # shape (num_times,)
 
+# Or see which words drive a topic's drift (first vs last slice):
+drift = model.word_drift(topic=0, n=10)
+print("rising:", [w for w, _ in drift["rising"]], "falling:", [w for w, _ in drift["falling"]])
+
 # Full topic-word matrix at a given slice (rows sum to 1):
 phi_t0 = model.topic_word(time=0)   # shape (num_topics, num_words)
 ```
@@ -864,6 +868,7 @@ phi_t0 = model.topic_word(time=0)   # shape (num_topics, num_words)
 | `fit(data, times, *, em_iters=20)` | `None` | `times` is each document's integer slice index, 0-based and contiguous. |
 | `topic_word(time)` | `(K, V)` array | Topic-word distributions at one slice; rows sum to 1. |
 | `word_evolution(topic, word)` | `(num_times,)` array | A word's probability trajectory in a topic across slices (`word` is a string or id). |
+| `word_drift(topic, *, n=10, from_time=0, to_time=None)` | `dict` | Words that rose/fell most within a topic between two slices: `{"rising": [(word, Δ)], "falling": [...]}`. |
 | `top_words(topic, time, n=10)` | `list[(word, prob)]` | Top words for a topic at one slice. |
 | `num_topics`, `num_times`, `bound`, `vocabulary` | — | K, slice count, final ELBO, and the vocab. |
 

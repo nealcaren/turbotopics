@@ -480,6 +480,14 @@ class DTM:
         """Top n words for `topic` at slice `time` as (word, probability) pairs."""
         ...
 
+    def word_drift(
+        self, topic: int, *, n: int = 10, from_time: int = 0, to_time: int | None = None
+    ) -> dict[str, list[tuple[str, float]]]:
+        """Words inside `topic` whose probability changed most between two slices
+        (default first and last). Returns {"rising": [(word, delta)], "falling":
+        [(word, delta)]} — what makes the topic's vocabulary evolve."""
+        ...
+
     @property
     def num_topics(self) -> int: ...
     @property

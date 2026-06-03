@@ -83,12 +83,17 @@ print(hdp.num_topics, "topics inferred")
 ## DTM
 
 The Dynamic Topic Model: a fixed number of topics whose word distributions
-**drift** across ordered time slices. `word_evolution(topic, word)` traces a
-word's probability through time.
+**drift** across ordered time slices. `word_evolution(topic, word)` traces one
+word's probability through time, and `word_drift(topic)` reports *which* words
+rose and fell most within a topic — what makes its vocabulary evolve.
 
 ```python
 dtm = tt.DTM(num_topics=10, chain_variance=0.05, seed=1)
 dtm.fit(docs, times, em_iters=20)   # `times` = per-doc slice index
+
+drift = dtm.word_drift(topic=3)     # first vs last slice by default
+print("rising: ", [w for w, _ in drift["rising"][:5]])
+print("falling:", [w for w, _ in drift["falling"][:5]])
 ```
 
 ## SupervisedLDA

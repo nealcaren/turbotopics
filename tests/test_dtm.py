@@ -92,6 +92,28 @@ class TestOutputs:
         traj = fitted.word_evolution(1, wid)
         assert traj.shape == (fitted.num_times,)
 
+    def test_word_drift(self, fitted):
+        drift, _ = TestDrift()._drift_and_stable(fitted)
+        d = fitted.word_drift(drift, n=5)
+        assert set(d) == {"rising", "falling"}
+        # "rising" words gained probability, "falling" words lost it.
+        assert all(delta > 0 for _, delta in d["rising"])
+        assert all(delta < 0 for _, delta in d["falling"])
+        # w4 enters the drifting topic late -> it should be among the risers,
+        # and match the first-vs-last delta from word_evolution.
+        risers = {w: delta for w, delta in d["rising"]}
+        assert "w4" in risers
+        traj = fitted.word_evolution(drift, "w4")
+        assert risers["w4"] == pytest.approx(traj[-1] - traj[0], abs=1e-9)
+
+    def test_word_drift_time_range_and_errors(self, fitted):
+        d = fitted.word_drift(0, n=3, from_time=0, to_time=1)
+        assert len(d["rising"]) <= 3
+        with pytest.raises(ValueError):
+            fitted.word_drift(99)            # topic out of range
+        with pytest.raises(ValueError):
+            fitted.word_drift(0, to_time=99)  # time out of range
+
     def test_bound_finite(self, fitted):
         assert np.isfinite(fitted.bound)
 
