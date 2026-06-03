@@ -167,6 +167,7 @@ struct SldaState {
 /// Mirrors the vocab-construction and frequency-filtering logic of
 /// `corpus::load_text_file`, minus the regex tokenisation/lowercasing — the
 /// caller owns tokenisation here.
+#[allow(clippy::too_many_arguments)]
 fn build_corpus_from_docs(
     docs_in: Vec<Vec<String>>,
     doc_names_in: Option<Vec<String>>,
@@ -174,6 +175,8 @@ fn build_corpus_from_docs(
     stopwords: HashSet<String>,
     min_doc_freq: u32,
     max_doc_fraction: f64,
+    min_cf: u32,
+    rm_top: usize,
 ) -> PyResult<corpus::Corpus> {
     let n = docs_in.len();
     if let Some(names) = &doc_names_in {
@@ -239,10 +242,25 @@ fn build_corpus_from_docs(
         }
     }
 
-    // Frequency filtering (same policy as corpus::load_text_file).
+    // Frequency filtering. `min_doc_freq`/`max_doc_fraction` prune by document
+    // frequency; `min_cf` prunes by collection (total) frequency; `rm_top` drops
+    // the most frequent words by collection frequency (tomotopy's min_df/min_cf/
+    // rm_top). The top-`rm_top` set is by total frequency, ties broken by id.
     let max_df = (num_docs as f64 * max_doc_fraction).ceil() as u32;
+    let drop_top: HashSet<usize> = if rm_top > 0 {
+        let mut order: Vec<usize> = (0..num_types).collect();
+        order.sort_by(|&a, &b| total_freqs[b].cmp(&total_freqs[a]).then(a.cmp(&b)));
+        order.into_iter().take(rm_top).collect()
+    } else {
+        HashSet::new()
+    };
     let keep: Vec<bool> = (0..num_types)
-        .map(|id| doc_freqs[id] >= min_doc_freq && doc_freqs[id] <= max_df)
+        .map(|id| {
+            doc_freqs[id] >= min_doc_freq
+                && doc_freqs[id] <= max_df
+                && total_freqs[id] >= min_cf
+                && !drop_top.contains(&id)
+        })
         .collect();
 
     if keep.iter().all(|&k| k) {
@@ -327,11 +345,16 @@ impl Corpus {
     ///
     /// `documents` is a sequence of token lists. Optional `doc_names` /
     /// `doc_labels` (each the same length as `documents`) attach an id and a
-    /// label to every document. `stopwords` are dropped; `min_doc_freq` and
-    /// `max_doc_fraction` prune words by document frequency.
+    /// label to every document. `stopwords` are dropped. Vocabulary is pruned by
+    /// `min_doc_freq` (minimum document frequency) and `max_doc_fraction`
+    /// (maximum fraction of documents), by `min_cf` (minimum collection/total
+    /// frequency), and by `rm_top` (drop the N most frequent words) — matching
+    /// tomotopy's `min_df` / `min_cf` / `rm_top`.
     #[staticmethod]
     #[pyo3(signature = (documents, *, doc_names=None, doc_labels=None,
-                        stopwords=None, min_doc_freq=1, max_doc_fraction=1.0))]
+                        stopwords=None, min_doc_freq=1, max_doc_fraction=1.0,
+                        min_cf=0, rm_top=0))]
+    #[allow(clippy::too_many_arguments)]
     fn from_documents(
         documents: Vec<Vec<String>>,
         doc_names: Option<Vec<String>>,
@@ -339,6 +362,8 @@ impl Corpus {
         stopwords: Option<Vec<String>>,
         min_doc_freq: u32,
         max_doc_fraction: f64,
+        min_cf: u32,
+        rm_top: usize,
     ) -> PyResult<Self> {
         let stop: HashSet<String> = stopwords.unwrap_or_default().into_iter().collect();
         let inner = build_corpus_from_docs(
@@ -348,6 +373,8 @@ impl Corpus {
             stop,
             min_doc_freq,
             max_doc_fraction,
+            min_cf,
+            rm_top,
         )?;
         Ok(Corpus { inner })
     }
@@ -631,7 +658,7 @@ impl LDA {
                     "fit() expects a Corpus or a list of token lists (list[list[str]])",
                 )
             })?;
-            build_corpus_from_docs(docs, None, None, HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, HashSet::new(), 1, 1.0, 0, 0)?
         };
 
         if corpus.num_docs() == 0 {
@@ -1774,7 +1801,7 @@ impl DMR {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -2162,7 +2189,7 @@ impl LabeledLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -2538,7 +2565,7 @@ impl SAGE {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -2958,7 +2985,7 @@ impl CTM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -3260,7 +3287,7 @@ impl STM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         let num_docs = corpus.num_docs();
         if num_docs == 0 {
@@ -3756,7 +3783,7 @@ impl HDP {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -4007,7 +4034,7 @@ impl DTM {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
@@ -4264,7 +4291,7 @@ impl SupervisedLDA {
             let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
                 PyValueError::new_err("fit() expects a Corpus or a list of token lists")
             })?;
-            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0)?
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
         };
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));

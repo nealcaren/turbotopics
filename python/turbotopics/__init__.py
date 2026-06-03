@@ -50,6 +50,38 @@ def one_hot(values, *, drop_first=True, prefix=""):
     return matrix, names
 
 
+def summary(model, topn=8):
+    """A human-readable overview of a fitted model (à la tomotopy's ``summary``).
+
+    Returns a multi-line string: the model's repr, its key scalar attributes
+    (num_topics, concentrations, etc.), the vocabulary size, and the top words of
+    each topic. Pass to ``print``. For models whose ``top_words`` needs extra
+    arguments (``DTM`` by time, ``SAGE`` by group) the per-topic word lists are
+    omitted.
+    """
+    lines = [repr(model)]
+    for attr in ("num_topics", "num_times", "num_groups", "alpha", "gamma",
+                 "sigma2", "bound"):
+        try:
+            value = getattr(model, attr)
+        except Exception:
+            continue
+        if not callable(value):
+            lines.append(f"  {attr}: {value}")
+    try:
+        lines.append(f"  vocab_size: {len(model.vocabulary)}")
+    except Exception:
+        pass
+    try:
+        tops = model.top_words(topn)
+        if isinstance(tops, list) and tops and isinstance(tops[0], list):
+            for i, words in enumerate(tops):
+                lines.append(f"  topic {i}: " + " ".join(w for w, _ in words))
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
 from . import stm  # noqa: E402  (stm imports names defined above)
 from .coherence import coherence, topic_diversity  # noqa: E402
 
@@ -69,6 +101,7 @@ __all__ = [
     "stm",
     "coherence",
     "topic_diversity",
+    "summary",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
 ]
