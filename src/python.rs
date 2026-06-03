@@ -40,7 +40,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{ctm, optimize, output, sampler};
+use crate::{ctm, lightlda, optimize, output, sampler};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -547,6 +547,9 @@ pub struct LDA {
     burn_in: usize,
     seed: u64,
     num_threads: usize,
+    // Sampling backend: false = SparseLDA (MALLET), true = LightLDA alias-MH.
+    light: bool,
+    mh_steps: usize,
 
     // Populated after fit().
     fitted: bool,
@@ -557,6 +560,39 @@ pub struct LDA {
 }
 
 impl LDA {
+    /// Transpose the accumulated φ/θ snapshots into the conventional matrix
+    /// orientation and store the fitted state. Shared by both sampler paths.
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_fit(
+        &mut self,
+        num_topics: usize,
+        num_types: usize,
+        num_docs: usize,
+        acc_phi: Vec<Vec<f64>>,
+        acc_theta: Vec<Vec<f64>>,
+        model: TopicModel,
+        corpus: corpus::Corpus,
+    ) {
+        // phi: transpose (word, topic) -> (topic, word).
+        let mut phi = Array2::<f64>::zeros((num_topics, num_types));
+        for (w, row) in acc_phi.iter().enumerate() {
+            for (t, &v) in row.iter().enumerate() {
+                phi[[t, w]] = v;
+            }
+        }
+        let mut theta = Array2::<f64>::zeros((num_docs, num_topics));
+        for (d, row) in acc_theta.iter().enumerate() {
+            for (t, &v) in row.iter().enumerate() {
+                theta[[d, t]] = v;
+            }
+        }
+        self.phi = Some(phi);
+        self.theta = Some(theta);
+        self.model = Some(model);
+        self.corpus = Some(corpus);
+        self.fitted = true;
+    }
+
     fn require_fitted(&self) -> PyResult<()> {
         if self.fitted {
             Ok(())
@@ -640,7 +676,8 @@ impl LDA {
     /// that-many iterations once past `burn_in`.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha_sum=None, beta=0.01,
-                        optimize_interval=50, burn_in=200, seed=42, num_threads=1))]
+                        optimize_interval=50, burn_in=200, seed=42, num_threads=1,
+                        sampler="sparse", mh_steps=2))]
     fn new(
         num_topics: usize,
         alpha_sum: Option<f64>,
@@ -649,12 +686,26 @@ impl LDA {
         burn_in: usize,
         seed: u64,
         num_threads: usize,
+        sampler: &str,
+        mh_steps: usize,
     ) -> PyResult<Self> {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
         }
         if beta <= 0.0 {
             return Err(PyValueError::new_err("beta must be > 0"));
+        }
+        let light = match sampler {
+            "sparse" | "mallet" => false,
+            "lightlda" | "light" | "alias" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler {other:?}; expected \"sparse\" or \"lightlda\""
+                )))
+            }
+        };
+        if light && mh_steps == 0 {
+            return Err(PyValueError::new_err("mh_steps must be >= 1 for the lightlda sampler"));
         }
         Ok(LDA {
             num_topics,
@@ -664,6 +715,8 @@ impl LDA {
             burn_in,
             seed,
             num_threads: num_threads.max(1),
+            light,
+            mh_steps,
             fitted: false,
             phi: None,
             theta: None,
@@ -723,6 +776,61 @@ impl LDA {
         let burn_in = self.burn_in;
         let num_threads = self.num_threads;
         let seed_base = self.seed;
+        let light = self.light;
+        let mh_steps = self.mh_steps;
+        let beta = self.beta;
+
+        // LightLDA path: alias-MH sampling on dense count tables, packed back
+        // into a TopicModel at the end. Separate from the SparseLDA path below so
+        // the well-tested MALLET sampler is left untouched.
+        if light {
+            let (acc_phi, acc_theta, model) = py.allow_threads(move || {
+                let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
+                let mut ls = lightlda::LightLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                ls.mh_steps = mh_steps;
+
+                for iter in 1..=iterations {
+                    ls.sweep(&corpus, &mut rng);
+                    if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
+                        let mut m = ls.to_topic_model();
+                        optimize::optimize_alpha(&mut m, &corpus);
+                        optimize::optimize_beta(&mut m);
+                        ls.set_hyper(&m.alpha, m.beta);
+                    }
+                    if let Some(cb) = &progress {
+                        if progress_interval > 0 && iter % progress_interval == 0 {
+                            let m = ls.to_topic_model();
+                            let ll = output::model_log_likelihood(&m, &corpus) / total_tokens;
+                            Python::with_gil(|py| {
+                                let _ = cb.call1(py, (iter, ll));
+                            });
+                        }
+                    }
+                }
+
+                let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
+                let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
+                for _ in 0..num_samples {
+                    for _ in 0..sample_interval {
+                        ls.sweep(&corpus, &mut rng);
+                    }
+                    ls.phi_into(&mut acc_phi);
+                    ls.theta_into(&corpus, &mut acc_theta);
+                }
+                let n = (num_samples.max(1)) as f64;
+                for row in acc_phi.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                for row in acc_theta.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                let model = ls.to_topic_model();
+                (acc_phi, acc_theta, (model, corpus))
+            });
+            let (model, corpus) = model;
+            self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
+            return Ok(());
+        }
 
         // Heavy loop runs with the GIL released; the progress callback briefly
         // re-acquires it. allow_threads returns the owned model + accumulators.
@@ -790,27 +898,7 @@ impl LDA {
             (acc_phi, acc_theta, (model, corpus))
         });
         let (model, corpus) = model;
-
-        // phi: transpose (word, topic) -> (topic, word) for the conventional
-        // (num_topics, num_words) orientation.
-        let mut phi = Array2::<f64>::zeros((num_topics, num_types));
-        for (w, row) in acc_phi.iter().enumerate() {
-            for (t, &v) in row.iter().enumerate() {
-                phi[[t, w]] = v;
-            }
-        }
-        let mut theta = Array2::<f64>::zeros((num_docs, num_topics));
-        for (d, row) in acc_theta.iter().enumerate() {
-            for (t, &v) in row.iter().enumerate() {
-                theta[[d, t]] = v;
-            }
-        }
-
-        self.phi = Some(phi);
-        self.theta = Some(theta);
-        self.model = Some(model);
-        self.corpus = Some(corpus);
-        self.fitted = true;
+        self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
         Ok(())
     }
 
@@ -1264,7 +1352,7 @@ impl LDA {
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
-            num_threads: s.num_threads, fitted: s.fitted,
+            num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta), model: s.model, corpus: s.corpus,
         })
     }

@@ -751,6 +751,8 @@ class LDA:
         burn_in: int = 200,
         seed: int = 42,
         num_threads: int = 1,
+        sampler: str = "sparse",
+        mh_steps: int = 2,
     ) -> None:
         """Create an LDA model. alpha_sum defaults to num_topics if None.
 
@@ -758,6 +760,14 @@ class LDA:
         sampling in fit() (faster on multicore; results differ from the exact
         single-threaded path but remain deterministic for a fixed
         num_threads + seed). num_threads=1 is the exact, CLI-identical path.
+
+        sampler selects the inference backend: "sparse" (default) is MALLET's
+        SparseLDA collapsed Gibbs sampler; "lightlda" is the alias-table
+        Metropolis-Hastings sampler of Yuan et al. (2015), an O(1)-per-token
+        cycle-proposal sampler for the same model. The alias sampler is built
+        for the very-large-K / long-document regime; "sparse" is faster at the
+        topic counts typical of social-science work. mh_steps is the number of
+        MH proposals per token (alias sampler only).
         """
         ...
 
