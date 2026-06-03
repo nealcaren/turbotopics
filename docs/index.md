@@ -1,12 +1,13 @@
 # Topica
 
-`topica` is a topic-modeling library with a Rust core and a numpy-native Python
-API. It covers a family of models (from classic LDA to the Structural Topic
-Model), fits them in native code (no JVM, no pure-Python inner loops), and keeps
-every fit deterministic for a given seed. It is built for working social
-scientists, pairing each model with the validation, covariate-effect, and
-reporting tools to meet the standards reviewers expect. Pass
-pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
+`topica` is a fast topic-modeling library for Python with more than a dozen
+models, built for social scientists who want to move from text data to
+publishable results in a single workflow. It brings together models and tools
+usually split across JVM software like MALLET and R packages like `stm`, and
+runs them on a parallel Rust core competitive with the standard implementations,
+with every fit reproducible from a fixed seed. Each model comes with the
+validation, covariate-effect, and reporting tools to meet the standards
+reviewers expect.
 
 ```bash
 pip install topica
