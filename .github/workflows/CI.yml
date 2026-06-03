@@ -61,7 +61,7 @@ jobs:
           python -m venv .venv
           if [ -f .venv/bin/activate ]; then source .venv/bin/activate; else source .venv/Scripts/activate; fi
           python -m pip install --upgrade pip
-          pip install maturin numpy pytest pandas formulaic
+          pip install maturin numpy pytest pandas formulaic matplotlib
           maturin develop --features python
           pytest -q
 

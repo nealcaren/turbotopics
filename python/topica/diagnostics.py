@@ -231,6 +231,50 @@ def search_k(
     return rows
 
 
+def plot_search_k(rows, *, metrics=("coherence", "exclusivity"), ax=None):
+    """Plot :func:`search_k` results: each metric against the number of topics.
+
+    Researchers read this curve to choose `K`: coherence and exclusivity usually
+    trade off, so the goal is a knee, not a maximum. Each metric gets its own
+    y-axis (they live on different scales). ``rows`` is the list returned by
+    :func:`search_k`; ``metrics`` selects which of its keys to draw (any of
+    ``"coherence"``, ``"exclusivity"``, ``"perplexity"``). Returns the primary
+    matplotlib ``Axes``. Requires matplotlib.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover - exercised via message
+        raise ImportError(
+            "plot_search_k needs matplotlib (pip install matplotlib)."
+        ) from e
+
+    rows = sorted(rows, key=lambda r: r["k"])
+    ks = [r["k"] for r in rows]
+    metrics = [m for m in metrics if any(m in r for r in rows)]
+    if not metrics:
+        raise ValueError("none of the requested metrics are present in rows")
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 4))
+    lines = []
+    for i, metric in enumerate(metrics):
+        a = ax if i == 0 else ax.twinx()
+        if i >= 2:  # offset a third axis so it doesn't overlap the second
+            a.spines["right"].set_position(("axes", 1.0 + 0.18 * (i - 1)))
+        color = f"C{i}"
+        vals = [r.get(metric, float("nan")) for r in rows]
+        (line,) = a.plot(ks, vals, marker="o", color=color, label=metric)
+        a.set_ylabel(metric, color=color)
+        a.tick_params(axis="y", labelcolor=color)
+        lines.append(line)
+
+    ax.set_xlabel("number of topics (K)")
+    ax.set_xticks(ks)
+    ax.legend(lines, [li.get_label() for li in lines], loc="best")
+    ax.figure.tight_layout()
+    return ax
+
+
 def _mean_exclusivity(topic_word, n: int) -> float:
     from .coherence import exclusivity
     return float(np.mean(exclusivity(topic_word, n=n)))
