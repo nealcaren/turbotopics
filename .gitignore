@@ -41,3 +41,6 @@ env/
 # macOS metadata
 .DS_Store
 parity/*.class
+
+# Claude Code local dir (agent worktrees, etc.)
+.claude/
