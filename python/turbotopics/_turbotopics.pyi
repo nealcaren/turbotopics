@@ -137,17 +137,18 @@ class DMR:
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
-        features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        prevalence: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
         *,
-        feature_names: list[str] | None = None,
-        iterations: int = 1000,
-        num_samples: int = 5,
-        sample_interval: int = 25,
-        progress: Optional[object] = None,
-        progress_interval: int = 50,
+        prevalence_names: list[str] | None = None,
+        content: Sequence[object] | None = None,
+        content_names: list[str] | None = None,
+        em_iters: int = 50,
     ) -> None:
-        """Fit the model. features is (num_docs, F); an intercept column is
-        prepended. feature_names (length F) names the columns."""
+        """Fit the STM. prevalence is an (num_docs, F) covariate matrix making
+        topic prevalence depend on covariates (an intercept is prepended;
+        prevalence_names names the F columns). content is one group label per
+        document for a SAGE content model. At least one of prevalence/content
+        should be given (else use CTM)."""
         ...
 
     @property
@@ -161,14 +162,15 @@ class DMR:
         ...
 
     @property
-    def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
-        """Learned weights lambda, shape (num_topics, num_features). Column 0 is
-        the intercept; positive entries raise that topic's prevalence."""
+    def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Learned prevalence weights gamma, shape (num_topics, num_features).
+        Column 0 is the intercept; positive entries raise that topic's
+        prevalence."""
         ...
 
     @property
     def feature_names(self) -> list[str]:
-        """Feature names aligned with feature_effects columns ('intercept' first)."""
+        """Feature names aligned with prevalence_effects columns ('intercept' first)."""
         ...
 
     @property
