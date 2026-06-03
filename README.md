@@ -1581,6 +1581,31 @@ SupervisedLDA(num_topics: int, *, alpha: float = 0.1, seed: int = 42)
 
 ---
 
+## Performance
+
+turbotopics fits in native Rust, and its variational models parallelize the per-document E-step across cores (deterministically — the result is bit-for-bit identical regardless of thread count). In practice this makes the Structural Topic Model substantially faster than the reference R `stm` package on the same data.
+
+The table times **STM fit only** (excluding startup), matched on `K`, EM iterations (30), and Spectral initialization, on fixed-seed synthetic corpora. R `stm` is single-threaded by design, so turbotopics is shown both pinned to one core (apples-to-apples) and on all cores (its default). Measured on a 14-core machine:
+
+| docs | vocab | K | R `stm` | turbotopics (1 core) | turbotopics (all cores) |
+|------:|------:|--:|--------:|---------------------:|------------------------:|
+| 1,000 |   500 | 10 |  3.1s | 0.49s — **6.3×** | 0.12s — **25×** |
+| 2,000 | 2,000 | 10 |  6.7s | 1.41s — **4.6×** | 0.43s — **16×** |
+| 5,000 | 5,000 | 20 | 26.6s | 8.95s — **3.0×** | 2.67s — **10×** |
+
+Even on a single core, turbotopics runs roughly **3–6× faster per iteration** than R `stm` — the native Rust inner loop with no per-iteration interpreter overhead. Spreading the E-step across cores (the default) brings it to **~10–25×** in these configurations.
+
+**Caveats, stated plainly:** this compares *per-iteration* cost (both run a fixed 30 EM iterations rather than to convergence), on synthetic data, on one machine. Treat the numbers as indicative, not a guarantee — speed depends on corpus, vocabulary, `K`, and hardware. The benchmark is in the repo, so you can run your own regime:
+
+```bash
+python benchmarks/bench_stm.py                      # turbotopics on all cores
+RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single-threaded
+```
+
+(The comparison column needs `Rscript` with the `stm` package installed; without it the script prints turbotopics timings only.)
+
+---
+
 ## Comparison to Alternatives
 
 | | **turbotopics** | **gensim LdaModel** | **MALLET Java CLI** |
@@ -1594,7 +1619,7 @@ SupervisedLDA(num_topics: int, *, alpha: float = 0.1, seed: int = 42)
 | JVM required | No | No | Yes |
 | MALLET-compatible corpus format | Yes (`.corp` round-trip with CLI tools) | No | Yes |
 
-`turbotopics` uses native Rust with no JVM startup overhead. Speed comparisons against other Python implementations depend heavily on corpus size and hardware; no benchmark numbers are claimed here.
+`turbotopics` uses native Rust with no JVM startup overhead. See [Performance](#performance) above for measured STM timings against R `stm`; comparisons against other Python LDA implementations depend heavily on corpus size and hardware.
 
 ---
 
