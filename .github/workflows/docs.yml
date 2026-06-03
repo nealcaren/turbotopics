@@ -27,13 +27,18 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build the extension and docs deps
+      - name: Build the extension and deploy the docs
+        shell: bash
         run: |
+          # maturin develop needs an activated virtualenv; create one and keep it
+          # active for the whole step so the build and mkdocs share it.
+          python -m venv .venv
+          source .venv/bin/activate
           python -m pip install --upgrade pip
           pip install maturin numpy
           pip install -r docs/requirements.txt
           # force_inspection imports the compiled module, so build it first.
           maturin develop --release --features python
-
-      - name: Build and deploy to GitHub Pages
-        run: mkdocs gh-deploy --force --no-history
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdocs gh-deploy --force --no-history
