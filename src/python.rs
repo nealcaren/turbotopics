@@ -23,6 +23,9 @@ use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, ToPyArray};
 use crate::dmr;
 use crate::dtm;
 use crate::hdp;
+use crate::hlda;
+use crate::pa;
+use crate::pt;
 use crate::slda;
 use crate::labeled;
 use crate::sage;
@@ -156,6 +159,23 @@ struct SldaState {
     num_topics: usize, alpha: f64, seed: u64, fitted: bool, sigma2: f64,
     eta: Option<Vec<f64>>, beta: Option<Arr2>, theta: Option<Arr2>,
     log_beta: Option<Vec<Vec<f64>>>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PtState {
+    num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
+    phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PaState {
+    num_super: usize, num_sub: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
+    phi: Option<Arr2>, theta: Option<Arr2>, super_sub: Option<Arr2>,
+    corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HldaState {
+    depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64, fitted: bool,
+    num_nodes: usize, node_topic_word: Option<Arr2>, node_levels: Vec<usize>,
+    node_parents: Vec<i64>, doc_paths: Vec<Vec<usize>>, corpus: Option<corpus::Corpus>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1669,6 +1689,49 @@ fn doc_topic_counts(doc_topics: &[Vec<u32>], k: usize) -> Vec<Vec<u32>> {
             c
         })
         .collect()
+}
+
+/// Convert a `Vec<Vec<f64>>` (rows) into an `Array2`.
+fn vecs_to_arr2(rows: &[Vec<f64>]) -> Array2<f64> {
+    let r = rows.len();
+    let c = if r > 0 { rows[0].len() } else { 0 };
+    let mut a = Array2::<f64>::zeros((r, c));
+    for (i, row) in rows.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            a[[i, j]] = v;
+        }
+    }
+    a
+}
+
+/// Shared `top_words(n, topic=None)` implementation over a φ matrix: returns a
+/// list of `(word, prob)` for one topic, or a list of those lists for all.
+fn topic_words_helper<'py>(
+    py: Python<'py>,
+    beta: &Array2<f64>,
+    vocab: &[String],
+    num_topics: usize,
+    n: usize,
+    topic: Option<usize>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let tops = top_word_ids_phi(beta, num_topics, n);
+    let one = |t: usize| -> PyResult<Bound<'py, PyList>> {
+        if t >= num_topics {
+            return Err(PyValueError::new_err("topic out of range"));
+        }
+        let items: Vec<Bound<'py, PyTuple>> = tops[t]
+            .iter()
+            .map(|&w| PyTuple::new_bound(py, &[vocab[w].clone().into_py(py), beta[[t, w]].into_py(py)]))
+            .collect();
+        Ok(PyList::new_bound(py, items))
+    };
+    match topic {
+        Some(t) => Ok(one(t)?.into_any()),
+        None => {
+            let all: Vec<Bound<'py, PyList>> = (0..num_topics).map(one).collect::<PyResult<_>>()?;
+            Ok(PyList::new_bound(py, all).into_any())
+        }
+    }
 }
 
 /// Top-`n` word ids per topic from a (num_topics, num_words) φ matrix.
@@ -4498,6 +4561,495 @@ impl SupervisedLDA {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PT: Pseudo-document Topic Model (short texts)
+// ---------------------------------------------------------------------------
+
+/// Pseudo-document Topic Model (Zuo et al. 2016) for **short texts**. Documents
+/// are aggregated into `num_pseudo` pseudo-documents that carry the topic
+/// distributions, so the topic structure is estimated from richer aggregated
+/// statistics than individual short documents would provide. Collapsed Gibbs.
+#[pyclass(module = "turbotopics")]
+pub struct PT {
+    num_topics: usize,
+    num_pseudo: usize,
+    alpha: f64,
+    beta: f64,
+    seed: u64,
+    fitted: bool,
+    phi: Option<Array2<f64>>,
+    theta: Option<Array2<f64>>,
+    corpus: Option<corpus::Corpus>,
+}
+
+impl PT {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl PT {
+    /// Create an unfitted model. `num_pseudo` is the number of pseudo-documents
+    /// short texts are aggregated into (more = finer, fewer = more aggregation).
+    #[new]
+    #[pyo3(signature = (num_topics, *, num_pseudo=100, alpha=0.1, beta=0.01, seed=42))]
+    fn new(num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("num_topics must be >= 2"));
+        }
+        if num_pseudo < 1 {
+            return Err(PyValueError::new_err("num_pseudo must be >= 1"));
+        }
+        if alpha <= 0.0 || beta <= 0.0 {
+            return Err(PyValueError::new_err("alpha and beta must be > 0"));
+        }
+        Ok(PT {
+            num_topics, num_pseudo, alpha, beta, seed,
+            fitted: false, phi: None, theta: None, corpus: None,
+        })
+    }
+
+    /// Fit by collapsed Gibbs sampling for `iters` sweeps.
+    #[pyo3(signature = (data, *, iters=1000))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_types = corpus.num_types();
+        let (k, p, a, b) = (self.num_topics, self.num_pseudo, self.alpha, self.beta);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = pt::fit_ptm(&corpus.docs, num_types, k, p, a, b, iters, &mut rng);
+            (m, corpus)
+        });
+        self.phi = Some(vecs_to_arr2(&model.topic_word()));
+        self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        topic_words_helper(py, self.phi.as_ref().unwrap(), &self.corpus.as_ref().unwrap().id_to_word, self.num_topics, n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_topics, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `PT.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &PtState {
+            num_topics: self.num_topics, num_pseudo: self.num_pseudo, alpha: self.alpha,
+            beta: self.beta, seed: self.seed, fitted: self.fitted,
+            phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: PtState = read_state(path)?;
+        Ok(PT {
+            num_topics: s.num_topics, num_pseudo: s.num_pseudo, alpha: s.alpha, beta: s.beta,
+            seed: s.seed, fitted: s.fitted, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PT(num_topics={}, num_pseudo={}, fitted={})", self.num_topics, self.num_pseudo, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PA: Pachinko Allocation Model (super-/sub-topic hierarchy)
+// ---------------------------------------------------------------------------
+
+/// Pachinko Allocation Model (Li & McCallum 2006): a DAG of `num_super`
+/// super-topics over `num_sub` shared sub-topics over words, capturing topic
+/// *correlations* — `super_sub` reports which sub-topics each super-topic groups
+/// together. Collapsed Gibbs over (super, sub) pairs.
+#[pyclass(module = "turbotopics")]
+pub struct PA {
+    num_super: usize,
+    num_sub: usize,
+    alpha: f64,
+    beta: f64,
+    seed: u64,
+    fitted: bool,
+    phi: Option<Array2<f64>>,       // num_sub × V
+    theta: Option<Array2<f64>>,     // num_docs × num_sub
+    super_sub: Option<Array2<f64>>, // num_super × num_sub
+    corpus: Option<corpus::Corpus>,
+}
+
+impl PA {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl PA {
+    /// Create an unfitted model with `num_super` super-topics and `num_sub`
+    /// sub-topics (the sub-topics are the word-level topics).
+    #[new]
+    #[pyo3(signature = (num_super, num_sub, *, alpha=0.1, beta=0.01, seed=42))]
+    fn new(num_super: usize, num_sub: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+        if num_super < 1 || num_sub < 2 {
+            return Err(PyValueError::new_err("num_super must be >= 1 and num_sub >= 2"));
+        }
+        if alpha <= 0.0 || beta <= 0.0 {
+            return Err(PyValueError::new_err("alpha and beta must be > 0"));
+        }
+        Ok(PA {
+            num_super, num_sub, alpha, beta, seed,
+            fitted: false, phi: None, theta: None, super_sub: None, corpus: None,
+        })
+    }
+
+    /// Fit by collapsed Gibbs sampling for `iters` sweeps.
+    #[pyo3(signature = (data, *, iters=1000))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_types = corpus.num_types();
+        let (s, k, a, b) = (self.num_super, self.num_sub, self.alpha, self.beta);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = pa::fit_pam(&corpus.docs, num_types, s, k, a, b, iters, &mut rng);
+            (m, corpus)
+        });
+        self.phi = Some(vecs_to_arr2(&model.topic_word()));
+        self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.super_sub = Some(vecs_to_arr2(&model.super_sub()));
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// Sub-topic word distributions, shape ``(num_sub, num_words)``.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Document × sub-topic proportions, shape ``(num_docs, num_sub)``.
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Super-topic → sub-topic association, shape ``(num_super, num_sub)``; row s
+    /// shows which sub-topics super-topic s groups together (the correlations).
+    #[getter]
+    fn super_sub<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.super_sub.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    #[getter]
+    fn num_super(&self) -> usize {
+        self.num_super
+    }
+    #[getter]
+    fn num_sub(&self) -> usize {
+        self.num_sub
+    }
+    /// Alias for `num_sub` (the word-level topics).
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_sub
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        topic_words_helper(py, self.phi.as_ref().unwrap(), &self.corpus.as_ref().unwrap().id_to_word, self.num_sub, n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_sub, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `PA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &PaState {
+            num_super: self.num_super, num_sub: self.num_sub, alpha: self.alpha, beta: self.beta,
+            seed: self.seed, fitted: self.fitted, phi: arr2_opt(&self.phi),
+            theta: arr2_opt(&self.theta), super_sub: arr2_opt(&self.super_sub),
+            corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: PaState = read_state(path)?;
+        Ok(PA {
+            num_super: s.num_super, num_sub: s.num_sub, alpha: s.alpha, beta: s.beta,
+            seed: s.seed, fitted: s.fitted, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            super_sub: arr2_back(s.super_sub), corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PA(num_super={}, num_sub={}, fitted={})", self.num_super, self.num_sub, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HLDA: Hierarchical LDA (nested CRP topic tree)
+// ---------------------------------------------------------------------------
+
+/// Hierarchical LDA (Blei, Griffiths & Jordan): topics organized in a tree of
+/// fixed `depth`, inferred by the nested Chinese Restaurant Process. The root is
+/// the shared (general) topic; deeper nodes are progressively more specific.
+/// Each document follows a root-to-leaf path. Inspect the tree with
+/// `topic_word`/`node_levels`/`node_parents`/`doc_paths`.
+#[pyclass(module = "turbotopics")]
+pub struct HLDA {
+    depth: usize,
+    gamma: f64,
+    eta: f64,
+    alpha: f64,
+    seed: u64,
+    fitted: bool,
+    num_nodes: usize,
+    node_topic_word: Option<Array2<f64>>, // num_nodes × V
+    node_levels: Vec<usize>,
+    node_parents: Vec<i64>, // -1 for the root
+    doc_paths: Vec<Vec<usize>>,
+    corpus: Option<corpus::Corpus>,
+}
+
+impl HLDA {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl HLDA {
+    /// Create an unfitted model. `depth` is the (fixed) tree depth; `gamma` is
+    /// the nested-CRP concentration (larger ⇒ more child topics); `eta` the
+    /// topic-word Dirichlet; `alpha` the per-document level distribution.
+    #[new]
+    #[pyo3(signature = (*, depth=3, gamma=1.0, eta=0.01, alpha=0.1, seed=42))]
+    fn new(depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64) -> PyResult<Self> {
+        if depth < 2 {
+            return Err(PyValueError::new_err("depth must be >= 2"));
+        }
+        if gamma <= 0.0 || eta <= 0.0 || alpha <= 0.0 {
+            return Err(PyValueError::new_err("gamma, eta, alpha must be > 0"));
+        }
+        Ok(HLDA {
+            depth, gamma, eta, alpha, seed,
+            fitted: false, num_nodes: 0, node_topic_word: None,
+            node_levels: Vec::new(), node_parents: Vec::new(), doc_paths: Vec::new(), corpus: None,
+        })
+    }
+
+    /// Fit by nested-CRP collapsed Gibbs sampling for `iters` sweeps.
+    #[pyo3(signature = (data, *, iters=500))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_types = corpus.num_types();
+        let (depth, gamma, eta, alpha) = (self.depth, self.gamma, self.eta, self.alpha);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = hlda::fit_hlda(&corpus.docs, num_types, depth, gamma, eta, alpha, iters, &mut rng);
+            (m, corpus)
+        });
+
+        let nn = model.num_nodes();
+        let mut tw = Array2::<f64>::zeros((nn, num_types));
+        for i in 0..nn {
+            for (w, &val) in model.topic_word(i).iter().enumerate() {
+                tw[[i, w]] = val;
+            }
+        }
+        self.num_nodes = nn;
+        self.node_topic_word = Some(tw);
+        self.node_levels = (0..nn).map(|i| model.node_level(i)).collect();
+        self.node_parents = (0..nn).map(|i| model.node_parent(i).map(|p| p as i64).unwrap_or(-1)).collect();
+        self.doc_paths = (0..corpus.num_docs()).map(|d| model.doc_path(d)).collect();
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// The number of topic nodes in the inferred tree.
+    #[getter]
+    fn num_nodes(&self) -> PyResult<usize> {
+        self.require_fitted()?;
+        Ok(self.num_nodes)
+    }
+    /// Per-node word distributions, shape ``(num_nodes, num_words)``.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.node_topic_word.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// The tree level (0 = root) of each node, length ``num_nodes``.
+    #[getter]
+    fn node_levels(&self) -> PyResult<Vec<usize>> {
+        self.require_fitted()?;
+        Ok(self.node_levels.clone())
+    }
+    /// The parent node id of each node (``-1`` for the root), length ``num_nodes``.
+    #[getter]
+    fn node_parents(&self) -> PyResult<Vec<i64>> {
+        self.require_fitted()?;
+        Ok(self.node_parents.clone())
+    }
+    /// Each document's root-to-leaf path (a list of node ids), length ``num_docs``.
+    #[getter]
+    fn doc_paths(&self) -> PyResult<Vec<Vec<usize>>> {
+        self.require_fitted()?;
+        Ok(self.doc_paths.clone())
+    }
+    /// The leaf node ids (nodes that are no node's parent).
+    #[getter]
+    fn leaves(&self) -> PyResult<Vec<usize>> {
+        self.require_fitted()?;
+        let parents: HashSet<i64> = self.node_parents.iter().copied().collect();
+        Ok((0..self.num_nodes).filter(|&i| !parents.contains(&(i as i64))).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+
+    /// Top `n` words for one topic node as ``(word, probability)`` pairs.
+    #[pyo3(signature = (node, n=10))]
+    fn top_words(&self, node: usize, n: usize) -> PyResult<Vec<(String, f64)>> {
+        self.require_fitted()?;
+        if node >= self.num_nodes {
+            return Err(PyValueError::new_err("node out of range"));
+        }
+        let tw = self.node_topic_word.as_ref().unwrap();
+        let vocab = &self.corpus.as_ref().unwrap().id_to_word;
+        let v = tw.shape()[1];
+        let mut idx: Vec<usize> = (0..v).collect();
+        idx.sort_by(|&a, &b| tw[[node, b]].partial_cmp(&tw[[node, a]]).unwrap());
+        Ok(idx.into_iter().take(n).map(|w| (vocab[w].clone(), tw[[node, w]])).collect())
+    }
+
+    /// Save the fitted model to `path`. Reload with `HLDA.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &HldaState {
+            depth: self.depth, gamma: self.gamma, eta: self.eta, alpha: self.alpha,
+            seed: self.seed, fitted: self.fitted, num_nodes: self.num_nodes,
+            node_topic_word: arr2_opt(&self.node_topic_word), node_levels: self.node_levels.clone(),
+            node_parents: self.node_parents.clone(), doc_paths: self.doc_paths.clone(),
+            corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: HldaState = read_state(path)?;
+        Ok(HLDA {
+            depth: s.depth, gamma: s.gamma, eta: s.eta, alpha: s.alpha, seed: s.seed,
+            fitted: s.fitted, num_nodes: s.num_nodes, node_topic_word: arr2_back(s.node_topic_word),
+            node_levels: s.node_levels, node_parents: s.node_parents, doc_paths: s.doc_paths,
+            corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        if self.fitted {
+            format!("HLDA(depth={}, num_nodes={}, fitted=true)", self.depth, self.num_nodes)
+        } else {
+            format!("HLDA(depth={}, fitted=false)", self.depth)
+        }
+    }
+}
+
 #[pymodule]
 fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LDA>()?;
@@ -4509,6 +5061,9 @@ fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HDP>()?;
     m.add_class::<DTM>()?;
     m.add_class::<SupervisedLDA>()?;
+    m.add_class::<PT>()?;
+    m.add_class::<PA>()?;
+    m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;
     m.add_function(wrap_pyfunction!(tokenize, m)?)?;
     m.add("DEFAULT_TOKEN_REGEX", corpus::DEFAULT_TOKEN_REGEX)?;
