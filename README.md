@@ -1244,6 +1244,11 @@ for row in results:
 | `stm.topic_correlation(doc_topic, *, threshold=0.05)` | `TopicCorrelation` | Correlation network: `.cor`, `.adjacency`, `.edges`. |
 | `stm.find_thoughts(doc_topic, texts=None, *, topic, n=3)` | `list[(idx, prop, text)]` | Top-n docs for a topic, sorted by descending proportion. |
 | `stm.search_k(docs, ks, *, held_out=None, iterations=500, ...)` | `list[dict]` | Fit LDA per K; report coherence, exclusivity, perplexity. |
+| `stm.relevance(topic_word, vocabulary, *, topic=None, lam=0.6, n=10, term_frequency=None)` | `list[(word, score)]` | LDAvis relevance (Sievert & Shirley 2014); the FREX cousin the LDAvis slider tunes. |
+| `stm.prepare_pyldavis(model, docs, **kwargs)` | `PreparedData` or `PyLDAvisInputs` | Build the LDAvis intertopic-distance view; returns `pyLDAvis`'s object if installed, else the input arrays. |
+| `stm.check_residuals(model, docs, *, tol=0.01)` | `ResidualCheck` | Taddy (2012) residual-dispersion test for whether K is too small (faithful to stm's `checkResiduals`). `.dispersion`, `.pvalue`, `.df`. |
+| `stm.align_topics(a, b, *, metric="cosine")` | `list[(topic_a, topic_b, dist)]` | One-to-one topic matching across two fits (Hungarian); `metric` ∈ `cosine`/`js`. |
+| `stm.topic_stability(runs, *, topn=10, metric="cosine")` | `float` | Term-centric stability across fits (Greene et al. 2014): mean top-N Jaccard of matched topics. |
 
 `TopicEffect` fields: `.topic`, `.feature_names`, `.coef`, `.se`, `.z`, `.ci_low`, `.ci_high`, `.r_squared`, `.as_dict()`. The OLS intercept is prepended by default (`add_intercept=True`); pass `add_intercept=False` to suppress it.
 
