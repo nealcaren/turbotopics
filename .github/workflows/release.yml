@@ -46,7 +46,7 @@ jobs:
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
-          STAGING="rust-mallet-${{ github.ref_name }}-${{ matrix.target }}"
+          STAGING="topica-cli-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir "$STAGING"
           for bin in preprocess analyze train show; do
             cp "target/${{ matrix.target }}/release/$bin" "$STAGING/"
@@ -60,7 +60,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $staging = "rust-mallet-${{ github.ref_name }}-${{ matrix.target }}"
+          $staging = "topica-cli-${{ github.ref_name }}-${{ matrix.target }}"
           New-Item -ItemType Directory $staging
           foreach ($bin in @('preprocess','analyze','train','show')) {
             Copy-Item "target/${{ matrix.target }}/release/$bin.exe" "$staging/"
