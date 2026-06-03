@@ -51,6 +51,7 @@ def one_hot(values, *, drop_first=True, prefix=""):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from .coherence import coherence, topic_diversity  # noqa: E402
 
 __all__ = [
     "LDA",
@@ -66,6 +67,8 @@ __all__ = [
     "tokenize",
     "one_hot",
     "stm",
+    "coherence",
+    "topic_diversity",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
 ]

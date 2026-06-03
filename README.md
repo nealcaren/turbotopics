@@ -1045,9 +1045,9 @@ print(result)
 # {'log_likelihood': -1234.5, 'perplexity': 18.3, 'num_tokens': 5000, 'num_oov': 12}
 ```
 
-### UMass coherence
+### Topic coherence
 
-UMass coherence is an intrinsic measure computed directly from co-occurrence counts in the training corpus. Higher values (closer to 0) indicate more coherent topics.
+Every model has a built-in `coherence(n=10)` method that returns per-topic **UMass** coherence (Mimno et al. 2011) — an intrinsic measure computed directly from training-corpus co-occurrence; higher (closer to 0) is more coherent.
 
 ```python
 import numpy as np
@@ -1055,6 +1055,34 @@ import numpy as np
 c = model.coherence(n=10)   # top-n words per topic; returns shape (num_topics,)
 print(c)                     # e.g. [-2.1, -1.1]  — all values <= 0
 print("Mean coherence:", np.mean(c))
+```
+
+For the windowed, PMI-based measures that correlate better with human judgement — and that anyone coming from gensim's `CoherenceModel` will expect — use the module-level `turbotopics.coherence(...)` with a `coherence_type=` switch:
+
+```python
+import turbotopics as tt
+
+# `documents` is the reference corpus (your training docs, or an external
+# corpus like a Wikipedia dump for a more human-aligned signal).
+cv    = tt.coherence(model, documents, coherence_type="c_v",    topn=10)
+cnpmi = tt.coherence(model, documents, coherence_type="c_npmi", topn=10)
+cuci  = tt.coherence(model, documents, coherence_type="c_uci",  topn=10)
+umass = tt.coherence(model, documents, coherence_type="u_mass", topn=10)
+
+print("C_v per topic:", np.round(cv, 3), "  mean:", cv.mean())
+```
+
+| `coherence_type` | What it is | Window | Range |
+|---|---|---|---|
+| `"c_v"` (default) | Indirect cosine over NPMI context vectors (Röder et al. 2015) — best human correlation | 110 | ~`[0, 1]` |
+| `"c_npmi"` | Mean pairwise normalized PMI | 10 | `[-1, 1]` |
+| `"c_uci"` | Mean pairwise PMI (Newman et al. 2010) | 10 | unbounded |
+| `"u_mass"` | Document co-occurrence (Mimno 2011) | — | `(-inf, 0]` |
+
+The first argument is a fitted model (its top words are read automatically) or an explicit list of word lists. Override the sliding window with `window_size=`. Pair coherence with **topic diversity** (Dieng et al. 2020) — the fraction of unique words across all topics' top-N (1.0 = no repetition):
+
+```python
+print("Topic diversity:", tt.topic_diversity(model, topn=25))
 ```
 
 ### Diagnostics table
