@@ -2652,6 +2652,26 @@ impl SAGE {
 // CTM: Correlated Topic Model (STM's logistic-normal variational core)
 // ---------------------------------------------------------------------------
 
+/// Extract the per-document variational posterior of η from a fitted CTM/STM:
+/// the means λ (D × K-1) and covariances ν (D × K-1 × K-1). These define the
+/// logistic-normal posterior `η_d ~ N(λ_d, ν_d)` used for sampling θ draws
+/// (method-of-composition uncertainty).
+fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
+    let d = model.lambda.len();
+    let km1 = model.num_topics.saturating_sub(1);
+    let mut mean = Array2::<f64>::zeros((d, km1));
+    let mut cov = Array3::<f64>::zeros((d, km1, km1));
+    for di in 0..d {
+        for i in 0..km1 {
+            mean[[di, i]] = model.lambda[di][i];
+            for j in 0..km1 {
+                cov[[di, i, j]] = model.nu[di][i * km1 + j];
+            }
+        }
+    }
+    (mean, cov)
+}
+
 /// Correlated Topic Model (Blei & Lafferty; the STM core). Topics are drawn
 /// from a logistic-normal prior with a full covariance, so they can correlate —
 /// unlike LDA's Dirichlet. Fit by variational EM (STM's Laplace E-step).
@@ -2668,6 +2688,8 @@ pub struct CTM {
     beta: Option<Array2<f64>>,  // (num_topics, num_words)
     theta: Option<Array2<f64>>, // (num_docs, num_topics)
     corr: Option<Array2<f64>>,  // (num_topics, num_topics)
+    eta_mean: Option<Array2<f64>>, // (num_docs, num_topics-1) variational means λ
+    eta_cov: Option<Array3<f64>>,  // (num_docs, K-1, K-1) variational covariances ν
     corpus: Option<corpus::Corpus>,
 }
 
@@ -2710,6 +2732,8 @@ impl CTM {
             beta: None,
             theta: None,
             corr: None,
+            eta_mean: None,
+            eta_cov: None,
             corpus: None,
         })
     }
@@ -2764,9 +2788,13 @@ impl CTM {
             }
         }
 
+        let (eta_mean, eta_cov) = eta_posterior(&model);
+
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
+        self.eta_mean = Some(eta_mean);
+        self.eta_cov = Some(eta_cov);
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -2793,6 +2821,23 @@ impl CTM {
     fn topic_correlation<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.corr.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior means λ of the logistic-normal η,
+    /// shape ``(num_docs, num_topics-1)``. Pairs with :attr:`eta_cov` to sample
+    /// θ draws (method-of-composition uncertainty).
+    #[getter]
+    fn eta_mean<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_mean.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior covariances ν of η, shape
+    /// ``(num_docs, num_topics-1, num_topics-1)``.
+    #[getter]
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
     #[getter]
@@ -2880,6 +2925,8 @@ pub struct STM {
     beta: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     corr: Option<Array2<f64>>,
+    eta_mean: Option<Array2<f64>>, // (num_docs, num_topics-1) variational means λ
+    eta_cov: Option<Array3<f64>>,  // (num_docs, K-1, K-1) variational covariances ν
     gamma: Option<Array2<f64>>, // (num_features, num_topics-1); None if no prevalence
     feature_names: Vec<String>,
     content_beta: Option<Vec<Vec<Vec<f64>>>>, // G×K×V; None if no content
@@ -2944,6 +2991,8 @@ impl STM {
             beta: None,
             theta: None,
             corr: None,
+            eta_mean: None,
+            eta_cov: None,
             gamma: None,
             feature_names: Vec::new(),
             content_beta: None,
@@ -3114,9 +3163,13 @@ impl STM {
             arr
         });
 
+        let (eta_mean, eta_cov) = eta_posterior(&model);
+
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
+        self.eta_mean = Some(eta_mean);
+        self.eta_cov = Some(eta_cov);
         self.feature_names = feat_names;
         self.content_beta = model.content_beta;
         self.group_names = group_vocab;
@@ -3144,6 +3197,24 @@ impl STM {
     fn topic_correlation<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.corr.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior means λ of η, shape
+    /// ``(num_docs, num_topics-1)``. With :attr:`eta_cov` this is the
+    /// logistic-normal posterior used to draw θ samples for
+    /// method-of-composition uncertainty in ``estimate_effect``.
+    #[getter]
+    fn eta_mean<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_mean.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior covariances ν of η, shape
+    /// ``(num_docs, num_topics-1, num_topics-1)``.
+    #[getter]
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
     /// Prevalence coefficients γ, shape ``(num_features, num_topics-1)`` — how

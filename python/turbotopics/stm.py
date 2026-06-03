@@ -15,9 +15,12 @@ the user-facing functions of the R ``stm`` package:
   (≈ ``stm::searchK``).
 
 Everything operates on numpy arrays, so it works with any model here (LDA, DMR,
-LabeledLDA). Uncertainty in :func:`estimate_effect` uses ordinary OLS standard
-errors on the point-estimate θ (it does not propagate the sampler's posterior
-uncertainty the way stm's method-of-composition does — a deliberate v1 choice).
+LabeledLDA). :func:`estimate_effect` does ordinary OLS on a point estimate of θ,
+or — given posterior draws from :func:`posterior_theta_samples` (an STM/CTM
+variational posterior) — the **method of composition**, pooling per-draw
+regressions by Rubin's rules so the standard errors propagate topic-estimation
+uncertainty, exactly as R ``stm``'s ``estimateEffect`` does. Nonlinear and
+interaction terms are built with :func:`spline` and :func:`interaction`.
 """
 
 from __future__ import annotations
@@ -60,6 +63,17 @@ class TopicEffect:
         }
 
 
+def _ols(y, X, hat, XtX_inv, dof):
+    """One OLS fit. Returns (beta, cov, r2)."""
+    beta = hat @ y
+    resid = y - X @ beta
+    sigma2 = float(resid @ resid) / dof
+    cov = sigma2 * XtX_inv
+    tss = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - float(resid @ resid) / tss if tss > 0 else 0.0
+    return beta, cov, r2
+
+
 def estimate_effect(
     doc_topic,
     X,
@@ -69,18 +83,27 @@ def estimate_effect(
     add_intercept=True,
     ci=0.95,
 ):
-    """Regress each topic's proportion on document covariates (OLS).
+    """Regress each topic's proportion on document covariates.
+
+    Pass a point estimate of θ for an ordinary OLS, or a *stack of posterior
+    draws* of θ for the **method of composition** — the uncertainty-propagating
+    procedure R ``stm`` uses (Treier & Jackman 2008). With draws, each one is
+    regressed and the results are pooled by Rubin's rules, so the reported
+    standard errors include the topic-estimation uncertainty, not just OLS
+    sampling error. Get draws with :func:`posterior_theta_samples`.
 
     Parameters
     ----------
-    doc_topic : array (num_docs, num_topics)
-        The θ matrix from a fitted model (``model.doc_topic``).
+    doc_topic : array
+        Either ``(num_docs, num_topics)`` — a point θ (``model.doc_topic``) for
+        plain OLS — or ``(nsims, num_docs, num_topics)`` — posterior θ draws for
+        method-of-composition pooling.
     X : array (num_docs, p)
-        Document covariates (design matrix). An intercept column is prepended
-        when ``add_intercept`` is True.
+        Document covariates (design matrix); build nonlinear/interaction terms
+        with :func:`spline` / :func:`interaction`. An intercept is prepended when
+        ``add_intercept`` is True.
     feature_names : list[str], optional
-        Names for the columns of ``X`` (an "intercept" name is prepended when an
-        intercept is added). Defaults to ``feature_0 ...``.
+        Column names for ``X``. Defaults to ``feature_0 ...``.
     topics : sequence[int], optional
         Restrict to these topics. Defaults to all.
     ci : float
@@ -89,14 +112,22 @@ def estimate_effect(
     Returns
     -------
     list[TopicEffect]
-        One regression per topic. ``[e.as_dict() for e in result]`` is handy for
-        building a table.
+        One regression per topic. ``[e.as_dict() for e in result]`` builds a table.
     """
+    from math import sqrt
+
     theta = np.asarray(doc_topic, dtype=np.float64)
+    pooled = theta.ndim == 3
+    if pooled:
+        nsims, n, num_topics = theta.shape
+    elif theta.ndim == 2:
+        n, num_topics = theta.shape
+    else:
+        raise ValueError("doc_topic must be 2-D (num_docs, K) or 3-D (nsims, num_docs, K)")
+
     X = np.asarray(X, dtype=np.float64)
     if X.ndim == 1:
         X = X[:, None]
-    n, num_topics = theta.shape
     if X.shape[0] != n:
         raise ValueError(f"X has {X.shape[0]} rows but doc_topic has {n} documents")
 
@@ -105,37 +136,43 @@ def estimate_effect(
     ]
     if len(names) != X.shape[1]:
         raise ValueError("feature_names length must match X columns")
-
     if add_intercept:
         X = np.hstack([np.ones((n, 1)), X])
         names = ["intercept"] + names
 
     p = X.shape[1]
-    XtX = X.T @ X
-    XtX_inv = np.linalg.pinv(XtX)
+    XtX_inv = np.linalg.pinv(X.T @ X)
     hat = XtX_inv @ X.T  # (p, n)
-
-    from math import sqrt
-
-    # Normal-approximation critical value (avoids a scipy dependency).
-    z_crit = _normal_ppf(0.5 + ci / 2.0)
+    dof = max(n - p, 1)
+    z_crit = _normal_ppf(0.5 + ci / 2.0)  # normal-approx critical value (no scipy)
 
     topic_list = range(num_topics) if topics is None else list(topics)
     out: list[TopicEffect] = []
     for t in topic_list:
         if t < 0 or t >= num_topics:
             raise ValueError(f"topic {t} out of range (num_topics={num_topics})")
-        y = theta[:, t]
-        beta = hat @ y
-        resid = y - X @ beta
-        dof = max(n - p, 1)
-        sigma2 = float(resid @ resid) / dof
-        cov = sigma2 * XtX_inv
-        se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+        if pooled:
+            betas = np.empty((nsims, p))
+            within = np.zeros((p, p))
+            r2s = np.empty(nsims)
+            for m in range(nsims):
+                b, cov_m, r2_m = _ols(theta[m, :, t], X, hat, XtX_inv, dof)
+                betas[m] = b
+                within += cov_m
+                r2s[m] = r2_m
+            within /= nsims
+            beta = betas.mean(axis=0)
+            # Rubin's rules: total var = within + (1 + 1/M) * between.
+            between = np.cov(betas, rowvar=False) if nsims > 1 else np.zeros((p, p))
+            between = np.atleast_2d(between)
+            total = within + (1.0 + 1.0 / nsims) * between
+            se = np.sqrt(np.clip(np.diag(total), 0.0, None))
+            r2 = float(r2s.mean())
+        else:
+            beta, cov, r2 = _ols(theta[:, t], X, hat, XtX_inv, dof)
+            se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
         with np.errstate(divide="ignore", invalid="ignore"):
             zvals = np.where(se > 0, beta / se, 0.0)
-        tss = float(((y - y.mean()) ** 2).sum())
-        r2 = 1.0 - float(resid @ resid) / tss if tss > 0 else 0.0
         out.append(
             TopicEffect(
                 topic=t,
@@ -149,6 +186,101 @@ def estimate_effect(
             )
         )
     return out
+
+
+def posterior_theta_samples(model, nsims=25, seed=0):
+    """Draw `nsims` samples of the document-topic matrix θ from a fitted
+    :class:`STM`/:class:`CTM`'s variational posterior.
+
+    Each document's logistic-normal posterior is ``η_d ~ N(λ_d, ν_d)`` (from
+    ``model.eta_mean`` / ``model.eta_cov``); a draw of η is mapped through the
+    softmax (with the reference category fixed at 0) to a θ row. Feed the result
+    to :func:`estimate_effect` for method-of-composition uncertainty.
+
+    Returns an array of shape ``(nsims, num_docs, num_topics)``.
+    """
+    lam = np.asarray(model.eta_mean, dtype=np.float64)  # (D, K-1)
+    cov = np.asarray(model.eta_cov, dtype=np.float64)   # (D, K-1, K-1)
+    d, km1 = lam.shape
+    k = km1 + 1
+    rng = np.random.default_rng(seed)
+    out = np.empty((nsims, d, k))
+    eye = np.eye(km1)
+    for di in range(d):
+        c = 0.5 * (cov[di] + cov[di].T)  # symmetrize
+        try:
+            chol = np.linalg.cholesky(c + 1e-10 * eye)
+        except np.linalg.LinAlgError:
+            w, v = np.linalg.eigh(c)
+            chol = v @ np.diag(np.sqrt(np.clip(w, 1e-12, None)))
+        z = rng.standard_normal((nsims, km1))
+        eta = lam[di] + z @ chol.T                       # (nsims, K-1)
+        full = np.hstack([eta, np.zeros((nsims, 1))])    # reference category = 0
+        full -= full.max(axis=1, keepdims=True)
+        e = np.exp(full)
+        out[:, di, :] = e / e.sum(axis=1, keepdims=True)
+    return out
+
+
+def spline(x, df=4, knots=None):
+    """Restricted (natural) cubic-spline basis for a covariate — the building
+    block for nonlinear prevalence terms like R ``stm``'s ``~ s(day)``.
+
+    Uses Harrell's restricted-cubic-spline parameterization: `df+1` knots (at
+    evenly spaced quantiles of `x` unless `knots` is given) yield `df` basis
+    columns whose first is the linear term. ``np.column_stack`` the result into
+    your design matrix and extend ``feature_names`` with the returned names.
+
+    Returns ``(basis (n, df), names)``.
+    """
+    x = np.asarray(x, dtype=np.float64).ravel()
+    if df < 2:
+        raise ValueError("spline df must be >= 2")
+    if knots is None:
+        knots = np.quantile(x, np.linspace(0.0, 1.0, df + 1))
+    t = np.asarray(knots, dtype=np.float64)
+    k = len(t)
+    if k < 3:
+        raise ValueError("need at least 3 knots (df >= 2)")
+    denom = (t[-1] - t[0]) ** 2
+
+    def cube(u):
+        return np.clip(u, 0.0, None) ** 3
+
+    cols = [x]
+    for j in range(k - 2):
+        term = (
+            cube(x - t[j])
+            - cube(x - t[k - 2]) * (t[k - 1] - t[j]) / (t[k - 1] - t[k - 2])
+            + cube(x - t[k - 1]) * (t[k - 2] - t[j]) / (t[k - 1] - t[k - 2])
+        ) / denom
+        cols.append(term)
+    basis = np.column_stack(cols)
+    names = ["spline_lin"] + [f"spline_{j + 1}" for j in range(basis.shape[1] - 1)]
+    return basis, names
+
+
+def interaction(a, b, name="interaction"):
+    """Interaction columns between two covariate blocks (all pairwise products of
+    their columns) — for terms like R ``stm``'s ``~ treatment * party``.
+
+    `a`, `b` are 1-D or 2-D arrays with the same number of rows. Returns
+    ``(products (n, ncols), names)``; ``np.column_stack`` into your design matrix.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    a = a.reshape(a.shape[0], -1)
+    b = b.reshape(b.shape[0], -1)
+    if a.shape[0] != b.shape[0]:
+        raise ValueError("a and b must have the same number of rows")
+    cols = []
+    names = []
+    multi = a.shape[1] > 1 or b.shape[1] > 1
+    for i in range(a.shape[1]):
+        for j in range(b.shape[1]):
+            cols.append(a[:, i] * b[:, j])
+            names.append(f"{name}_{i}x{j}" if multi else name)
+    return np.column_stack(cols), names
 
 
 def _normal_ppf(q: float) -> float:

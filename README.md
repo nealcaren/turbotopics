@@ -149,6 +149,39 @@ The `stm.estimate_effect` function (see the [stm analysis toolkit section](#stm-
 | `topic_correlation` | `(K, K)` | Pearson correlation of θ across documents. Symmetric, unit diagonal. Same as CTM. |
 | `prevalence_effects` | `(F+1, K-1)` | Learned γ; row 0 is the intercept (prepended internally). For interpretation use `stm.estimate_effect`. |
 | `feature_names` | `list[str]` length F+1 | `"intercept"` first, then your `prevalence_names`. |
+| `eta_mean` | `(D, K-1)` | Per-document variational posterior means λ of η. |
+| `eta_cov` | `(D, K-1, K-1)` | Per-document variational posterior covariances ν. With `eta_mean`, the logistic-normal posterior used for method-of-composition uncertainty. |
+
+### Covariate effects with proper uncertainty (method of composition)
+
+`estimate_effect` on the point `doc_topic` gives OLS standard errors — but those treat θ as if it were observed exactly, understating uncertainty. R `stm` instead uses the **method of composition**: draw θ from the model's posterior, run the regression on each draw, and pool by Rubin's rules. turbotopics exposes the STM/CTM variational posterior (`eta_mean`, `eta_cov`), so you can do exactly that:
+
+```python
+from turbotopics import STM, stm
+
+model = STM(num_topics=20, seed=1)
+model.fit(docs, X, prevalence_names=["treatment", "pid"], em_iters=80)
+
+# Draw theta from the variational posterior and pool the regressions.
+draws   = stm.posterior_theta_samples(model, nsims=25, seed=1)   # (25, D, K)
+effects = stm.estimate_effect(draws, X, feature_names=["treatment", "pid"])
+
+for e in effects:
+    ti = e.feature_names.index("treatment")
+    print(f"topic {e.topic}: treatment coef={e.coef[ti]:+.3f}  z={e.z[ti]:+.2f}")
+```
+
+The pooled standard errors include the topic-estimation uncertainty, so z-statistics are honest (point OLS can report absurdly large z when θ is near-deterministic). For **nonlinear** prevalence (`~ s(day)`) and **interactions** (`~ treatment * party`), build the design matrix with `stm.spline` and `stm.interaction`:
+
+```python
+import numpy as np
+
+day_basis, day_names = stm.spline(day, df=5)               # nonlinear time trend
+tp, tp_names = stm.interaction(treatment, party)            # treatment x party
+X = np.column_stack([treatment, party, day_basis, tp])
+names = ["treatment", "party"] + day_names + tp_names
+effects = stm.estimate_effect(draws, X, feature_names=names)
+```
 
 ### sigma_shrink
 
@@ -1115,7 +1148,7 @@ print(df[["topic", "coherence", "exclusivity", "effective_words", "rank1_docs", 
 
 `turbotopics.stm` is a pure-Python (numpy) post-hoc analysis toolkit that mirrors the user-facing functions of the R `stm` (Structural Topic Model) package. It operates on the `topic_word` (φ) and `doc_topic` (θ) arrays produced by any fitted turbotopics model — `LDA`, `DMR`, or `LabeledLDA` — so no extra fitting step is needed.
 
-**Accuracy note:** `estimate_effect` uses ordinary OLS standard errors applied to the point-estimate θ matrix and a normal approximation for confidence intervals. It does *not* propagate the Gibbs sampler's posterior uncertainty the way stm's method-of-composition does — this is a deliberate v1 simplification. Also note that this is the "stm analysis toolkit on a Gibbs (SparseLDA) model," not stm's logistic-normal / variational inference engine.
+**Uncertainty:** `estimate_effect` does ordinary OLS when given a point θ, or — given posterior draws of θ from an `STM`/`CTM` fit — the **method of composition** that R `stm` uses: each draw is regressed and the results are pooled by Rubin's rules, so the standard errors propagate topic-estimation uncertainty (not just OLS sampling error). See [Covariate effects with proper uncertainty](#covariate-effects-with-proper-uncertainty-method-of-composition) below. Confidence intervals use a normal approximation (no scipy dependency).
 
 ### Quick example
 
@@ -1202,7 +1235,10 @@ for row in results:
 
 | Function | Returns | Notes |
 |----------|---------|-------|
-| `stm.estimate_effect(doc_topic, X, *, feature_names=None, topics=None, add_intercept=True, ci=0.95)` | `list[TopicEffect]` | OLS of each topic's θ on covariates. |
+| `stm.estimate_effect(doc_topic, X, *, feature_names=None, topics=None, add_intercept=True, ci=0.95)` | `list[TopicEffect]` | Regress each topic's θ on covariates. `doc_topic` 2-D → OLS; 3-D (posterior draws) → method-of-composition (Rubin pooling). |
+| `stm.posterior_theta_samples(model, nsims=25, seed=0)` | `ndarray (nsims, D, K)` | Draw θ from an `STM`/`CTM` variational posterior (`eta_mean`/`eta_cov`); feed to `estimate_effect` for proper uncertainty. |
+| `stm.spline(x, df=4, knots=None)` | `(ndarray (n, df), names)` | Restricted cubic-spline basis for nonlinear terms (R `stm`'s `s(x)`). |
+| `stm.interaction(a, b, name="interaction")` | `(ndarray, names)` | Pairwise-product interaction columns (R `stm`'s `a*b`). |
 | `stm.frex(topic_word, vocabulary, *, w=0.5, n=10)` | `list[list[(word, score)]]` | FREX (frequency–exclusivity) top words per topic. |
 | `stm.label_topics(topic_word, vocabulary, *, n=10)` | `list[dict]` | Per-topic word lists: keys `prob`, `frex`, `lift`, `score`. |
 | `stm.topic_correlation(doc_topic, *, threshold=0.05)` | `TopicCorrelation` | Correlation network: `.cor`, `.adjacency`, `.edges`. |

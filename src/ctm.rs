@@ -220,6 +220,10 @@ pub struct CtmModel {
     pub mu: Vec<f64>,        // K-1 prior mean (no-covariate case)
     pub sigma: Vec<f64>,     // (K-1)² prior covariance
     pub lambda: Vec<Vec<f64>>, // per-doc variational means η (K-1)
+    /// Per-document variational covariance ν = H⁻¹ ((K-1)² flattened, row-major),
+    /// from the final E-step — the Laplace posterior of η used for
+    /// method-of-composition uncertainty.
+    pub nu: Vec<Vec<f64>>,
     /// Prevalence coefficients γ (num_features × (K-1)), `Some` when prevalence
     /// covariates were supplied: `μ_d = X_d γ`. The last topic is the reference.
     pub gamma: Option<Vec<Vec<f64>>>,
@@ -558,6 +562,9 @@ pub fn fit_ctm<R: Rng>(
         sigma[i * km1 + i] = 1.0;
     }
     let mut lambda = vec![vec![0.0f64; km1]; d];
+    // Per-document variational covariance ν, refreshed each E-step; the final
+    // iteration's values are exposed for method-of-composition uncertainty.
+    let mut nu_store = vec![vec![0.0f64; km1 * km1]; d];
 
     // Per-document prior mean (shared, or regression-based with prevalence).
     let doc_mu = |di: usize, gamma: &Option<Vec<Vec<f64>>>, mu_shared: &[f64]| -> Vec<f64> {
@@ -642,6 +649,7 @@ pub fn fit_ctm<R: Rng>(
                     }
                 }
             }
+            nu_store[di] = res.nu.clone();
             for i in 0..km1 {
                 lambda_sum[i] += opt[i];
                 for j in 0..km1 {
@@ -726,6 +734,7 @@ pub fn fit_ctm<R: Rng>(
         mu: mu_shared,
         sigma,
         lambda,
+        nu: nu_store,
         gamma,
         content_beta: content_out,
         num_groups,
