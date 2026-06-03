@@ -1,0 +1,50 @@
+[package]
+name = "turbotopics"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "turbotopics"
+path = "src/lib.rs"
+# cdylib: Python extension module (maturin). rlib: keep the four CLI binaries linkable.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "preprocess"
+path = "src/bin/preprocess.rs"
+
+[[bin]]
+name = "analyze"
+path = "src/bin/analyze.rs"
+
+[[bin]]
+name = "train"
+path = "src/bin/train.rs"
+
+[[bin]]
+name = "show"
+path = "src/bin/show.rs"
+
+[dependencies]
+rand = "0.8"
+rand_chacha = "0.3"
+regex = "1"
+
+# Python-binding deps live behind the `python` feature so plain `cargo build`
+# (and the CLI binaries) never pull in pyo3/numpy.
+pyo3 = { version = "0.22", features = ["abi3-py39"], optional = true }
+numpy = { version = "0.22", optional = true }
+rayon = { version = "1", optional = true }
+
+[features]
+# maturin enables this (see pyproject.toml -> [tool.maturin] features).
+python = ["dep:pyo3", "dep:numpy", "dep:rayon", "pyo3/extension-module"]
+
+# Whole-program optimization for the shipped wheels and CLI binaries.
+# lto + a single codegen unit let the optimizer inline across the sampler's
+# module boundaries (sampler/model/corpus); results stay bit-identical.
+# (No panic="abort": pyo3 relies on unwinding to turn Rust panics into Python
+# exceptions rather than aborting the interpreter.)
+[profile.release]
+lto = true
+codegen-units = 1

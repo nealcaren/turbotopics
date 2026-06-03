@@ -1,0 +1,206 @@
+# CI for rustmallet — a PyO3/maturin package producing abi3 wheels.
+#
+# Jobs:
+#   test        — build in dev mode & run pytest on Linux, macOS, Windows
+#   build-wheels — produce abi3 wheels for all target platforms
+#   sdist       — produce a source distribution
+#   release     — publish to PyPI on tag push v*
+#
+# Required secret: PYPI_API_TOKEN  (Settings → Secrets → Actions)
+# or configure PyPI Trusted Publishing and remove the token reference.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:    ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Minimal permissions by default; individual jobs override as needed.
+permissions:
+  contents: read
+
+# ---------------------------------------------------------------------------
+# Job: test
+# Builds the extension in-place with `maturin develop` and runs pytest.
+# Matrix covers the three major platforms; a single Python version suffices
+# because the wheel is abi3 (CPython >=3.9 compatible).
+# ---------------------------------------------------------------------------
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install stable Rust toolchain (required for maturin/pyo3 compilation).
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build/test dependencies
+        run: pip install maturin numpy pytest
+
+      # Build the extension into the active virtualenv / site-packages.
+      # --features python gates the pyo3/numpy deps in Cargo.toml.
+      - name: Build extension (maturin develop)
+        run: maturin develop --features python
+
+      - name: Run tests
+        run: pytest -q
+
+  # ---------------------------------------------------------------------------
+  # Job: build-wheels
+  # Produces abi3 wheels. Because the wheel is abi3 (tagged cp39-abi3-*), one
+  # build per platform target is sufficient — no Python version matrix needed.
+  #
+  # maturin-action handles QEMU setup automatically for aarch64-linux and
+  # invokes maturin inside the appropriate manylinux container for Linux.
+  # ---------------------------------------------------------------------------
+  build-wheels:
+    name: wheel / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- Linux x86_64 (manylinux) ----
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+
+          # ---- Linux aarch64 (manylinux, cross-compiled via QEMU) ----
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: auto
+
+          # ---- macOS x86_64 ----
+          - os: macos-latest
+            target: x86_64
+            manylinux: ""
+
+          # ---- macOS aarch64 (Apple Silicon) ----
+          - os: macos-latest
+            target: aarch64
+            manylinux: ""
+
+          # ---- Windows x64 ----
+          - os: windows-latest
+            target: x64
+            manylinux: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # maturin-action provides Rust toolchain internally; explicit install not
+      # needed here, but setup-python IS needed so maturin can find an interpreter
+      # for the abi3 wheel stub.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          # manylinux is only meaningful on Linux legs; empty string on others.
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          # --release: optimised build; --out dist: place wheel in dist/;
+          # --features python: enable pyo3/numpy deps (see Cargo.toml).
+          args: --release --out dist --features python
+          # Rust source is at the repo root.
+          working-directory: .
+
+      # Upload each leg's wheel as a separate artifact so the release job can
+      # download them all cleanly.
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}-${{ matrix.os }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Job: sdist
+  # Produces a source distribution (required for a complete PyPI release).
+  # ---------------------------------------------------------------------------
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build sdist
+        run: maturin sdist --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Job: release
+  # Runs only when a version tag (v*) is pushed.
+  # Downloads all wheel + sdist artifacts and publishes to PyPI.
+  #
+  # Authentication: set PYPI_API_TOKEN in repo Settings → Secrets → Actions.
+  # Alternatively, configure PyPI Trusted Publishing (OIDC) and replace the
+  # env block with the appropriate `id-token: write` permission + no token.
+  # ---------------------------------------------------------------------------
+  release:
+    name: release (PyPI)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-wheels, sdist]
+
+    # Required for PyPI Trusted Publishing (OIDC); harmless when using a token.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Download every artifact produced above into dist/.
+          path: dist
+          merge-multiple: true
+
+      - name: List dist contents
+        run: ls -lh dist/
+
+      # Upload to PyPI using maturin-action in upload mode.
+      # Set PYPI_API_TOKEN in your repository secrets.
+      - name: Publish to PyPI
+        uses: PyO3/maturin-action@v1
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*

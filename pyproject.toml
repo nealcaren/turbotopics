@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "turbotopics"
+version = "0.1.0"
+description = "Fast SparseLDA topic modeling (MALLET's algorithm) in Rust, with a Pythonic API"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "David Mimno and contributors" }]
+keywords = ["lda", "topic-modeling", "mallet", "nlp", "gibbs-sampling", "rust"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = ["numpy>=1.21"]
+
+[project.urls]
+Homepage = "https://github.com/mimno/RustMallet"
+Repository = "https://github.com/mimno/RustMallet"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.maturin]
+# Mixed Rust/Python layout: pure-Python wrapper in python/, compiled ext as turbotopics._turbotopics.
+python-source = "python"
+module-name = "turbotopics._turbotopics"
+features = ["python"]
+# Build a single abi3 wheel per platform (works on CPython >=3.9).

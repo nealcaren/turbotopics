@@ -1,0 +1,520 @@
+"""Tests for the turbotopics.stm analysis toolkit.
+
+Covers: estimate_effect, frex, label_topics, topic_correlation,
+find_thoughts, search_k, and _normal_ppf.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from turbotopics import LDA, stm
+
+
+# ---------------------------------------------------------------------------
+# Shared synthetic corpus
+# ---------------------------------------------------------------------------
+# ~160 documents, binary covariate x drives content:
+#   x=1  => heavily "space" words  (planet star moon rocket orbit)
+#   x=0  => heavily "animal" words (cat dog fish bird bear)
+# We fit LDA(num_topics=2, seed=1) at session scope and cache everything.
+
+_SPACE_WORDS = ["planet", "star", "moon", "rocket", "orbit"]
+_ANIMAL_WORDS = ["cat", "dog", "fish", "bird", "bear"]
+
+
+def _make_synthetic_corpus(rng, n_per_class=80):
+    """Return (docs, covariate_x, vocab) for the synthetic binary corpus."""
+    space_docs = []
+    for _ in range(n_per_class):
+        # Heavy draw from space words
+        toks = list(rng.choice(_SPACE_WORDS, size=20, replace=True)) + list(
+            rng.choice(_ANIMAL_WORDS, size=2, replace=True)
+        )
+        space_docs.append(toks)
+
+    animal_docs = []
+    for _ in range(n_per_class):
+        toks = list(rng.choice(_ANIMAL_WORDS, size=20, replace=True)) + list(
+            rng.choice(_SPACE_WORDS, size=2, replace=True)
+        )
+        animal_docs.append(toks)
+
+    docs = space_docs + animal_docs
+    x = np.array([1] * n_per_class + [0] * n_per_class, dtype=float)
+    return docs, x
+
+
+@pytest.fixture(scope="module")
+def synthetic_model_and_x():
+    """Session-scoped fitted LDA + covariate for the synthetic corpus."""
+    rng = np.random.default_rng(0)
+    docs, x = _make_synthetic_corpus(rng, n_per_class=80)
+    model = LDA(num_topics=2, seed=1)
+    model.fit(docs, iterations=300, num_samples=3, sample_interval=10)
+    return model, x
+
+
+@pytest.fixture(scope="module")
+def space_topic_idx(synthetic_model_and_x):
+    """Index of the 'space' topic in the fitted 2-topic model."""
+    model, _ = synthetic_model_and_x
+    vocab = model.vocabulary
+    phi = model.topic_word
+    # The space topic has higher weight on "planet"
+    planet_col = vocab.index("planet")
+    return int(phi[:, planet_col].argmax())
+
+
+# ---------------------------------------------------------------------------
+# _normal_ppf
+# ---------------------------------------------------------------------------
+
+class TestNormalPPF:
+    def test_ppf_0975_approx_196(self):
+        val = stm._normal_ppf(0.975)
+        assert abs(val - 1.96) < 1e-2
+
+    def test_ppf_0_5_is_zero(self):
+        assert abs(stm._normal_ppf(0.5)) < 1e-6
+
+    def test_ppf_out_of_range_raises(self):
+        with pytest.raises(ValueError):
+            stm._normal_ppf(0.0)
+        with pytest.raises(ValueError):
+            stm._normal_ppf(1.0)
+
+
+# ---------------------------------------------------------------------------
+# estimate_effect
+# ---------------------------------------------------------------------------
+
+class TestEstimateEffect:
+    def test_space_topic_positive_z(self, synthetic_model_and_x, space_topic_idx):
+        """Space-topic coefficient on x is positive with large z (effect recovery)."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], topics=[space_topic_idx]
+        )
+        assert len(effects) == 1
+        eff = effects[0]
+        # intercept prepended, then "x"
+        x_idx = eff.feature_names.index("x")
+        assert eff.z[x_idx] > 3, f"Expected z>3 for space topic, got z={eff.z[x_idx]:.2f}"
+
+    def test_animal_topic_negative_coef(self, synthetic_model_and_x, space_topic_idx):
+        """Animal-topic coefficient on x is negative."""
+        model, x = synthetic_model_and_x
+        animal_topic = 1 - space_topic_idx
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], topics=[animal_topic]
+        )
+        eff = effects[0]
+        x_idx = eff.feature_names.index("x")
+        assert eff.coef[x_idx] < 0
+
+    def test_r_squared_in_range(self, synthetic_model_and_x, space_topic_idx):
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], topics=[space_topic_idx]
+        )
+        r2 = effects[0].r_squared
+        assert 0.0 <= r2 <= 1.0
+
+    def test_coef_length_with_intercept(self, synthetic_model_and_x, space_topic_idx):
+        """With intercept, coef/se/z/ci arrays length = n_features + 1."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], add_intercept=True,
+            topics=[space_topic_idx]
+        )
+        eff = effects[0]
+        assert len(eff.coef) == 2  # intercept + x
+        assert len(eff.se) == 2
+        assert len(eff.z) == 2
+        assert len(eff.ci_low) == 2
+        assert len(eff.ci_high) == 2
+
+    def test_intercept_in_feature_names(self, synthetic_model_and_x, space_topic_idx):
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], add_intercept=True,
+            topics=[space_topic_idx]
+        )
+        assert "intercept" in effects[0].feature_names
+
+    def test_no_intercept_mode(self, synthetic_model_and_x, space_topic_idx):
+        """add_intercept=False: no 'intercept' in names; coef length == X columns."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], add_intercept=False,
+            topics=[space_topic_idx]
+        )
+        eff = effects[0]
+        assert "intercept" not in eff.feature_names
+        assert len(eff.coef) == 1
+
+    def test_all_topics_default(self, synthetic_model_and_x):
+        """Default topics=None returns one effect per topic."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(model.doc_topic, x)
+        assert len(effects) == model.num_topics
+
+    def test_as_dict_structure(self, synthetic_model_and_x, space_topic_idx):
+        """as_dict() returns dict with 'topic', 'r_squared', and per-feature sub-dicts."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], topics=[space_topic_idx]
+        )
+        d = effects[0].as_dict()
+        assert "topic" in d
+        assert "r_squared" in d
+        # "x" and "intercept" should both be sub-dict keys
+        assert "x" in d
+        assert isinstance(d["x"], dict)
+        assert "coef" in d["x"]
+        assert "se" in d["x"]
+        assert "z" in d["x"]
+        assert "ci" in d["x"]
+
+    def test_row_count_mismatch_raises(self, synthetic_model_and_x):
+        model, x = synthetic_model_and_x
+        bad_x = x[:-5]  # wrong length
+        with pytest.raises(ValueError, match="rows"):
+            stm.estimate_effect(model.doc_topic, bad_x)
+
+    def test_feature_names_length_mismatch_raises(self, synthetic_model_and_x):
+        model, x = synthetic_model_and_x
+        with pytest.raises(ValueError):
+            stm.estimate_effect(model.doc_topic, x, feature_names=["a", "b"])
+
+    def test_topic_out_of_range_raises(self, synthetic_model_and_x):
+        model, x = synthetic_model_and_x
+        with pytest.raises(ValueError, match="out of range"):
+            stm.estimate_effect(model.doc_topic, x, topics=[999])
+
+    def test_multi_column_x(self, synthetic_model_and_x, space_topic_idx):
+        """Two-covariate X: shapes correct."""
+        model, x = synthetic_model_and_x
+        X2 = np.column_stack([x, x ** 2])
+        effects = stm.estimate_effect(
+            model.doc_topic, X2, feature_names=["x", "x2"],
+            topics=[space_topic_idx]
+        )
+        eff = effects[0]
+        # intercept + 2 features
+        assert len(eff.coef) == 3
+        assert len(eff.feature_names) == 3
+
+    def test_ci_bounds_ordered(self, synthetic_model_and_x, space_topic_idx):
+        """ci_low <= ci_high for all coefficients."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"],
+            topics=[space_topic_idx]
+        )
+        eff = effects[0]
+        assert np.all(eff.ci_low <= eff.ci_high)
+
+    def test_1d_x_accepted(self, synthetic_model_and_x, space_topic_idx):
+        """A 1-D X array should be accepted without error."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, topics=[space_topic_idx]
+        )
+        assert len(effects) == 1
+
+
+# ---------------------------------------------------------------------------
+# frex
+# ---------------------------------------------------------------------------
+
+class TestFrex:
+    def test_returns_k_lists(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        result = stm.frex(model.topic_word, model.vocabulary)
+        assert len(result) == model.num_topics
+
+    def test_each_list_has_n_or_fewer(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        n = 5
+        result = stm.frex(model.topic_word, model.vocabulary, n=n)
+        for topic_list in result:
+            assert len(topic_list) <= n
+
+    def test_words_in_vocabulary(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        vocab_set = set(model.vocabulary)
+        for topic_list in stm.frex(model.topic_word, model.vocabulary):
+            for word, _ in topic_list:
+                assert word in vocab_set
+
+    def test_scores_descending(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        for topic_list in stm.frex(model.topic_word, model.vocabulary):
+            scores = [s for _, s in topic_list]
+            assert scores == sorted(scores, reverse=True)
+
+    def test_space_topic_frex_words_are_space(self, synthetic_model_and_x, space_topic_idx):
+        """FREX top words for the space topic are space words."""
+        model, _ = synthetic_model_and_x
+        result = stm.frex(model.topic_word, model.vocabulary, n=5)
+        space_frex_words = {w for w, _ in result[space_topic_idx]}
+        assert len(space_frex_words & set(_SPACE_WORDS)) > 0, (
+            f"Expected space FREX words, got {space_frex_words}"
+        )
+
+    def test_default_weight(self, synthetic_model_and_x):
+        """w=0.5 is the default; explicit call should match."""
+        model, _ = synthetic_model_and_x
+        r1 = stm.frex(model.topic_word, model.vocabulary, w=0.5)
+        r2 = stm.frex(model.topic_word, model.vocabulary)
+        for t in range(model.num_topics):
+            assert [w for w, _ in r1[t]] == [w for w, _ in r2[t]]
+
+
+# ---------------------------------------------------------------------------
+# label_topics
+# ---------------------------------------------------------------------------
+
+class TestLabelTopics:
+    def test_returns_k_dicts(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        result = stm.label_topics(model.topic_word, model.vocabulary)
+        assert len(result) == model.num_topics
+
+    def test_dict_has_all_keys(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        for d in stm.label_topics(model.topic_word, model.vocabulary):
+            assert set(d.keys()) == {"prob", "frex", "lift", "score"}
+
+    def test_each_value_is_list_of_pairs(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        for d in stm.label_topics(model.topic_word, model.vocabulary):
+            for key in ("prob", "frex", "lift", "score"):
+                for item in d[key]:
+                    assert len(item) == 2
+                    word, val = item
+                    assert isinstance(word, str)
+                    assert isinstance(val, float)
+
+    def test_prob_words_are_top_phi(self, synthetic_model_and_x):
+        """prob words match descending argsort of phi for each topic."""
+        model, _ = synthetic_model_and_x
+        result = stm.label_topics(model.topic_word, model.vocabulary, n=5)
+        phi = model.topic_word
+        vocab = model.vocabulary
+        for t, d in enumerate(result):
+            expected_idx = np.argsort(phi[t])[::-1][:5]
+            expected_words = [vocab[i] for i in expected_idx]
+            got_words = [w for w, _ in d["prob"]]
+            assert got_words == expected_words
+
+    def test_n_limits_list_length(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        n = 3
+        result = stm.label_topics(model.topic_word, model.vocabulary, n=n)
+        for d in result:
+            for key in ("prob", "frex", "lift", "score"):
+                assert len(d[key]) <= n
+
+
+# ---------------------------------------------------------------------------
+# topic_correlation
+# ---------------------------------------------------------------------------
+
+class TestTopicCorrelation:
+    def test_cor_shape(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        K = model.num_topics
+        assert tc.cor.shape == (K, K)
+
+    def test_cor_symmetric(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        np.testing.assert_allclose(tc.cor, tc.cor.T, atol=1e-12)
+
+    def test_cor_diagonal_approx_one(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        np.testing.assert_allclose(np.diag(tc.cor), 1.0, atol=1e-10)
+
+    def test_adjacency_shape(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        K = model.num_topics
+        assert tc.adjacency.shape == (K, K)
+
+    def test_adjacency_zero_diagonal(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        assert np.all(np.diag(tc.adjacency) == 0)
+
+    def test_adjacency_binary(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        vals = np.unique(tc.adjacency)
+        assert set(vals).issubset({0, 1})
+
+    def test_two_topics_anticorrelated(self, synthetic_model_and_x):
+        """With 2 topics (theta sums to 1), the off-diagonal correlation is ≈-1."""
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        assert tc.cor[0, 1] < 0
+
+    def test_two_topics_no_positive_edges(self, synthetic_model_and_x):
+        """Anti-correlated 2-topic model has no positive edges above threshold=0.05."""
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic, threshold=0.05)
+        assert tc.edges == []
+
+    def test_three_topic_symmetry_and_diagonal(self):
+        """3-topic model: adjacency is symmetric, diagonal zero."""
+        # Build a quick 3-topic synthetic theta
+        rng = np.random.default_rng(7)
+        # Dirichlet draws give correlated proportions
+        theta = rng.dirichlet([1, 1, 1], size=200)
+        tc = stm.topic_correlation(theta, threshold=0.05)
+        assert tc.adjacency.shape == (3, 3)
+        assert np.all(np.diag(tc.adjacency) == 0)
+        np.testing.assert_array_equal(tc.adjacency, tc.adjacency.T)
+
+    def test_edges_list_type(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        tc = stm.topic_correlation(model.doc_topic)
+        assert isinstance(tc.edges, list)
+
+
+# ---------------------------------------------------------------------------
+# find_thoughts
+# ---------------------------------------------------------------------------
+
+class TestFindThoughts:
+    def test_returns_n_or_fewer(self, synthetic_model_and_x, space_topic_idx):
+        model, _ = synthetic_model_and_x
+        n = 5
+        result = stm.find_thoughts(model.doc_topic, topic=space_topic_idx, n=n)
+        assert len(result) <= n
+
+    def test_sorted_descending_proportion(self, synthetic_model_and_x, space_topic_idx):
+        model, _ = synthetic_model_and_x
+        result = stm.find_thoughts(model.doc_topic, topic=space_topic_idx, n=5)
+        props = [p for _, p, _ in result]
+        assert props == sorted(props, reverse=True)
+
+    def test_doc_index_valid(self, synthetic_model_and_x, space_topic_idx):
+        model, _ = synthetic_model_and_x
+        n_docs = model.doc_topic.shape[0]
+        result = stm.find_thoughts(model.doc_topic, topic=space_topic_idx, n=5)
+        for idx, _, _ in result:
+            assert 0 <= idx < n_docs
+
+    def test_text_is_none_when_not_provided(self, synthetic_model_and_x, space_topic_idx):
+        model, _ = synthetic_model_and_x
+        result = stm.find_thoughts(model.doc_topic, topic=space_topic_idx, n=3)
+        for _, _, text in result:
+            assert text is None
+
+    def test_text_passed_through(self, synthetic_model_and_x, space_topic_idx):
+        model, _ = synthetic_model_and_x
+        texts = [f"doc_{i}" for i in range(model.doc_topic.shape[0])]
+        result = stm.find_thoughts(model.doc_topic, texts=texts, topic=space_topic_idx, n=3)
+        for idx, _, text in result:
+            assert text == f"doc_{idx}"
+
+    def test_out_of_range_topic_raises(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        with pytest.raises(ValueError, match="out of range"):
+            stm.find_thoughts(model.doc_topic, topic=999, n=3)
+
+    def test_negative_topic_raises(self, synthetic_model_and_x):
+        model, _ = synthetic_model_and_x
+        with pytest.raises(ValueError):
+            stm.find_thoughts(model.doc_topic, topic=-1, n=3)
+
+    def test_proportion_matches_theta(self, synthetic_model_and_x, space_topic_idx):
+        """Returned proportions match the actual theta values."""
+        model, _ = synthetic_model_and_x
+        result = stm.find_thoughts(model.doc_topic, topic=space_topic_idx, n=3)
+        for idx, prop, _ in result:
+            expected = float(model.doc_topic[idx, space_topic_idx])
+            assert abs(prop - expected) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# search_k
+# ---------------------------------------------------------------------------
+
+class TestSearchK:
+    @pytest.fixture(scope="class")
+    def search_k_results(self):
+        """Run search_k on a small corpus; keep iterations tiny for speed."""
+        rng = np.random.default_rng(99)
+        # Small corpus: 40 docs, 2 topics of words
+        docs = []
+        for _ in range(20):
+            docs.append(list(rng.choice(["alpha", "beta", "gamma", "delta", "epsilon"], size=15, replace=True)))
+        for _ in range(20):
+            docs.append(list(rng.choice(["uno", "dos", "tres", "cuatro", "cinco"], size=15, replace=True)))
+        results = stm.search_k(
+            docs,
+            ks=[2, 3],
+            iterations=100,
+            num_samples=2,
+            sample_interval=5,
+            seed=42,
+        )
+        return results
+
+    def test_one_dict_per_k(self, search_k_results):
+        assert len(search_k_results) == 2
+
+    def test_dict_has_required_keys(self, search_k_results):
+        for row in search_k_results:
+            assert "k" in row
+            assert "coherence" in row
+            assert "exclusivity" in row
+
+    def test_no_perplexity_without_held_out(self, search_k_results):
+        for row in search_k_results:
+            assert "perplexity" not in row
+
+    def test_k_values_correct(self, search_k_results):
+        ks = [r["k"] for r in search_k_results]
+        assert ks == [2, 3]
+
+    def test_coherence_is_nonpositive(self, search_k_results):
+        """UMass coherence is ≤ 0."""
+        for row in search_k_results:
+            assert row["coherence"] <= 0.0
+
+    def test_exclusivity_in_unit_interval(self, search_k_results):
+        for row in search_k_results:
+            assert 0.0 <= row["exclusivity"] <= 1.0
+
+    def test_with_held_out_has_perplexity(self):
+        rng = np.random.default_rng(77)
+        docs = []
+        held = []
+        for _ in range(20):
+            docs.append(list(rng.choice(["alpha", "beta", "gamma"], size=10, replace=True)))
+        for _ in range(5):
+            held.append(list(rng.choice(["alpha", "beta", "gamma"], size=10, replace=True)))
+        results = stm.search_k(
+            docs,
+            ks=[2],
+            held_out=held,
+            iterations=100,
+            num_samples=2,
+            sample_interval=5,
+            seed=42,
+        )
+        assert "perplexity" in results[0]
+        assert results[0]["perplexity"] > 0
+
+    def test_all_floats(self, search_k_results):
+        for row in search_k_results:
+            assert isinstance(row["coherence"], float)
+            assert isinstance(row["exclusivity"], float)

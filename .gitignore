@@ -1,0 +1,43 @@
+# Rust build artifacts
+/target/
+
+# Java reference source (not part of the Rust project)
+Mallet/
+
+# Generated corpus and output files
+*.corp
+*.mallet
+topic_word.tsv
+doc_topic.tsv
+
+# Local test and scratch files
+aha.*
+
+# Distribution / wheel output
+dist/
+
+# Compiled Python extension modules (dev builds)
+*.so
+*.pyd
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Egg / setuptools / maturin dev-install artifacts
+*.egg-info/
+*.egg
+
+# Test / type-checker caches
+.pytest_cache/
+.mypy_cache/
+
+# macOS metadata
+.DS_Store
+parity/*.class

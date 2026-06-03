@@ -1,0 +1,451 @@
+"""Tests for STM content covariates (topic_word_by_group, groups, word_contrast).
+
+These tests exercise the FULL STM: the existing tests in test_stm_model.py cover
+prevalence covariates; this file covers:
+  - content-only STM (no prevalence)
+  - combined prevalence + content STM
+  - group wording recovery (bilingual corpus)
+  - validation / error paths
+  - unfitted guards for content properties
+  - determinism of content-fit models
+  - integer group labels
+  - content_names ordering
+
+Do NOT break or duplicate the prevalence tests in tests/test_stm_model.py.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import numpy.testing as npt
+import pytest
+
+from turbotopics import STM, stm
+
+# ---------------------------------------------------------------------------
+# Bilingual corpus vocabulary
+# ---------------------------------------------------------------------------
+# Two topics (weather / food) × two language groups (en / de).
+# Each group uses a COMPLETELY DIFFERENT vocabulary for the same topics —
+# no shared words between English and German.
+# This gives a strong, clean signal for content-covariate recovery.
+
+_EN_WEATHER = ["rain", "sun", "cloud", "wind", "storm"]
+_DE_WEATHER = ["regen", "sonne", "wolke", "sturm", "nebel"]
+_EN_FOOD    = ["bread", "cheese", "wine", "apple", "meat"]
+_DE_FOOD    = ["brot",  "kaese",  "wein",  "apfel", "fleisch"]
+
+_EN_VOCAB = set(_EN_WEATHER) | set(_EN_FOOD)
+_DE_VOCAB = set(_DE_WEATHER) | set(_DE_FOOD)
+
+
+def _make_bilingual_corpus(n_per_cell: int = 50, seed: int = 42):
+    """Return (docs, groups) — 4*n_per_cell docs, 2 groups, 2 topics.
+
+    Structure:
+      n_per_cell EN weather-heavy docs  (10 weather + 2 food tokens)
+      n_per_cell EN food-heavy docs     (10 food + 2 weather tokens)
+      n_per_cell DE weather-heavy docs  (10 weather + 2 food tokens)
+      n_per_cell DE food-heavy docs     (10 food + 2 weather tokens)
+    """
+    rng = np.random.default_rng(seed)
+    docs, groups = [], []
+
+    for _ in range(n_per_cell):
+        docs.append(rng.choice(_EN_WEATHER, size=10).tolist()
+                    + rng.choice(_EN_FOOD, size=2).tolist())
+        groups.append("en")
+    for _ in range(n_per_cell):
+        docs.append(rng.choice(_EN_FOOD, size=10).tolist()
+                    + rng.choice(_EN_WEATHER, size=2).tolist())
+        groups.append("en")
+    for _ in range(n_per_cell):
+        docs.append(rng.choice(_DE_WEATHER, size=10).tolist()
+                    + rng.choice(_DE_FOOD, size=2).tolist())
+        groups.append("de")
+    for _ in range(n_per_cell):
+        docs.append(rng.choice(_DE_FOOD, size=10).tolist()
+                    + rng.choice(_DE_WEATHER, size=2).tolist())
+        groups.append("de")
+
+    return docs, groups
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped fixture: one content-only bilingual fit, reused by all tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def bilingual_content_model():
+    """STM(2, seed=1) fitted content-only on the bilingual corpus (em_iters=60)."""
+    docs, groups = _make_bilingual_corpus(n_per_cell=50, seed=42)
+    m = STM(num_topics=2, seed=1)
+    m.fit(docs, content=groups, em_iters=60)
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Unfitted guards for content-specific properties
+# ---------------------------------------------------------------------------
+
+class TestSTMContentUnfittedGuards:
+    """topic_word_by_group, groups, and word_contrast must raise RuntimeError before fit."""
+
+    def test_topic_word_by_group_raises_before_fit(self):
+        m = STM(2)
+        with pytest.raises(RuntimeError, match="not fitted"):
+            _ = m.topic_word_by_group
+
+    def test_groups_raises_before_fit(self):
+        m = STM(2)
+        with pytest.raises(RuntimeError, match="not fitted"):
+            _ = m.groups
+
+    def test_word_contrast_raises_before_fit(self):
+        m = STM(2)
+        with pytest.raises(RuntimeError, match="not fitted"):
+            m.word_contrast(0, "a", "b")
+
+
+# ---------------------------------------------------------------------------
+# Content-only STM: shapes and basic invariants
+# ---------------------------------------------------------------------------
+
+class TestSTMContentOnlyShapes:
+    """Output shapes for a content-only STM (no prevalence)."""
+
+    def test_topic_word_shape(self, bilingual_content_model):
+        m = bilingual_content_model
+        # 2 topics, 20 unique words (10 EN + 10 DE)
+        assert m.topic_word.shape == (2, 20)
+
+    def test_topic_word_by_group_shape(self, bilingual_content_model):
+        m = bilingual_content_model
+        # (num_topics, num_groups, num_words) = (2, 2, 20)
+        assert m.topic_word_by_group.shape == (2, 2, 20)
+
+    def test_groups_sorted_de_en(self, bilingual_content_model):
+        # Sorted alphabetically: 'de' < 'en'
+        assert bilingual_content_model.groups == ["de", "en"]
+
+    def test_doc_topic_shape(self, bilingual_content_model):
+        # 4 * 50 = 200 docs
+        assert bilingual_content_model.doc_topic.shape == (200, 2)
+
+    def test_doc_topic_rows_sum_to_one(self, bilingual_content_model):
+        npt.assert_allclose(
+            bilingual_content_model.doc_topic.sum(axis=1),
+            np.ones(200),
+            atol=1e-5,
+        )
+
+    def test_topic_word_by_group_rows_are_valid_distributions(self, bilingual_content_model):
+        """Each (topic, group) slice must sum to 1 and be non-negative."""
+        tw = bilingual_content_model.topic_word_by_group
+        npt.assert_allclose(tw.sum(axis=2), np.ones((2, 2)), atol=1e-5)
+        assert (tw >= 0).all()
+
+    def test_vocabulary_length(self, bilingual_content_model):
+        m = bilingual_content_model
+        assert len(m.vocabulary) == m.topic_word.shape[1]
+        assert len(m.vocabulary) == m.topic_word_by_group.shape[2]
+
+    def test_num_topics(self, bilingual_content_model):
+        assert bilingual_content_model.num_topics == 2
+
+
+# ---------------------------------------------------------------------------
+# Content-only STM: prevalence_effects raises RuntimeError; feature_names may
+# return [] (implementation detail) — we assert prevalence_effects raises.
+# ---------------------------------------------------------------------------
+
+class TestSTMContentOnlyPrevalenceGuards:
+    """prevalence_effects must raise RuntimeError when fit without prevalence."""
+
+    def test_prevalence_effects_raises_for_content_only(self, bilingual_content_model):
+        with pytest.raises(RuntimeError):
+            _ = bilingual_content_model.prevalence_effects
+
+
+# ---------------------------------------------------------------------------
+# GROUP WORDING: the core STM content-covariate property
+# ---------------------------------------------------------------------------
+# The key assertion: per-group slices concentrate on that group's language.
+# EN group slice puts >90% of its mass on English words;
+# DE group slice puts >90% of its mass on German words.
+# This holds for BOTH topics (both topics use language-appropriate vocab).
+
+class TestSTMContentGroupWording:
+    """Verify that each group's word distribution uses language-appropriate vocabulary."""
+
+    def _get_vocab_indices(self, vocabulary, word_set):
+        """Return indices of words that appear in both the model vocabulary and word_set."""
+        return [i for i, w in enumerate(vocabulary) if w in word_set]
+
+    def test_en_group_mass_on_en_words(self, bilingual_content_model):
+        """EN group slice must put > 90% of its mass on English words."""
+        m = bilingual_content_model
+        gi_en = m.groups.index("en")
+        en_idx = self._get_vocab_indices(m.vocabulary, _EN_VOCAB)
+        for t in range(2):
+            en_mass = m.topic_word_by_group[t, gi_en, en_idx].sum()
+            assert en_mass > 0.90, (
+                f"Topic {t}: EN group mass on EN words is {en_mass:.4f} < 0.90"
+            )
+
+    def test_de_group_mass_on_de_words(self, bilingual_content_model):
+        """DE group slice must put > 90% of its mass on German words."""
+        m = bilingual_content_model
+        gi_de = m.groups.index("de")
+        de_idx = self._get_vocab_indices(m.vocabulary, _DE_VOCAB)
+        for t in range(2):
+            de_mass = m.topic_word_by_group[t, gi_de, de_idx].sum()
+            assert de_mass > 0.90, (
+                f"Topic {t}: DE group mass on DE words is {de_mass:.4f} < 0.90"
+            )
+
+    def test_en_group_slice_top_words_are_english(self, bilingual_content_model):
+        """Top 5 words of the EN group slice for each topic are all English words."""
+        m = bilingual_content_model
+        gi_en = m.groups.index("en")
+        for t in range(2):
+            top5_idx = np.argsort(m.topic_word_by_group[t, gi_en, :])[-5:]
+            top5_words = {m.vocabulary[i] for i in top5_idx}
+            assert top5_words <= _EN_VOCAB, (
+                f"Topic {t}: EN group top-5 words contain non-English words: "
+                f"{top5_words - _EN_VOCAB}"
+            )
+
+    def test_de_group_slice_top_words_are_german(self, bilingual_content_model):
+        """Top 5 words of the DE group slice for each topic are all German words."""
+        m = bilingual_content_model
+        gi_de = m.groups.index("de")
+        for t in range(2):
+            top5_idx = np.argsort(m.topic_word_by_group[t, gi_de, :])[-5:]
+            top5_words = {m.vocabulary[i] for i in top5_idx}
+            assert top5_words <= _DE_VOCAB, (
+                f"Topic {t}: DE group top-5 words contain non-German words: "
+                f"{top5_words - _DE_VOCAB}"
+            )
+
+    def test_word_contrast_en_vs_de_surfaces_english_words(self, bilingual_content_model):
+        """word_contrast(t, 'en', 'de') returns English words with positive log-ratio."""
+        m = bilingual_content_model
+        for t in range(2):
+            contrast = m.word_contrast(t, "en", "de", 10)
+            contrast_words = {w for w, _ in contrast}
+            # All top-contrast words should be English (they favour EN over DE)
+            assert contrast_words <= _EN_VOCAB, (
+                f"Topic {t}: en-vs-de contrast words contain non-English: "
+                f"{contrast_words - _EN_VOCAB}"
+            )
+            # Top entries should have positive log-ratio
+            top3 = [lr for _, lr in contrast[:3]]
+            assert all(lr > 0 for lr in top3), (
+                f"Topic {t}: expected positive log-ratios for en-vs-de, got {top3}"
+            )
+
+    def test_word_contrast_de_vs_en_surfaces_german_words(self, bilingual_content_model):
+        """word_contrast(t, 'de', 'en') returns German words with positive log-ratio."""
+        m = bilingual_content_model
+        for t in range(2):
+            contrast = m.word_contrast(t, "de", "en", 10)
+            contrast_words = {w for w, _ in contrast}
+            assert contrast_words <= _DE_VOCAB, (
+                f"Topic {t}: de-vs-en contrast words contain non-German: "
+                f"{contrast_words - _DE_VOCAB}"
+            )
+            top3 = [lr for _, lr in contrast[:3]]
+            assert all(lr > 0 for lr in top3), (
+                f"Topic {t}: expected positive log-ratios for de-vs-en, got {top3}"
+            )
+
+    def test_word_contrast_returns_word_float_tuples(self, bilingual_content_model):
+        m = bilingual_content_model
+        result = m.word_contrast(0, "en", "de", 5)
+        assert isinstance(result, list)
+        assert len(result) <= 5
+        for w, lr in result:
+            assert isinstance(w, str)
+            assert isinstance(lr, float)
+            assert np.isfinite(lr)
+
+    def test_word_contrast_log_ratios_are_finite(self, bilingual_content_model):
+        m = bilingual_content_model
+        for t in range(2):
+            for a, b in [("en", "de"), ("de", "en")]:
+                for _, lr in m.word_contrast(t, a, b, 10):
+                    assert np.isfinite(lr)
+
+
+# ---------------------------------------------------------------------------
+# Combined prevalence + content STM
+# ---------------------------------------------------------------------------
+
+class TestSTMCombinedPrevalenceContent:
+    """STM with both prevalence and content covariates."""
+
+    @pytest.fixture(scope="class")
+    def combined_model_and_x(self):
+        """Fit STM with prevalence=X (N,1) and content=groups."""
+        rng = np.random.default_rng(42)
+        docs, groups = _make_bilingual_corpus(n_per_cell=50, seed=42)
+
+        # Binary prevalence covariate: 1 for EN docs, 0 for DE docs
+        x = np.array([1.0] * 100 + [0.0] * 100, dtype=np.float64).reshape(-1, 1)
+
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, x, prevalence_names=["x"], content=groups, em_iters=60)
+        return m, x
+
+    def test_topic_word_by_group_shape(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        assert m.topic_word_by_group.shape == (2, 2, 20)
+
+    def test_prevalence_effects_shape(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        # F=1 prevalence covariate -> (F+1, num_topics-1) = (2, 1)
+        assert m.prevalence_effects.shape == (2, 1)
+
+    def test_groups_present(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        assert m.groups == ["de", "en"]
+
+    def test_feature_names(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        assert m.feature_names == ["intercept", "x"]
+
+    def test_topic_word_by_group_distributions_valid(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        tw = m.topic_word_by_group
+        npt.assert_allclose(tw.sum(axis=2), np.ones((2, 2)), atol=1e-5)
+        assert (tw >= 0).all()
+
+    def test_estimate_effect_runs_and_returns_finite(self, combined_model_and_x):
+        """estimate_effect works on a combined model and returns finite z-scores."""
+        m, x = combined_model_and_x
+        effects = stm.estimate_effect(m.doc_topic, x, feature_names=["x"])
+        for eff in effects:
+            d = eff.as_dict()
+            assert np.isfinite(d["x"]["coef"]), "coef must be finite"
+            assert np.isfinite(d["x"]["z"]),    "z must be finite"
+
+    def test_doc_topic_rows_sum_to_one(self, combined_model_and_x):
+        m, _ = combined_model_and_x
+        npt.assert_allclose(m.doc_topic.sum(axis=1), np.ones(200), atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Integer group labels: groups == ["0", "1"]
+# ---------------------------------------------------------------------------
+
+class TestSTMContentIntegerGroups:
+    def test_int_groups_stringified(self):
+        """Integer group labels should appear as strings in .groups."""
+        docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        groups = [0] * 10 + [1] * 10
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, content=groups, em_iters=10)
+        assert m.groups == ["0", "1"]
+
+    def test_int_groups_fit_succeeds(self):
+        docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        groups = [0] * 10 + [1] * 10
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, content=groups, em_iters=10)
+        assert m.topic_word_by_group.shape == (2, 2, 4)
+
+
+# ---------------------------------------------------------------------------
+# content_names fixes group order
+# ---------------------------------------------------------------------------
+
+class TestSTMContentNames:
+    def test_content_names_en_de_fixes_order(self):
+        """content_names=['en','de'] → groups == ['en','de']."""
+        docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        groups = ["en"] * 10 + ["de"] * 10
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, content=groups, content_names=["en", "de"], em_iters=10)
+        assert m.groups == ["en", "de"]
+
+    def test_content_names_de_en_fixes_order(self):
+        """content_names=['de','en'] → groups == ['de','en']."""
+        docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        groups = ["en"] * 10 + ["de"] * 10
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, content=groups, content_names=["de", "en"], em_iters=10)
+        assert m.groups == ["de", "en"]
+
+    def test_default_order_is_sorted(self):
+        """Without content_names, groups are sorted alphabetically."""
+        docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        groups = ["en"] * 10 + ["de"] * 10
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, content=groups, em_iters=10)
+        assert m.groups == ["de", "en"]   # sorted
+
+
+# ---------------------------------------------------------------------------
+# Validation errors
+# ---------------------------------------------------------------------------
+
+class TestSTMContentValidation:
+    """Validation errors from the fit() signature."""
+
+    def setup_method(self):
+        self.docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
+        self.groups = ["a"] * 10 + ["b"] * 10
+
+    def test_neither_prevalence_nor_content_raises_value_error(self):
+        m = STM(num_topics=2, seed=1)
+        with pytest.raises(ValueError, match="STM needs prevalence and/or content"):
+            m.fit(self.docs, em_iters=5)
+
+    def test_content_length_mismatch_raises_value_error(self):
+        m = STM(num_topics=2, seed=1)
+        with pytest.raises(ValueError):
+            m.fit(self.docs, content=self.groups[:-1], em_iters=5)  # 19 groups, 20 docs
+
+    def test_group_not_in_content_names_raises_value_error(self):
+        m = STM(num_topics=2, seed=1)
+        with pytest.raises(ValueError):
+            m.fit(self.docs, content=self.groups, content_names=["x", "y"], em_iters=5)
+
+    def test_word_contrast_bad_topic_raises_value_error(self):
+        m = STM(num_topics=2, seed=1)
+        m.fit(self.docs, content=self.groups, em_iters=10)
+        with pytest.raises(ValueError):
+            m.word_contrast(99, "a", "b")
+
+    def test_word_contrast_unknown_group_raises_value_error(self):
+        m = STM(num_topics=2, seed=1)
+        m.fit(self.docs, content=self.groups, em_iters=10)
+        with pytest.raises(ValueError):
+            m.word_contrast(0, "z", "a")
+
+
+# ---------------------------------------------------------------------------
+# Determinism: same seed → identical topic_word_by_group
+# ---------------------------------------------------------------------------
+
+class TestSTMContentDeterminism:
+    def test_same_seed_identical_topic_word_by_group(self):
+        docs, groups = _make_bilingual_corpus(n_per_cell=20, seed=7)
+        m1 = STM(num_topics=2, seed=42)
+        m1.fit(docs, content=groups, em_iters=20)
+        m2 = STM(num_topics=2, seed=42)
+        m2.fit(docs, content=groups, em_iters=20)
+        assert np.array_equal(m1.topic_word_by_group, m2.topic_word_by_group), (
+            "Same seed must produce identical topic_word_by_group"
+        )
+
+    def test_same_seed_identical_doc_topic(self):
+        docs, groups = _make_bilingual_corpus(n_per_cell=20, seed=7)
+        m1 = STM(num_topics=2, seed=42)
+        m1.fit(docs, content=groups, em_iters=20)
+        m2 = STM(num_topics=2, seed=42)
+        m2.fit(docs, content=groups, em_iters=20)
+        assert np.array_equal(m1.doc_topic, m2.doc_topic), (
+            "Same seed must produce identical doc_topic"
+        )

@@ -1,0 +1,808 @@
+from __future__ import annotations
+
+from typing import Any, Optional, Sequence, Union, overload
+import numpy
+import numpy.typing
+
+DEFAULT_TOKEN_REGEX: str
+__version__: str
+
+
+def tokenize(
+    text: str,
+    *,
+    lowercase: bool = True,
+    stopwords: list[str] | None = None,
+    token_regex: str | None = None,
+    min_length: int = 1,
+) -> list[str]:
+    """Tokenize a string with the corpus loader's regex; lowercase, drop short
+    tokens and stopwords. Convenience for building list[list[str]] input."""
+    ...
+
+
+class Corpus:
+    """A preprocessed token corpus for LDA training."""
+
+    @staticmethod
+    def from_documents(
+        documents: list[list[str]],
+        *,
+        doc_names: list[str] | None = None,
+        doc_labels: list[str] | None = None,
+        stopwords: list[str] | None = None,
+        min_doc_freq: int = 1,
+        max_doc_fraction: float = 1.0,
+    ) -> Corpus:
+        """Build a Corpus from a list of token lists."""
+        ...
+
+    @staticmethod
+    def from_text_file(
+        path: str,
+        *,
+        format: str = "plain",
+        id_field: bool = False,
+        id_column: int = 0,
+        label_column: int | None = 1,
+        text_column: int = 2,
+        token_regex: str | None = None,
+        stopwords: list[str] | None = None,
+        min_doc_freq: int = 1,
+        max_doc_fraction: float = 1.0,
+    ) -> Corpus:
+        """Build a Corpus by reading and tokenizing a text file."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> Corpus:
+        """Load a binary corpus previously saved by .save() or the preprocess CLI."""
+        ...
+
+    def save(self, path: str) -> None:
+        """Serialize the corpus to a binary file."""
+        ...
+
+    @property
+    def num_docs(self) -> int:
+        """Number of documents in the corpus."""
+        ...
+
+    @property
+    def num_words(self) -> int:
+        """Vocabulary size (number of unique word types)."""
+        ...
+
+    @property
+    def total_tokens(self) -> int:
+        """Total number of tokens across all documents."""
+        ...
+
+    @property
+    def vocabulary(self) -> list[str]:
+        """Ordered list of vocabulary terms."""
+        ...
+
+    @property
+    def doc_names(self) -> list[str]:
+        """Document identifiers, one per document."""
+        ...
+
+    @property
+    def doc_labels(self) -> list[str]:
+        """Document labels, one per document."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class DMR:
+    """Dirichlet-Multinomial Regression topic model (Mimno & McCallum 2008).
+
+    Like LDA, but the per-document topic prior is log-linear in document
+    features: alpha_{d,t} = exp(lambda_t . x_d). After fitting, the learned
+    weights are in `feature_effects`.
+    """
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        beta: float = 0.01,
+        optimize_interval: int = 50,
+        burn_in: int = 200,
+        seed: int = 42,
+        prior_variance: float = 1.0,
+        lbfgs_iters: int = 20,
+    ) -> None:
+        """Create an unfitted DMR model. prior_variance is the Gaussian prior
+        variance on the feature weights; lbfgs_iters caps L-BFGS steps per round."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        feature_names: list[str] | None = None,
+        iterations: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        progress: Optional[object] = None,
+        progress_interval: int = 50,
+    ) -> None:
+        """Fit the model. features is (num_docs, F); an intercept column is
+        prepended. feature_names (length F) names the columns."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """phi matrix of shape (num_topics, num_words)."""
+        ...
+
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """theta matrix of shape (num_docs, num_topics); rows sum to 1."""
+        ...
+
+    @property
+    def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Learned weights lambda, shape (num_topics, num_features). Column 0 is
+        the intercept; positive entries raise that topic's prevalence."""
+        ...
+
+    @property
+    def feature_names(self) -> list[str]:
+        """Feature names aligned with feature_effects columns ('intercept' first)."""
+        ...
+
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]:
+        """Top n (word, probability) pairs for one or all topics."""
+        ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]:
+        """UMass topic coherence per topic, shape (num_topics,)."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class CTM:
+    """Correlated Topic Model (Blei & Lafferty; STM's logistic-normal core).
+    Topics drawn from a logistic-normal prior with full covariance, so they can
+    correlate (unlike LDA's Dirichlet). Fit by variational EM (STM's Laplace
+    E-step)."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        sigma_shrink: float = 0.0,
+        seed: int = 42,
+        init: str = "spectral",
+    ) -> None:
+        """num_topics >= 2. sigma_shrink in [0,1] shrinks topic covariance toward
+        diagonal. init is "spectral" (default; deterministic anchor-word init,
+        matching STM's default — seed is then irrelevant) or "random" (seeded)."""
+        ...
+
+    def fit(self, data: Corpus | Sequence[Sequence[str]], *, em_iters: int = 50) -> None: ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_correlation(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Topic-correlation matrix (num_topics, num_topics) from theta across docs."""
+        ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
+class STM:
+    """Structural Topic Model (Roberts, Stewart & Tingley): the correlated-topic
+    core (CTM) plus prevalence covariates — the prior topic mean is a regression
+    on document covariates (mu_d = X_d gamma)."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        sigma_shrink: float = 0.0,
+        seed: int = 42,
+        init: str = "spectral",
+    ) -> None:
+        """init is "spectral" (default; deterministic anchor-word init matching
+        STM's default) or "random" (seeded). With a content model the per-group
+        beta is always random."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        prevalence: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        *,
+        prevalence_names: list[str] | None = None,
+        content: Sequence[str] | Sequence[int] | None = None,
+        content_names: list[str] | None = None,
+        em_iters: int = 50,
+    ) -> None:
+        """Fit. prevalence is (num_docs, F) covariates driving topic proportions
+        (mu_d = X_d gamma; intercept prepended). content is one group label per
+        document, making topic-word distributions vary by group (SAGE). At least
+        one of prevalence/content must be given."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_correlation(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """gamma, shape (num_features, num_topics-1). RuntimeError if no
+        prevalence. Prefer turbotopics.stm.estimate_effect for inference."""
+        ...
+    @property
+    def feature_names(self) -> list[str]: ...
+    @property
+    def topic_word_by_group(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-group topic-word, shape (num_topics, num_groups, num_words).
+        RuntimeError if fit without content covariates."""
+        ...
+    @property
+    def groups(self) -> list[str]:
+        """Content group names (axis-1 of topic_word_by_group). RuntimeError if
+        fit without content covariates."""
+        ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+
+    def word_contrast(
+        self, topic: int, group_a: str | int, group_b: str | int, n: int = 10
+    ) -> list[tuple[str, float]]:
+        """Words most distinguishing how `topic` is worded in group_a vs group_b
+        (log word-prob ratio; positive favours group_a). Requires content."""
+        ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
+class HDP:
+    """Hierarchical Dirichlet Process topic model (Teh, Jordan, Beal & Blei
+    2006): the nonparametric LDA that *infers* the number of topics rather than
+    fixing K. Fit by the direct-assignment Gibbs sampler (Chinese Restaurant
+    Franchise). The inferred topic count is read from `num_topics` after fit."""
+
+    def __init__(
+        self,
+        *,
+        alpha: float = 1.0,
+        gamma: float = 1.0,
+        eta: float = 0.01,
+        seed: int = 42,
+        resample_conc: bool = True,
+    ) -> None:
+        """alpha/gamma are the document- and corpus-level DP concentrations
+        (initial values; resampled from the data when resample_conc=True, the
+        default). eta is the topic-word Dirichlet (base measure). alpha, gamma,
+        eta must be > 0."""
+        ...
+
+    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 150) -> None:
+        """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Topic-word matrix, shape (num_topics, num_words); rows sum to 1."""
+        ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Document-topic matrix, shape (num_docs, num_topics); rows sum to 1."""
+        ...
+    @property
+    def num_topics(self) -> int:
+        """The inferred number of topics K (RuntimeError before fit)."""
+        ...
+    @property
+    def alpha(self) -> float:
+        """The fitted document-level concentration alpha0."""
+        ...
+    @property
+    def gamma(self) -> float:
+        """The fitted corpus-level concentration gamma."""
+        ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
+class DTM:
+    """Dynamic Topic Model (Blei & Lafferty 2006): topics whose word
+    distributions evolve across time slices via a Gaussian state-space model.
+    Fit variationally with Kalman smoothing (a port of Blei's C dtm /
+    gensim's LdaSeqModel). Query a topic's distribution at a slice with
+    topic_word(time) and a word's trajectory with word_evolution(topic, word)."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        alpha: float = 0.01,
+        chain_variance: float = 0.005,
+        obs_variance: float = 0.5,
+        seed: int = 42,
+    ) -> None:
+        """num_topics >= 2. chain_variance controls how much a topic may drift
+        between adjacent slices (larger = freer). alpha, chain_variance,
+        obs_variance must be > 0."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        times: Sequence[int],
+        *,
+        em_iters: int = 20,
+    ) -> None:
+        """Fit by variational EM. `times` is each document's integer time-slice
+        index (0-based, contiguous); the slice count is max(times)+1."""
+        ...
+
+    def topic_word(self, time: int) -> numpy.typing.NDArray[numpy.float64]:
+        """Topic-word matrix at `time`, shape (num_topics, num_words); rows sum to 1."""
+        ...
+
+    def word_evolution(
+        self, topic: int, word: str | int
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """A word's probability in `topic` across slices, shape (num_times,)."""
+        ...
+
+    def top_words(self, topic: int, time: int, n: int = 10) -> list[tuple[str, float]]:
+        """Top n words for `topic` at slice `time` as (word, probability) pairs."""
+        ...
+
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def num_times(self) -> int: ...
+    @property
+    def bound(self) -> float:
+        """The final variational bound (ELBO) reached during fitting."""
+        ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+
+    def __repr__(self) -> str: ...
+
+
+class SupervisedLDA:
+    """Supervised LDA (Blei & McAuliffe 2007): LDA where each document has a
+    real-valued response y_d ~ N(eta^T zbar_d, sigma^2) regressed on its topic
+    usage. Topics are shaped to predict the response; `coefficients` (eta) report
+    how each topic moves y. Fit by variational EM; `predict` scores new docs."""
+
+    def __init__(self, num_topics: int, *, alpha: float = 0.1, seed: int = 42) -> None:
+        """num_topics >= 2. alpha is the Dirichlet concentration on doc-topic
+        proportions; both must be > 0."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        y: Sequence[float],
+        *,
+        em_iters: int = 25,
+        var_iters: int = 15,
+    ) -> None:
+        """Fit by variational EM. `y` is the per-document response (length =
+        number of documents)."""
+        ...
+
+    def predict(
+        self, data: Corpus | Sequence[Sequence[str]], *, var_iters: int = 20
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Predict y-hat for new documents. Out-of-vocabulary words are ignored.
+        Returns a 1-D array of length = number of documents."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def coefficients(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Regression coefficients eta, shape (num_topics,) — how each topic
+        moves the response per unit of topic frequency."""
+        ...
+    @property
+    def sigma2(self) -> float:
+        """The fitted response variance sigma^2."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
+class SAGE:
+    """Content-covariate topic model (SAGE / the STM content model). Topics are
+    shared but each topic's word distribution varies by a document-level group
+    covariate, so you can read how a topic is worded differently across groups."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        alpha: float = 0.1,
+        prior_variance: float = 1.0,
+        optimize_interval: int = 50,
+        burn_in: int = 100,
+        seed: int = 42,
+        lbfgs_iters: int = 20,
+    ) -> None: ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        groups: Sequence[str] | Sequence[int],
+        *,
+        group_names: list[str] | None = None,
+        iterations: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        progress: Optional[object] = None,
+        progress_interval: int = 50,
+    ) -> None:
+        """Fit. groups is one group label per document (strings or ints);
+        group_names fixes group order (default: sorted union)."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-group topic-word, shape (num_topics, num_groups, num_words)."""
+        ...
+
+    @property
+    def topic_word_marginal(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Group-averaged topic-word, shape (num_topics, num_words)."""
+        ...
+
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """theta, shape (num_docs, num_topics); rows sum to 1."""
+        ...
+
+    @property
+    def groups(self) -> list[str]:
+        """Group names, in the index order of topic_word's second axis."""
+        ...
+
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def num_groups(self) -> int: ...
+
+    def top_words(
+        self, topic: int, *, group: str | int | None = None, n: int = 10
+    ) -> list[tuple[str, float]]:
+        """Top n (word, prob) for a topic; for a given group (name/index) or the
+        group-averaged distribution when group is None."""
+        ...
+
+    def word_contrast(
+        self, topic: int, group_a: str | int, group_b: str | int, n: int = 10
+    ) -> list[tuple[str, float]]:
+        """Words most distinguishing how `topic` is worded in group_a vs group_b,
+        by log word-probability ratio (positive favours group_a)."""
+        ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
+class LabeledLDA:
+    """Labeled LDA (Ramage et al. 2009): supervised topics constrained to each
+    document's label set. The number of topics equals the number of labels."""
+
+    def __init__(self, *, alpha: float = 0.1, beta: float = 0.01, seed: int = 42) -> None:
+        """Create an unfitted model. alpha is the symmetric per-topic prior."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        labels: Sequence[Sequence[str]],
+        *,
+        label_names: list[str] | None = None,
+        iterations: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        progress: Optional[object] = None,
+        progress_interval: int = 50,
+    ) -> None:
+        """Fit the model. labels is one label-list per document; the topic set is
+        the union of all labels (or label_names, which fixes topic order). An
+        empty label list leaves that document unconstrained (all topics)."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """phi matrix of shape (num_topics, num_words)."""
+        ...
+
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """theta matrix (num_docs, num_topics); only a document's label topics
+        are non-zero, rows sum to 1."""
+        ...
+
+    @property
+    def labels(self) -> list[str]:
+        """Label name for each topic, in topic (column) order."""
+        ...
+
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+
+    @overload
+    def top_words(self, n: int = ..., *, topic: int) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ...) -> list[list[tuple[str, float]]]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]:
+        """Top n (word, probability) pairs for one or all topics."""
+        ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]:
+        """UMass topic coherence per topic, shape (num_topics,)."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class LDA:
+    """Sparse LDA topic model (MALLET's algorithm) implemented in Rust."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        alpha_sum: float | None = None,
+        beta: float = 0.01,
+        optimize_interval: int = 50,
+        burn_in: int = 200,
+        seed: int = 42,
+        num_threads: int = 1,
+    ) -> None:
+        """Create an LDA model. alpha_sum defaults to num_topics if None.
+
+        num_threads > 1 enables MALLET-style approximate parallel Gibbs
+        sampling in fit() (faster on multicore; results differ from the exact
+        single-threaded path but remain deterministic for a fixed
+        num_threads + seed). num_threads=1 is the exact, CLI-identical path.
+        """
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        progress: Optional[object] = None,
+        progress_interval: int = 50,
+    ) -> None:
+        """Run Gibbs sampling to fit the model on data."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """phi matrix of shape (num_topics, num_words)."""
+        ...
+
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """theta matrix of shape (num_docs, num_topics); rows sum to 1."""
+        ...
+
+    @property
+    def vocabulary(self) -> list[str]:
+        """Vocabulary list; column order matches topic_word."""
+        ...
+
+    @property
+    def doc_names(self) -> list[str]:
+        """Document names; row order matches doc_topic."""
+        ...
+
+    @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-topic alpha (Dirichlet prior), shape (num_topics,)."""
+        ...
+
+    @property
+    def beta(self) -> float:
+        """Scalar beta hyperparameter."""
+        ...
+
+    @property
+    def num_topics(self) -> int:
+        """Number of topics (available before fit)."""
+        ...
+
+    @overload
+    def top_words(
+        self, n: int = ..., *, topic: int
+    ) -> list[tuple[str, float]]: ...
+
+    @overload
+    def top_words(
+        self, n: int = ..., *, topic: None = ...
+    ) -> list[list[tuple[str, float]]]: ...
+
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]:
+        """Return top n (word, probability) pairs for one or all topics."""
+        ...
+
+    def log_likelihood(self) -> float:
+        """MALLET-formula model log-likelihood of the final sampler state (in-sample)."""
+        ...
+
+    def evaluate(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        num_particles: int = 10,
+        seed: int | None = None,
+    ) -> dict[str, Union[float, int]]:
+        """Held-out evaluation via the Wallach (2009) left-to-right estimator.
+
+        Returns a dict with `log_likelihood`, `perplexity`, `num_tokens`, `num_oov`.
+        Out-of-vocabulary tokens (not seen in training) are dropped and counted.
+        """
+        ...
+
+    def perplexity(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        num_particles: int = 10,
+        seed: int | None = None,
+    ) -> float:
+        """Held-out perplexity (lower is better); convenience wrapper over evaluate()."""
+        ...
+
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]:
+        """UMass topic coherence per topic, shape (num_topics,). Higher (nearer 0) is better."""
+        ...
+
+    def diagnostics(self, n: int = 10) -> list[dict[str, Any]]:
+        """Per-topic diagnostics (MALLET-style), one dict per topic.
+
+        Keys: topic, tokens, coherence, exclusivity, effective_words,
+        rank1_docs, alpha, top_words. Suitable for pandas.DataFrame(...).
+        """
+        ...
+
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic distributions for new, unseen documents under
+        the fitted model. Returns shape (num_new_docs, num_topics); rows sum to 1."""
+        ...
+
+    def top_documents(self, topic: int, n: int = 10) -> list[tuple[str, float]]:
+        """The n training documents most associated with `topic`, as
+        (doc_name, weight) pairs sorted by descending theta."""
+        ...
+
+    @property
+    def topic_divergence(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Pairwise Jensen-Shannon divergence between topic-word distributions,
+        shape (num_topics, num_topics), base 2 in [0, 1]; 0 on the diagonal."""
+        ...
+
+    def similar_documents(self, doc: int, n: int = 10) -> list[tuple[str, float]]:
+        """The n training documents most similar to document `doc` (by index),
+        as (doc_name, divergence) pairs sorted by ascending JS divergence."""
+        ...
+
+    def save_topic_word(self, path: str) -> None:
+        """Write topic-word matrix to a TSV file (topic, word, probability)."""
+        ...
+
+    def save_doc_topic(self, path: str) -> None:
+        """Write doc-topic matrix to a TSV file (doc[, label], topic_0, ...)."""
+        ...
+
+    def __repr__(self) -> str: ...

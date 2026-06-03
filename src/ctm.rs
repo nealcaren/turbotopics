@@ -1,0 +1,819 @@
+//! Correlated Topic Model / STM core — logistic-normal topics fit by
+//! variational EM (Laplace approximation). This is a faithful port of STM's
+//! C++ E-step (`lhoodcpp`/`gradcpp`/`hpbcpp` in bstewart/stm), the inference
+//! paradigm that distinguishes STM from the Gibbs models elsewhere in the crate.
+//!
+//! Per document the topic proportions are `θ_d = softmax([η_d, 0])` with
+//! `η_d ∈ ℝ^{K-1}` (the last topic is the softmax reference) and a Gaussian
+//! prior `η_d ~ N(μ, Σ)`. The full covariance `Σ` lets topics correlate, which
+//! a Dirichlet prior (LDA) cannot represent.
+//!
+//! E-step (per doc): minimize the variational objective over `η` (L-BFGS on the
+//! exact objective + gradient), then form the Laplace covariance `ν = H⁻¹` and
+//! the expected token-topic counts `φ` from the Hessian. M-step: update `β` from
+//! summed `φ`, `μ` from the mean `η`, and `Σ` from `ν + (η-μ)(η-μ)ᵀ`.
+
+use rand::Rng;
+
+use crate::dmr::lbfgs_minimize;
+use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
+
+/// `exp(η)` extended with a trailing 1 (the reference category), length K.
+fn expeta(eta: &[f64]) -> Vec<f64> {
+    let mut e = Vec::with_capacity(eta.len() + 1);
+    for &x in eta {
+        e.push(x.exp());
+    }
+    e.push(1.0);
+    e
+}
+
+/// STM `lhoodcpp`: the per-document variational objective (to MINIMIZE over η).
+pub fn ctm_lhood(
+    eta: &[f64],
+    beta: &[Vec<f64>],
+    words: &[usize],
+    counts: &[f64],
+    mu: &[f64],
+    siginv: &[f64],
+) -> f64 {
+    let km1 = eta.len();
+    let k = km1 + 1;
+    let e = expeta(eta);
+    let sum_e: f64 = e.iter().sum();
+    let ndoc: f64 = counts.iter().sum();
+
+    let mut part1 = 0.0;
+    for (wi, &w) in words.iter().enumerate() {
+        let mut s = 0.0;
+        for t in 0..k {
+            s += e[t] * beta[t][w];
+        }
+        part1 += counts[wi] * s.ln();
+    }
+    part1 -= ndoc * sum_e.ln();
+
+    let mut part2 = 0.0;
+    for i in 0..km1 {
+        let di = eta[i] - mu[i];
+        for j in 0..km1 {
+            part2 += di * siginv[i * km1 + j] * (eta[j] - mu[j]);
+        }
+    }
+    0.5 * part2 - part1
+}
+
+/// STM `gradcpp`: gradient of `ctm_lhood` w.r.t. η (length K-1).
+pub fn ctm_grad(
+    eta: &[f64],
+    beta: &[Vec<f64>],
+    words: &[usize],
+    counts: &[f64],
+    mu: &[f64],
+    siginv: &[f64],
+) -> Vec<f64> {
+    let km1 = eta.len();
+    let k = km1 + 1;
+    let e = expeta(eta);
+    let sum_e: f64 = e.iter().sum();
+    let ndoc: f64 = counts.iter().sum();
+
+    // part1 (length K) = Σ_w counts[w]·φ_{·,w} − (ndoc/Σe)·e , where φ_{t,w} = e_t β_{t,w}/Σ_t e_t β_{t,w}.
+    let mut part1 = vec![0.0f64; k];
+    for (wi, &w) in words.iter().enumerate() {
+        let mut colsum = 0.0;
+        for t in 0..k {
+            colsum += e[t] * beta[t][w];
+        }
+        let c = counts[wi] / colsum;
+        for t in 0..k {
+            part1[t] += c * e[t] * beta[t][w];
+        }
+    }
+    let f = ndoc / sum_e;
+    for t in 0..k {
+        part1[t] -= f * e[t];
+    }
+
+    // grad = siginv(η-μ) − part1[0..K-1]
+    let mut g = vec![0.0f64; km1];
+    for i in 0..km1 {
+        let mut s = 0.0;
+        for j in 0..km1 {
+            s += siginv[i * km1 + j] * (eta[j] - mu[j]);
+        }
+        g[i] = s - part1[i];
+    }
+    g
+}
+
+/// Result of STM `hpbcpp`: the Laplace covariance, expected token-topic counts,
+/// and the per-document evidence bound.
+pub struct HpbResult {
+    pub nu: Vec<f64>,        // (K-1)×(K-1) variational covariance H⁻¹
+    pub phi: Vec<Vec<f64>>,  // K×W expected token-topic counts for the doc's words
+    pub bound: f64,
+}
+
+/// STM `hpbcpp`: form the Hessian at η, invert it (with a diagonal-dominance
+/// fallback when indefinite) to get ν, and the expected counts φ and bound.
+pub fn ctm_hpb(
+    eta: &[f64],
+    beta: &[Vec<f64>],
+    words: &[usize],
+    counts: &[f64],
+    mu: &[f64],
+    siginv: &[f64],
+    entropy: f64,
+) -> HpbResult {
+    let km1 = eta.len();
+    let k = km1 + 1;
+    let w_n = words.len();
+    let e = expeta(eta);
+    let sum_e: f64 = e.iter().sum();
+    let ndoc: f64 = counts.iter().sum();
+    let theta: Vec<f64> = e.iter().map(|x| x / sum_e).collect();
+
+    // EB[t][w] = sqrt(counts[w])·φ_{t,w}, φ_{t,w}=e_t β_{t,w}/Σ_t e_t β_{t,w}.
+    let mut eb = vec![vec![0.0f64; w_n]; k];
+    for (wi, &w) in words.iter().enumerate() {
+        let mut colsum = 0.0;
+        for t in 0..k {
+            colsum += e[t] * beta[t][w];
+        }
+        let sq = counts[wi].sqrt();
+        for t in 0..k {
+            eb[t][wi] = e[t] * beta[t][w] * sq / colsum;
+        }
+    }
+
+    // hess (K×K) = EB·EBᵀ − ndoc·θθᵀ
+    let mut hess = vec![0.0f64; k * k];
+    for a in 0..k {
+        for b in 0..k {
+            let mut s = 0.0;
+            for wi in 0..w_n {
+                s += eb[a][wi] * eb[b][wi];
+            }
+            hess[a * k + b] = s - ndoc * theta[a] * theta[b];
+        }
+    }
+    // Turn EB into φ = counts[w]·responsibility (multiply rows by sqrt(counts) again).
+    for (wi, &_w) in words.iter().enumerate() {
+        let sq = counts[wi].sqrt();
+        for t in 0..k {
+            eb[t][wi] *= sq;
+        }
+    }
+    // diag(hess) −= rowSums(φ) − ndoc·θ
+    for t in 0..k {
+        let row_sum: f64 = (0..w_n).map(|wi| eb[t][wi]).sum();
+        hess[t * k + t] -= row_sum - ndoc * theta[t];
+    }
+
+    // Drop the last (reference) row/col → (K-1)×(K-1), then add siginv.
+    let mut h = vec![0.0f64; km1 * km1];
+    for i in 0..km1 {
+        for j in 0..km1 {
+            h[i * km1 + j] = hess[i * k + j] + siginv[i * km1 + j];
+        }
+    }
+
+    // ν = H⁻¹, with STM's diagonal-dominance fallback if H isn't PD.
+    let (nu, half_ld) = match cholesky(&h, km1) {
+        Some(l) => (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1)),
+        None => {
+            make_diagonally_dominant(&mut h, km1);
+            let l = cholesky(&h, km1).expect("PD after diagonal dominance");
+            (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1))
+        }
+    };
+    let det_term = -half_ld; // STM: −Σ log diag(chol(H))
+
+    // bound = Σ_w counts[w]·log(Σ_t θ_t β_{t,w}) + detTerm − 0.5 (η-μ)ᵀΣ⁻¹(η-μ) − entropy
+    let mut ll = 0.0;
+    for (wi, &w) in words.iter().enumerate() {
+        let mut s = 0.0;
+        for t in 0..k {
+            s += theta[t] * beta[t][w];
+        }
+        ll += counts[wi] * s.ln();
+    }
+    let mut quad = 0.0;
+    for i in 0..km1 {
+        let di = eta[i] - mu[i];
+        for j in 0..km1 {
+            quad += di * siginv[i * km1 + j] * (eta[j] - mu[j]);
+        }
+    }
+    let bound = ll + det_term - 0.5 * quad - entropy;
+
+    HpbResult { nu, phi: eb, bound }
+}
+
+/// A fitted CTM/STM model.
+pub struct CtmModel {
+    pub num_topics: usize,
+    pub num_types: usize,
+    pub beta: Vec<Vec<f64>>, // K×V topic-word
+    pub mu: Vec<f64>,        // K-1 prior mean (no-covariate case)
+    pub sigma: Vec<f64>,     // (K-1)² prior covariance
+    pub lambda: Vec<Vec<f64>>, // per-doc variational means η (K-1)
+    /// Prevalence coefficients γ (num_features × (K-1)), `Some` when prevalence
+    /// covariates were supplied: `μ_d = X_d γ`. The last topic is the reference.
+    pub gamma: Option<Vec<Vec<f64>>>,
+    /// Per-group topic-word distributions (G × K × V), `Some` when content
+    /// covariates were supplied (the SAGE content model inside STM). `beta` is
+    /// then the group-averaged topic-word.
+    pub content_beta: Option<Vec<Vec<Vec<f64>>>>,
+    pub num_groups: usize,
+}
+
+/// Build per-group topic-word β (G×K×V) from the SAGE content deviations:
+/// `β_{g,k,v} = softmax_v(m_v + κᵀ_{k,v} + κᶜ_{g,v} + κᴵ_{k,g,v})`.
+fn build_content_beta(
+    m: &[f64],
+    kt: &[Vec<f64>],
+    kc: &[Vec<f64>],
+    ki: &[Vec<f64>],
+    k: usize,
+    g: usize,
+    v: usize,
+) -> Vec<Vec<Vec<f64>>> {
+    let mut out = vec![vec![vec![0.0f64; v]; k]; g];
+    for topic in 0..k {
+        for grp in 0..g {
+            let c = topic * g + grp;
+            let mut max = f64::NEG_INFINITY;
+            let mut eta = vec![0.0f64; v];
+            for w in 0..v {
+                let e = m[w] + kt[topic][w] + kc[grp][w] + ki[c][w];
+                eta[w] = e;
+                if e > max {
+                    max = e;
+                }
+            }
+            let mut z = 0.0;
+            for w in 0..v {
+                z += (eta[w] - max).exp();
+            }
+            for w in 0..v {
+                out[grp][topic][w] = (eta[w] - max).exp() / z;
+            }
+        }
+    }
+    out
+}
+
+/// MAP-update the SAGE content deviations κ from soft (topic×group×word)
+/// expected counts via L-BFGS, then rebuild per-group β. `counts[k*G+g][v]` are
+/// the variational expected token counts; `prior_variance` is the Gaussian
+/// prior on κ.
+#[allow(clippy::too_many_arguments)]
+fn optimize_content(
+    m: &[f64],
+    kappa_t: &mut [Vec<f64>],
+    kappa_c: &mut [Vec<f64>],
+    kappa_i: &mut [Vec<f64>],
+    counts: &[Vec<f64>],
+    k: usize,
+    g: usize,
+    v: usize,
+    prior_variance: f64,
+    max_iter: usize,
+) -> Vec<Vec<Vec<f64>>> {
+    let n_t = k * v;
+    let n_c = g * v;
+    let totals: Vec<f64> = counts.iter().map(|row| row.iter().sum()).collect();
+
+    let mut x0 = Vec::with_capacity(n_t + n_c + k * g * v);
+    for kt in kappa_t.iter() {
+        x0.extend_from_slice(kt);
+    }
+    for kc in kappa_c.iter() {
+        x0.extend_from_slice(kc);
+    }
+    for ki in kappa_i.iter() {
+        x0.extend_from_slice(ki);
+    }
+    let inv_var = 1.0 / prior_variance;
+
+    let x = lbfgs_minimize(
+        x0,
+        |flat| {
+            let kt = |t: usize, w: usize| flat[t * v + w];
+            let kc = |grp: usize, w: usize| flat[n_t + grp * v + w];
+            let ki = |c: usize, w: usize| flat[n_t + n_c + c * v + w];
+            let mut value = 0.0f64;
+            let mut grad = vec![0.0f64; flat.len()];
+            for topic in 0..k {
+                for grp in 0..g {
+                    let c = topic * g + grp;
+                    let nkg = totals[c];
+                    let mut max = f64::NEG_INFINITY;
+                    let mut eta = vec![0.0f64; v];
+                    for w in 0..v {
+                        let e = m[w] + kt(topic, w) + kc(grp, w) + ki(c, w);
+                        eta[w] = e;
+                        if e > max {
+                            max = e;
+                        }
+                    }
+                    let mut z = 0.0;
+                    for w in 0..v {
+                        z += (eta[w] - max).exp();
+                    }
+                    let log_z = max + z.ln();
+                    for w in 0..v {
+                        let n = counts[c][w];
+                        value += n * (eta[w] - log_z);
+                        let beta = (eta[w] - log_z).exp();
+                        let resid = n - nkg * beta;
+                        grad[topic * v + w] += resid;
+                        grad[n_t + grp * v + w] += resid;
+                        grad[n_t + n_c + c * v + w] += resid;
+                    }
+                }
+            }
+            for (i, &xi) in flat.iter().enumerate() {
+                value -= 0.5 * inv_var * xi * xi;
+                grad[i] -= inv_var * xi;
+            }
+            (-value, grad.iter().map(|gv| -gv).collect())
+        },
+        max_iter,
+        7,
+        1e-4,
+    );
+
+    for t in 0..k {
+        kappa_t[t].copy_from_slice(&x[t * v..(t + 1) * v]);
+    }
+    for grp in 0..g {
+        let off = n_t + grp * v;
+        kappa_c[grp].copy_from_slice(&x[off..off + v]);
+    }
+    for c in 0..(k * g) {
+        let off = n_t + n_c + c * v;
+        kappa_i[c].copy_from_slice(&x[off..off + v]);
+    }
+    build_content_beta(m, kappa_t, kappa_c, kappa_i, k, g, v)
+}
+
+impl CtmModel {
+    /// Per-document topic proportions θ = softmax([η, 0]).
+    pub fn doc_topics(&self) -> Vec<Vec<f64>> {
+        self.lambda
+            .iter()
+            .map(|eta| {
+                let e = expeta(eta);
+                let s: f64 = e.iter().sum();
+                e.iter().map(|x| x / s).collect()
+            })
+            .collect()
+    }
+
+    /// Topic correlation matrix: the correlation of the topic proportions θ
+    /// across documents (STM's practical `topicCorr`). Symmetric, unit diagonal,
+    /// defined over all K topics — captures which topics co-occur.
+    pub fn topic_correlation(&self) -> Vec<Vec<f64>> {
+        let k = self.num_topics;
+        let theta = self.doc_topics();
+        let d = theta.len().max(1) as f64;
+
+        let mut mean = vec![0.0f64; k];
+        for row in &theta {
+            for t in 0..k {
+                mean[t] += row[t];
+            }
+        }
+        for t in 0..k {
+            mean[t] /= d;
+        }
+        let mut cov = vec![vec![0.0f64; k]; k];
+        for row in &theta {
+            for i in 0..k {
+                for j in 0..k {
+                    cov[i][j] += (row[i] - mean[i]) * (row[j] - mean[j]);
+                }
+            }
+        }
+        let mut corr = vec![vec![0.0f64; k]; k];
+        for i in 0..k {
+            for j in 0..k {
+                let den = (cov[i][i] * cov[j][j]).sqrt();
+                corr[i][j] = if den > 0.0 {
+                    cov[i][j] / den
+                } else if i == j {
+                    1.0
+                } else {
+                    0.0
+                };
+            }
+        }
+        corr
+    }
+}
+
+/// Convert a token sequence to (unique word ids, counts). A BTreeMap keeps the
+/// word order deterministic (sorted), so float summation order — and thus the
+/// fitted model — is fully reproducible for a given seed.
+fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
+    use std::collections::BTreeMap;
+    let mut m: BTreeMap<usize, f64> = BTreeMap::new();
+    for &w in doc {
+        *m.entry(w as usize).or_insert(0.0) += 1.0;
+    }
+    let words: Vec<usize> = m.keys().copied().collect();
+    let counts: Vec<f64> = words.iter().map(|w| m[w]).collect();
+    (words, counts)
+}
+
+/// Ridge regression of the variational means Λ (D×(K-1)) on prevalence design
+/// `x` (D×F): `γ = (XᵀX + ridge·I)⁻¹ Xᵀ Λ` (F×(K-1)).
+fn fit_gamma(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, km1: usize, ridge: f64) -> Vec<Vec<f64>> {
+    let mut xtx = vec![0.0f64; f * f];
+    for xd in x {
+        for a in 0..f {
+            for b in 0..f {
+                xtx[a * f + b] += xd[a] * xd[b];
+            }
+        }
+    }
+    for a in 0..f {
+        xtx[a * f + a] += ridge;
+    }
+    let inv = spd_inverse(&xtx, f).unwrap_or_else(|| {
+        let mut m = xtx.clone();
+        make_diagonally_dominant(&mut m, f);
+        spd_inverse(&m, f).unwrap()
+    });
+    // XᵀΛ (F×(K-1))
+    let mut xtl = vec![vec![0.0f64; km1]; f];
+    for (d, xd) in x.iter().enumerate() {
+        for a in 0..f {
+            for t in 0..km1 {
+                xtl[a][t] += xd[a] * lambda[d][t];
+            }
+        }
+    }
+    let mut g = vec![vec![0.0f64; km1]; f];
+    for a in 0..f {
+        for t in 0..km1 {
+            let mut s = 0.0;
+            for b in 0..f {
+                s += inv[a * f + b] * xtl[b][t];
+            }
+            g[a][t] = s;
+        }
+    }
+    g
+}
+
+/// `μ_d = X_d γ` (length K-1).
+fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
+    (0..km1)
+        .map(|t| x_d.iter().zip(gamma).map(|(xi, gr)| xi * gr[t]).sum())
+        .collect()
+}
+
+/// Fit a CTM/STM by variational EM.
+///
+/// `sigma_shrink` ∈ [0,1] shrinks Σ toward its diagonal each M-step (STM's
+/// `sigma.prior`). `prevalence` (optional, D×F with an intercept column already
+/// prepended) makes the prior mean a regression on document covariates,
+/// `μ_d = X_d γ` — the STM prevalence model. `content` (optional, per-document
+/// group ids + group count) makes the topic-word distribution vary by group via
+/// the SAGE log-linear content model — the STM content covariate.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_ctm<R: Rng>(
+    docs: &[Vec<u32>],
+    num_topics: usize,
+    num_types: usize,
+    em_iters: usize,
+    sigma_shrink: f64,
+    prevalence: Option<&[Vec<f64>]>,
+    content: Option<(&[usize], usize)>,
+    init_spectral: bool,
+    rng: &mut R,
+) -> CtmModel {
+    let k = num_topics;
+    let km1 = k - 1;
+    let d = docs.len();
+    let nf = prevalence.map(|x| x[0].len());
+    let groups = content.map(|(g, _)| g);
+    let num_groups = content.map_or(1, |(_, ng)| ng);
+
+    let sparse: Vec<(Vec<usize>, Vec<f64>)> = docs.iter().map(|doc| doc_sparse(doc)).collect();
+
+    // Initialize β: deterministic anchor-word (spectral) init when requested and
+    // applicable, else random (seeded). Spectral is STM's default and makes the
+    // solution reproducible without a seed.
+    let random_beta = |rng: &mut R| -> Vec<Vec<f64>> {
+        let mut b = vec![vec![0.0f64; num_types]; k];
+        for row in b.iter_mut() {
+            let mut s = 0.0;
+            for x in row.iter_mut() {
+                *x = 1.0 + rng.gen::<f64>();
+                s += *x;
+            }
+            for x in row.iter_mut() {
+                *x /= s;
+            }
+        }
+        b
+    };
+    let mut beta = if init_spectral && content.is_none() {
+        crate::spectral::spectral_init(docs, k, num_types).unwrap_or_else(|| random_beta(rng))
+    } else {
+        random_beta(rng)
+    };
+
+    // Content covariate state: background m_v and SAGE deviations κ; per-group β.
+    let mut m_bg = vec![0.0f64; num_types];
+    let mut kappa_t = vec![vec![0.0f64; num_types]; k];
+    let mut kappa_c = vec![vec![0.0f64; num_types]; num_groups];
+    let mut kappa_i = vec![vec![0.0f64; num_types]; k * num_groups];
+    let mut content_beta: Vec<Vec<Vec<f64>>> = Vec::new();
+    if content.is_some() {
+        let mut freq = vec![1.0f64; num_types];
+        let mut total = num_types as f64;
+        for doc in docs {
+            for &w in doc {
+                freq[w as usize] += 1.0;
+                total += 1.0;
+            }
+        }
+        for v in 0..num_types {
+            m_bg[v] = (freq[v] / total).ln();
+        }
+        content_beta = build_content_beta(&m_bg, &kappa_t, &kappa_c, &kappa_i, k, num_groups, num_types);
+    }
+
+    let mut mu_shared = vec![0.0f64; km1];
+    let mut gamma: Option<Vec<Vec<f64>>> = nf.map(|f| vec![vec![0.0f64; km1]; f]);
+    let mut sigma = vec![0.0f64; km1 * km1];
+    for i in 0..km1 {
+        sigma[i * km1 + i] = 1.0;
+    }
+    let mut lambda = vec![vec![0.0f64; km1]; d];
+
+    // Per-document prior mean (shared, or regression-based with prevalence).
+    let doc_mu = |di: usize, gamma: &Option<Vec<Vec<f64>>>, mu_shared: &[f64]| -> Vec<f64> {
+        match (prevalence, gamma) {
+            (Some(x), Some(g)) => mu_from(&x[di], g, km1),
+            _ => mu_shared.to_vec(),
+        }
+    };
+
+    for _em in 0..em_iters {
+        let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
+            let mut s = sigma.clone();
+            make_diagonally_dominant(&mut s, km1);
+            spd_inverse(&s, km1).unwrap()
+        });
+        let entropy = match cholesky(&sigma, km1) {
+            Some(l) => half_logdet(&l, km1),
+            None => 0.0,
+        };
+
+        let mut beta_ss = vec![vec![1e-8f64; num_types]; k];
+        // Content: soft expected counts per (topic×group, word).
+        let mut content_ss = if content.is_some() {
+            vec![vec![1e-8f64; num_types]; k * num_groups]
+        } else {
+            Vec::new()
+        };
+        let mut sigma_ss = vec![0.0f64; km1 * km1];
+        let mut lambda_sum = vec![0.0f64; km1];
+
+        for (di, (words, counts)) in sparse.iter().enumerate() {
+            if words.is_empty() {
+                continue;
+            }
+            let mu_d = doc_mu(di, &gamma, &mu_shared);
+            // The E-step β is the document's group β (content) or the shared β.
+            let beta_doc: &[Vec<f64>] = match groups {
+                Some(g) => &content_beta[g[di]],
+                None => &beta,
+            };
+            let opt = lbfgs_minimize(
+                lambda[di].clone(),
+                |eta| {
+                    (
+                        ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
+                        ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
+                    )
+                },
+                40,
+                7,
+                1e-5,
+            );
+            let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
+            lambda[di] = opt.clone();
+
+            match groups {
+                Some(g) => {
+                    let grp = g[di];
+                    for (wi, &w) in words.iter().enumerate() {
+                        for t in 0..k {
+                            content_ss[t * num_groups + grp][w] += res.phi[t][wi];
+                        }
+                    }
+                }
+                None => {
+                    for (wi, &w) in words.iter().enumerate() {
+                        for t in 0..k {
+                            beta_ss[t][w] += res.phi[t][wi];
+                        }
+                    }
+                }
+            }
+            for i in 0..km1 {
+                lambda_sum[i] += opt[i];
+                for j in 0..km1 {
+                    sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
+                }
+            }
+        }
+
+        // M-step: prevalence regression (γ) or shared mean (μ).
+        if let Some(x) = prevalence {
+            gamma = Some(fit_gamma(x, &lambda, nf.unwrap(), km1, 1e-6));
+        } else {
+            for i in 0..km1 {
+                mu_shared[i] = lambda_sum[i] / d as f64;
+            }
+        }
+
+        // Σ = (1/D)[ Σ ν + Σ (η-μ_d)(η-μ_d)ᵀ ] with the updated μ_d.
+        let mus: Vec<Vec<f64>> = (0..d).map(|di| doc_mu(di, &gamma, &mu_shared)).collect();
+        for i in 0..km1 {
+            for j in 0..km1 {
+                let mut cross = 0.0;
+                for (di, li) in lambda.iter().enumerate() {
+                    cross += (li[i] - mus[di][i]) * (li[j] - mus[di][j]);
+                }
+                sigma[i * km1 + j] = (sigma_ss[i * km1 + j] + cross) / d as f64;
+            }
+        }
+        if sigma_shrink > 0.0 {
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    if i != j {
+                        sigma[i * km1 + j] *= 1.0 - sigma_shrink;
+                    }
+                }
+            }
+        }
+        // β M-step: SAGE content update (per group) or plain normalization.
+        if content.is_some() {
+            content_beta = optimize_content(
+                &m_bg,
+                &mut kappa_t,
+                &mut kappa_c,
+                &mut kappa_i,
+                &content_ss,
+                k,
+                num_groups,
+                num_types,
+                1.0,
+                20,
+            );
+        } else {
+            for t in 0..k {
+                let s: f64 = beta_ss[t].iter().sum();
+                for v in 0..num_types {
+                    beta[t][v] = beta_ss[t][v] / s;
+                }
+            }
+        }
+    }
+
+    // With content covariates, the reported β is the group-averaged topic-word.
+    let content_out = if content.is_some() {
+        for t in 0..k {
+            for v in 0..num_types {
+                let mut s = 0.0;
+                for g in 0..num_groups {
+                    s += content_beta[g][t][v];
+                }
+                beta[t][v] = s / num_groups as f64;
+            }
+        }
+        Some(content_beta)
+    } else {
+        None
+    };
+
+    CtmModel {
+        num_topics: k,
+        num_types,
+        beta,
+        mu: mu_shared,
+        sigma,
+        lambda,
+        gamma,
+        content_beta: content_out,
+        num_groups,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    fn toy() -> (Vec<usize>, Vec<f64>, Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
+        let beta = vec![
+            vec![0.5, 0.3, 0.2],
+            vec![0.2, 0.5, 0.3],
+            vec![0.1, 0.2, 0.7],
+        ];
+        let words = vec![0usize, 1, 2];
+        let counts = vec![3.0, 2.0, 5.0];
+        let mu = vec![0.1, -0.2];
+        // siginv (2x2 SPD)
+        let siginv = vec![1.5, 0.3, 0.3, 1.2];
+        (words, counts, beta, mu, siginv)
+    }
+
+    #[test]
+    fn gradient_matches_finite_difference() {
+        let (words, counts, beta, mu, siginv) = toy();
+        let eta = vec![0.4, -0.3];
+        let g = ctm_grad(&eta, &beta, &words, &counts, &mu, &siginv);
+        let eps = 1e-6;
+        for i in 0..eta.len() {
+            let mut ep = eta.clone();
+            let mut em = eta.clone();
+            ep[i] += eps;
+            em[i] -= eps;
+            let num = (ctm_lhood(&ep, &beta, &words, &counts, &mu, &siginv)
+                - ctm_lhood(&em, &beta, &words, &counts, &mu, &siginv))
+                / (2.0 * eps);
+            assert!((num - g[i]).abs() < 1e-4, "grad[{}]: {} vs {}", i, g[i], num);
+        }
+    }
+
+    #[test]
+    fn recovers_topic_correlation() {
+        // Two topic-blocks that co-occur: docs use {0,1,2} (topic A words) AND
+        // {3,4,5} (topic B words) together, so topics A and B should be
+        // positively correlated in Σ.
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        for _ in 0..150 {
+            // Correlated: most docs load on A+B together; some on C alone.
+            if rng.gen::<f64>() < 0.7 {
+                docs.push(vec![0, 1, 2, 3, 4, 5, 0, 1, 3, 4]);
+            } else {
+                docs.push(vec![6, 7, 8, 6, 7, 8, 6, 7, 8, 6]);
+            }
+        }
+        let model = fit_ctm(&docs, 3, 9, 25, 0.0, None, None, true, &mut rng);
+        let theta = model.doc_topics();
+        // Sanity: θ rows sum to 1 and are valid.
+        for row in &theta {
+            let s: f64 = row.iter().sum();
+            assert!((s - 1.0).abs() < 1e-6);
+        }
+        // The correlation matrix is well-formed (diagonal 1).
+        let corr = model.topic_correlation();
+        for i in 0..3 {
+            assert!((corr[i][i] - 1.0).abs() < 1e-9 || corr[i][i] == 1.0);
+        }
+    }
+
+    #[test]
+    fn content_recovers_group_wording() {
+        // One topic, two groups: group 0 uses words {0,1}, group 1 uses {2,3}.
+        // The content model should word the topic differently per group.
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        let mut groups: Vec<usize> = Vec::new();
+        for i in 0..120 {
+            if i % 2 == 0 {
+                docs.push(vec![0, 1, 0, 1, 0, 1]);
+                groups.push(0);
+            } else {
+                docs.push(vec![2, 3, 2, 3, 2, 3]);
+                groups.push(1);
+            }
+        }
+        // K=2 (CTM needs >=2 topics); content groups = 2.
+        let model = fit_ctm(&docs, 2, 4, 30, 0.0, None, Some((&groups, 2)), false, &mut rng);
+        let cb = model.content_beta.expect("content_beta present");
+        // cb[group][topic][word]. The dominant topic for group 0 should favour
+        // {0,1}; for group 1 {2,3}. Check that for each group some topic does.
+        let g0_best = (0..2)
+            .map(|t| cb[0][t][0] + cb[0][t][1])
+            .fold(0.0f64, f64::max);
+        let g1_best = (0..2)
+            .map(|t| cb[1][t][2] + cb[1][t][3])
+            .fold(0.0f64, f64::max);
+        assert!(g0_best > 0.8, "group 0 top topic mass on its words = {}", g0_best);
+        assert!(g1_best > 0.8, "group 1 top topic mass on its words = {}", g1_best);
+    }
+}
