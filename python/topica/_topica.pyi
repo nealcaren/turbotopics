@@ -1178,6 +1178,8 @@ class KeyATM:
         feature_names: list[str] | None = None,
         timestamps: Sequence[float] | Sequence[str] | None = None,
         num_states: int = 5,
+        weights: str = "information-theory",
+        num_threads: int = 1,
         optimize_interval: int = 50,
         burn_in: int = 200,
         prior_variance: float = 1.0,
@@ -1192,7 +1194,12 @@ class KeyATM:
         change-point HMM lets topic prevalence shift over `num_states` regimes.
         The smoothed path is exposed as `time_prevalence` (aligned with
         `time_labels`) and the per-segment regime as `time_state`. `timestamps`
-        and `covariates` are mutually exclusive."""
+        and `covariates` are mutually exclusive.
+
+        `weights` is keyATM's token weighting: 'information-theory' (default,
+        each token counts by its word's surprisal in bits), 'inv-freq', or
+        'none' (unweighted). Weighting downweights frequent words and applies to
+        every variant (base, covariate, dynamic)."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...

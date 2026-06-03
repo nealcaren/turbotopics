@@ -1962,13 +1962,13 @@ fn js_divergence(p: &[f64], q: &[f64]) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// Per-document topic-count vectors `[num_docs][num_topics]`.
-fn doc_topic_counts(doc_topics: &[Vec<u32>], k: usize) -> Vec<Vec<u32>> {
+fn doc_topic_counts(doc_topics: &[Vec<u32>], k: usize) -> Vec<Vec<f64>> {
     doc_topics
         .iter()
         .map(|topics| {
-            let mut c = vec![0u32; k];
+            let mut c = vec![0.0f64; k];
             for &t in topics {
-                c[t as usize] += 1;
+                c[t as usize] += 1.0;
             }
             c
         })
@@ -5917,8 +5917,9 @@ impl KeyATM {
     /// `time_labels`) and the per-segment regime as `time_state`. `timestamps`
     /// and `covariates` are mutually exclusive.
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
-                        timestamps=None, num_states=5,
-                        optimize_interval=50, burn_in=200, prior_variance=1.0, lbfgs_iters=20))]
+                        timestamps=None, num_states=5, weights="information-theory",
+                        num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
+                        lbfgs_iters=20))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5929,6 +5930,8 @@ impl KeyATM {
         feature_names: Option<Vec<String>>,
         timestamps: Option<&Bound<'_, PyAny>>,
         num_states: usize,
+        weights: &str,
+        num_threads: usize,
         optimize_interval: usize,
         burn_in: usize,
         prior_variance: f64,
@@ -5951,6 +5954,17 @@ impl KeyATM {
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let nthreads = num_threads.max(1);
+        let weight_scheme = match weights {
+            "information-theory" | "info" => keyatm::WeightScheme::InfoTheory,
+            "inv-freq" | "inverse-frequency" => keyatm::WeightScheme::InvFreq,
+            "none" => keyatm::WeightScheme::None,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown weights={other:?}; expected 'information-theory', 'inv-freq', or 'none'"
+                )))
+            }
+        };
 
         // --- Dynamic model: timestamps drive a change-point HMM on prevalence. ---
         if let Some(ts) = timestamps {
@@ -5980,7 +5994,7 @@ impl KeyATM {
                     &sorted_docs, num_types, num_topics, &keys, &sorted_time, num_states,
                     beta, beta_key, g1, g2,
                     1.0, 1.0, 2.0, 1.0, // keyATM α-prior defaults: eta_1, eta_2, eta_1_reg, eta_2_reg
-                    iters, &mut rng,
+                    iters, weight_scheme, nthreads, &mut rng,
                 )
             });
 
@@ -6056,11 +6070,11 @@ impl KeyATM {
                 Some(f) => keyatm::fit_keyatm_cov(
                     &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
-                    prior_variance, lbfgs_iters, &mut rng,
+                    prior_variance, lbfgs_iters, weight_scheme, nthreads, &mut rng,
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, &mut rng,
+                    iters, weight_scheme, nthreads, &mut rng,
                 ),
             };
             (m, corpus)

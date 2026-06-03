@@ -138,7 +138,7 @@ pub fn run_sweep_dmr<R: Rng>(
 pub fn dmr_objective_and_gradient(
     lambda: &[Vec<f64>],
     features: &[Vec<f64>],
-    doc_topic_counts: &[Vec<u32>],
+    doc_topic_counts: &[Vec<f64>],
     num_topics: usize,
     num_features: usize,
     prior_variance: f64,
@@ -158,15 +158,15 @@ pub fn dmr_objective_and_gradient(
         }
 
         let counts = &doc_topic_counts[d];
-        let n_d: u32 = counts.iter().sum();
+        let n_d: f64 = counts.iter().sum();
 
-        value += log_gamma(alpha_sum) - log_gamma(alpha_sum + n_d as f64);
+        value += log_gamma(alpha_sum) - log_gamma(alpha_sum + n_d);
         let dg_alpha_sum = digamma(alpha_sum);
-        let dg_alpha_sum_n = digamma(alpha_sum + n_d as f64);
+        let dg_alpha_sum_n = digamma(alpha_sum + n_d);
 
         for t in 0..num_topics {
             let a = alpha[t];
-            let n = counts[t] as f64;
+            let n = counts[t];
             value += log_gamma(a + n) - log_gamma(a);
 
             // ∂L/∂α_{d,t}, then chain through ∂α/∂λ = α · x.
@@ -301,7 +301,7 @@ where
 pub fn optimize_lambda(
     lambda: &mut [Vec<f64>],
     features: &[Vec<f64>],
-    doc_topic_counts: &[Vec<u32>],
+    doc_topic_counts: &[Vec<f64>],
     num_topics: usize,
     num_features: usize,
     prior_variance: f64,
@@ -365,10 +365,10 @@ mod tests {
             vec![1.0, 0.0],
         ];
         let counts = vec![
-            vec![3u32, 1, 0],
-            vec![0u32, 2, 2],
-            vec![1u32, 1, 5],
-            vec![2u32, 0, 1],
+            vec![3.0f64, 1.0, 0.0],
+            vec![0.0f64, 2.0, 2.0],
+            vec![1.0f64, 1.0, 5.0],
+            vec![2.0f64, 0.0, 1.0],
         ];
         let sigma2 = 10.0;
 
@@ -411,9 +411,9 @@ mod tests {
             features.push(vec![1.0, cov]);
             // High covariate -> more topic 1; low -> more topic 0.
             if cov > 0.0 {
-                counts.push(vec![2u32, 8]);
+                counts.push(vec![2.0f64, 8.0]);
             } else {
-                counts.push(vec![8u32, 2]);
+                counts.push(vec![8.0f64, 2.0]);
             }
         }
         let mut lambda = vec![vec![0.0f64; num_features]; num_topics];

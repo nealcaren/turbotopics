@@ -57,6 +57,58 @@ use std::collections::HashMap;
 use rand::Rng;
 
 // ---------------------------------------------------------------------------
+// Token weighting (keyATM's "weighted LDA")
+// ---------------------------------------------------------------------------
+
+/// How each token is weighted in the count tables. keyATM weights tokens by a
+/// function of corpus frequency so that frequent words count for less and rare,
+/// informative words count for more (Eshima, Imai & Sasaki 2024, Section 3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeightScheme {
+    /// Unweighted: every token contributes 1.0 (ordinary collapsed Gibbs).
+    None,
+    /// Information theory (keyATM default): `weight(w) = -log2(freq(w)/N)`, the
+    /// word's surprisal in bits.
+    InfoTheory,
+    /// Inverse frequency: `weight(w) = N / freq(w)`.
+    InvFreq,
+}
+
+/// Per-word weights from corpus frequencies, matching keyATM's `weights_*`.
+/// `num_types` is the vocabulary size; words absent from the corpus get weight
+/// 1.0 (they never appear in a token, so the value is immaterial).
+pub fn compute_vocab_weights(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    scheme: WeightScheme,
+) -> Vec<f64> {
+    if scheme == WeightScheme::None {
+        return vec![1.0; num_types];
+    }
+    let mut freq = vec![0.0f64; num_types];
+    for doc in docs {
+        for &w in doc {
+            freq[w as usize] += 1.0;
+        }
+    }
+    let total: f64 = freq.iter().sum();
+    let ln2 = std::f64::consts::LN_2;
+    (0..num_types)
+        .map(|w| {
+            let f = freq[w];
+            if f <= 0.0 {
+                return 1.0;
+            }
+            match scheme {
+                WeightScheme::None => 1.0,
+                WeightScheme::InfoTheory => -((f / total).ln()) / ln2,
+                WeightScheme::InvFreq => total / f,
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Model struct
 // ---------------------------------------------------------------------------
 
@@ -86,17 +138,21 @@ pub struct KeyAtmModel {
     pub keywords: Vec<Vec<usize>>,
     /// `L[k]` = `keywords[k].len()` (cached).
     pub l: Vec<usize>,
-    /// `ndk[d][k]` — doc-topic counts (D×K).
-    pub ndk: Vec<Vec<u32>>,
-    /// `nkw[k][w]` — regular (s=0) topic-word counts (K×V).
-    pub nkw: Vec<Vec<u32>>,
-    /// `nk0[k]` — total s=0 token count in topic k.
-    pub nk0: Vec<u32>,
-    /// `nkx[k][j]` — keyword (s=1) count for the j-th keyword of topic k.
+    /// `ndk[d][k]` — weighted doc-topic counts (D×K). Each token contributes its
+    /// word's weight (see `vocab_weights`), so these are real-valued, not integer.
+    pub ndk: Vec<Vec<f64>>,
+    /// `nkw[k][w]` — weighted regular (s=0) topic-word counts (K×V).
+    pub nkw: Vec<Vec<f64>>,
+    /// `nk0[k]` — weighted total s=0 mass in topic k.
+    pub nk0: Vec<f64>,
+    /// `nkx[k][j]` — weighted keyword (s=1) count for the j-th keyword of topic k.
     /// Length of inner vec = L_k; empty for non-keyword topics.
-    pub nkx: Vec<Vec<u32>>,
-    /// `nk1[k]` — total s=1 token count in topic k.
-    pub nk1: Vec<u32>,
+    pub nkx: Vec<Vec<f64>>,
+    /// `nk1[k]` — weighted total s=1 mass in topic k.
+    pub nk1: Vec<f64>,
+    /// Per-word weight applied to each token (keyATM's "weighted LDA"). All 1.0
+    /// under `WeightScheme::None`; otherwise frequency-based (see `WeightScheme`).
+    pub vocab_weights: Vec<f64>,
     /// Covariate model only: learned DMR coefficients `λ[k][f]` for the
     /// log-linear document-topic prior `α_{d,k} = exp(x_d · λ_k)`. `None` for the
     /// base (symmetric-α) model.
@@ -153,19 +209,19 @@ impl KeyAtmModel {
         let v = self.num_types;
         let beta = self.beta;
 
-        let reg_denom = v as f64 * beta + self.nk0[k] as f64;
+        let reg_denom = v as f64 * beta + self.nk0[k];
 
         let mut phi = (0..v)
-            .map(|w| (beta + self.nkw[k][w] as f64) / reg_denom)
+            .map(|w| (beta + self.nkw[k][w]) / reg_denom)
             .collect::<Vec<f64>>();
 
         if k < self.num_keyword_topics && self.l[k] > 0 {
-            let pi_num = self.gamma1 + self.nk1[k] as f64;
-            let pi_den = self.gamma1 + self.gamma2 + self.nk0[k] as f64 + self.nk1[k] as f64;
+            let pi_num = self.gamma1 + self.nk1[k];
+            let pi_den = self.gamma1 + self.gamma2 + self.nk0[k] + self.nk1[k];
             let pi_k = pi_num / pi_den;
             let one_minus_pi = 1.0 - pi_k;
 
-            let key_denom = self.l[k] as f64 * self.beta_key + self.nk1[k] as f64;
+            let key_denom = self.l[k] as f64 * self.beta_key + self.nk1[k];
             let beta_key = self.beta_key;
 
             // Scale the regular component.
@@ -174,7 +230,7 @@ impl KeyAtmModel {
             }
             // Add the keyword component.
             for (j, &kw) in self.keywords[k].iter().enumerate() {
-                phi[kw] += pi_k * (beta_key + self.nkx[k][j] as f64) / key_denom;
+                phi[kw] += pi_k * (beta_key + self.nkx[k][j]) / key_denom;
             }
         }
 
@@ -207,10 +263,10 @@ impl KeyAtmModel {
                 .map(|(d, row)| {
                     let a_row = &dyn_.alphas[dyn_.r_est[dyn_.time_index[d]]];
                     let a_sum: f64 = a_row.iter().sum();
-                    let n_d: f64 = row.iter().map(|&c| c as f64).sum::<f64>() + a_sum;
+                    let n_d: f64 = row.iter().sum::<f64>() + a_sum;
                     row.iter()
                         .zip(a_row.iter())
-                        .map(|(&c, &a)| (c as f64 + a) / n_d)
+                        .map(|(&c, &a)| (c + a) / n_d)
                         .collect()
                 })
                 .collect();
@@ -225,10 +281,10 @@ impl KeyAtmModel {
                 .zip(doc_alpha.iter())
                 .map(|(row, a_row)| {
                     let a_sum: f64 = a_row.iter().sum();
-                    let n_d: f64 = row.iter().map(|&c| c as f64).sum::<f64>() + a_sum;
+                    let n_d: f64 = row.iter().sum::<f64>() + a_sum;
                     row.iter()
                         .zip(a_row.iter())
-                        .map(|(&c, &a)| (c as f64 + a) / n_d)
+                        .map(|(&c, &a)| (c + a) / n_d)
                         .collect()
                 })
                 .collect();
@@ -241,8 +297,8 @@ impl KeyAtmModel {
         self.ndk
             .iter()
             .map(|row| {
-                let n_d: f64 = row.iter().map(|&c| c as f64).sum::<f64>() + k_alpha;
-                row.iter().map(|&c| (c as f64 + alpha) / n_d).collect()
+                let n_d: f64 = row.iter().sum::<f64>() + k_alpha;
+                row.iter().map(|&c| (c + alpha) / n_d).collect()
             })
             .collect()
     }
@@ -255,11 +311,8 @@ impl KeyAtmModel {
         (0..self.num_topics)
             .map(|k| {
                 if k < self.num_keyword_topics && self.l[k] > 0 {
-                    let num = self.gamma1 + self.nk1[k] as f64;
-                    let den = self.gamma1
-                        + self.gamma2
-                        + self.nk0[k] as f64
-                        + self.nk1[k] as f64;
+                    let num = self.gamma1 + self.nk1[k];
+                    let den = self.gamma1 + self.gamma2 + self.nk0[k] + self.nk1[k];
                     num / den
                 } else {
                     0.0
@@ -414,56 +467,70 @@ impl KeywordIndex {
     }
 }
 
-/// Resample the (z, s) assignment of a single token in doc `d` at position
-/// `pos` in-place (collapsed Gibbs step).
-///
-/// Removes the token from its current counts, builds the full candidate
-/// (k, s) weight vector, samples one state, and re-increments.
-fn resample_token<R: Rng>(
-    model: &mut KeyAtmModel,
+/// Read-only scalar parameters the token sampler needs, bundled so the
+/// sequential and parallel paths share one signature.
+#[derive(Clone, Copy)]
+struct SampleParams {
+    num_topics: usize,
+    num_keyword_topics: usize,
+    num_types: usize,
+    beta: f64,
+    beta_key: f64,
+    gamma1: f64,
+    gamma2: f64,
+}
+
+/// Resample the (z, s) assignment of a single token operating directly on the
+/// count tables (not the whole model), so it can run against either the model's
+/// own tables (sequential) or a worker's local clones (parallel). Removes the
+/// token by its weight, samples a new (k, s), and re-adds it.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn resample_token_inner<R: Rng>(
+    nkw: &mut [Vec<f64>],
+    nk0: &mut [f64],
+    nkx: &mut [Vec<f64>],
+    nk1: &mut [f64],
+    ndk_row: &mut [f64],
+    l: &[usize],
     ki: &KeywordIndex,
+    p: SampleParams,
     alpha_row: &[f64],
-    d: usize,
     w: usize,
+    wt: f64,
     old_z: usize,
     old_s: u8,
+    scratch: &mut [f64],
     rng: &mut R,
 ) -> (usize, u8) {
-    let k = model.num_topics;
-    let v = model.num_types;
-    let beta = model.beta;
-    let beta_key = model.beta_key;
-    let gamma1 = model.gamma1;
-    let gamma2 = model.gamma2;
-    let num_kw = model.num_keyword_topics;
+    let k = p.num_topics;
+    let num_kw = p.num_keyword_topics;
+    let beta = p.beta;
+    let beta_key = p.beta_key;
+    let gamma1 = p.gamma1;
+    let gamma2 = p.gamma2;
 
-    // --- Remove token from current counts ---
-    model.ndk[d][old_z] -= 1;
+    // --- Remove token from current counts (by its weight). ---
+    ndk_row[old_z] -= wt;
     if old_s == 0 {
-        model.nkw[old_z][w] -= 1;
-        model.nk0[old_z] -= 1;
+        nkw[old_z][w] -= wt;
+        nk0[old_z] -= wt;
     } else {
-        // old_s == 1: find j for keyword index
         let j = ki.keyword_index(old_z, w).expect("old s=1 but w not a keyword");
-        model.nkx[old_z][j] -= 1;
-        model.nk1[old_z] -= 1;
+        nkx[old_z][j] -= wt;
+        nk1[old_z] -= wt;
     }
 
-    // --- Build candidate weights ---
-    // Upper bound: 2*K candidates (each topic has s=0; keyword topics that
-    // contain w also have s=1). We collect into a small Vec of (k, s, weight).
-    let v_beta = v as f64 * beta;
-
-    // We'll store weights for each state in a flat vec:
-    //   For k in 0..K: index 2*k   => (k, s=0)
-    //                  index 2*k+1 => (k, s=1) — only non-zero if eligible
-    let mut weights = vec![0.0f64; 2 * k];
+    // --- Build candidate weights into `scratch` (len 2*K). ---
+    let v_beta = p.num_types as f64 * beta;
+    let weights = &mut scratch[..2 * k];
+    weights.fill(0.0);
 
     for kk in 0..k {
-        let ndk_val = model.ndk[d][kk] as f64 + alpha_row[kk];
-        let nkw_val = model.nkw[kk][w] as f64 + beta;
-        let nk0_val = model.nk0[kk] as f64;
-        let nk1_val = model.nk1[kk] as f64;
+        let ndk_val = ndk_row[kk] + alpha_row[kk];
+        let nkw_val = nkw[kk][w] + beta;
+        let nk0_val = nk0[kk];
+        let nk1_val = nk1[kk];
 
         // s=0 state (always allowed for every topic).
         let reg_likelihood = nkw_val / (v_beta + nk0_val);
@@ -477,9 +544,8 @@ fn resample_token<R: Rng>(
         // s=1 state: only if kk is a keyword topic AND w is in keywords[kk].
         if kk < num_kw {
             if let Some(j) = ki.keyword_index(kk, w) {
-                let lk = model.l[kk] as f64;
-                let key_likelihood =
-                    (model.nkx[kk][j] as f64 + beta_key) / (lk * beta_key + nk1_val);
+                let lk = l[kk] as f64;
+                let key_likelihood = (nkx[kk][j] + beta_key) / (lk * beta_key + nk1_val);
                 let switch_factor_s1 =
                     (gamma1 + nk1_val) / (gamma1 + gamma2 + nk0_val + nk1_val);
                 weights[2 * kk + 1] = ndk_val * key_likelihood * switch_factor_s1;
@@ -488,42 +554,197 @@ fn resample_token<R: Rng>(
     }
 
     // --- Categorical sample ---
-    let chosen = sample_index(&weights, rng);
+    let chosen = sample_index(weights, rng);
     let new_k = chosen / 2;
     let new_s = (chosen % 2) as u8;
 
-    // --- Re-increment counts ---
-    model.ndk[d][new_k] += 1;
+    // --- Re-increment counts (by weight). ---
+    ndk_row[new_k] += wt;
     if new_s == 0 {
-        model.nkw[new_k][w] += 1;
-        model.nk0[new_k] += 1;
+        nkw[new_k][w] += wt;
+        nk0[new_k] += wt;
     } else {
         let j = ki.keyword_index(new_k, w).expect("new s=1 but w not a keyword");
-        model.nkx[new_k][j] += 1;
-        model.nk1[new_k] += 1;
+        nkx[new_k][j] += wt;
+        nk1[new_k] += wt;
     }
 
     (new_k, new_s)
 }
 
-/// One full Gibbs sweep over all tokens in all documents.
+/// Scalar params from the model.
+fn sample_params(model: &KeyAtmModel) -> SampleParams {
+    SampleParams {
+        num_topics: model.num_topics,
+        num_keyword_topics: model.num_keyword_topics,
+        num_types: model.num_types,
+        beta: model.beta,
+        beta_key: model.beta_key,
+        gamma1: model.gamma1,
+        gamma2: model.gamma2,
+    }
+}
+
+/// One full sequential Gibbs sweep over all tokens in all documents.
 fn sweep<R: Rng>(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
-    assignments: &mut Vec<Vec<(usize, u8)>>,
+    assignments: &mut [Vec<(usize, u8)>],
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     rng: &mut R,
 ) {
+    let p = sample_params(model);
+    let mut scratch = vec![0.0f64; 2 * p.num_topics];
+    // Disjoint &mut borrows of distinct model fields in a single call are allowed.
     for d in 0..docs.len() {
-        let doc = &docs[d];
         let alpha_row = &doc_alpha[d];
-        for pos in 0..doc.len() {
-            let w = doc[pos] as usize;
+        for pos in 0..docs[d].len() {
+            let w = docs[d][pos] as usize;
+            let wt = model.vocab_weights[w];
             let (old_z, old_s) = assignments[d][pos];
-            let (new_z, new_s) = resample_token(model, ki, alpha_row, d, w, old_z, old_s, rng);
+            let (new_z, new_s) = resample_token_inner(
+                &mut model.nkw, &mut model.nk0, &mut model.nkx, &mut model.nk1,
+                &mut model.ndk[d], &model.l, ki, p, alpha_row, w, wt, old_z, old_s,
+                &mut scratch, rng,
+            );
             assignments[d][pos] = (new_z, new_s);
         }
+    }
+}
+
+/// Contiguous, near-even document ranges for `n_threads` workers.
+fn partition_ranges(n_docs: usize, n_threads: usize) -> Vec<(usize, usize)> {
+    let t = n_threads.max(1).min(n_docs.max(1));
+    let base = n_docs / t;
+    let rem = n_docs % t;
+    let mut ranges = Vec::with_capacity(t);
+    let mut start = 0;
+    for i in 0..t {
+        let len = base + usize::from(i < rem);
+        ranges.push((start, start + len));
+        start += len;
+    }
+    ranges
+}
+
+/// Approximate parallel Gibbs sweep (AD-LDA; Newman et al. 2009). Documents are
+/// partitioned across workers; each worker clones the global topic-word tables
+/// (`nkw`, `nk0`, `nkx`, `nk1`), samples its partition independently, then the
+/// per-word deltas are reconciled as `final = Σ_w worker_w − (W−1)·original`.
+/// Per-document tables (`ndk`, assignments) are partition-local, so they are
+/// written straight back. Deterministic for a fixed `sweep_seed` and worker count.
+fn parallel_sweep_keyatm(
+    model: &mut KeyAtmModel,
+    docs: &[Vec<u32>],
+    assignments: &mut [Vec<(usize, u8)>],
+    ki: &KeywordIndex,
+    doc_alpha: &[Vec<f64>],
+    num_threads: usize,
+    sweep_seed: u64,
+) {
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+    use rayon::prelude::*;
+
+    let p = sample_params(model);
+    let ranges = partition_ranges(docs.len(), num_threads);
+
+    // Snapshots of the global tables for reconciliation.
+    let orig_nkw = model.nkw.clone();
+    let orig_nk0 = model.nk0.clone();
+    let orig_nkx = model.nkx.clone();
+    let orig_nk1 = model.nk1.clone();
+    let l = &model.l;
+    let vocab_weights = &model.vocab_weights;
+
+    struct WorkerOut {
+        nkw: Vec<Vec<f64>>,
+        nk0: Vec<f64>,
+        nkx: Vec<Vec<f64>>,
+        nk1: Vec<f64>,
+        start: usize,
+        ndk: Vec<Vec<f64>>,
+        asgn: Vec<Vec<(usize, u8)>>,
+    }
+
+    let outs: Vec<WorkerOut> = ranges
+        .par_iter()
+        .enumerate()
+        .map(|(wid, &(start, end))| {
+            let mut nkw = orig_nkw.clone();
+            let mut nk0 = orig_nk0.clone();
+            let mut nkx = orig_nkx.clone();
+            let mut nk1 = orig_nk1.clone();
+            let mut ndk: Vec<Vec<f64>> = model.ndk[start..end].to_vec();
+            let mut asgn: Vec<Vec<(usize, u8)>> = assignments[start..end].to_vec();
+            let mut scratch = vec![0.0f64; 2 * p.num_topics];
+            let mut rng = ChaCha8Rng::seed_from_u64(
+                sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
+
+            for (li, d) in (start..end).enumerate() {
+                let alpha_row = &doc_alpha[d];
+                for pos in 0..docs[d].len() {
+                    let w = docs[d][pos] as usize;
+                    let wt = vocab_weights[w];
+                    let (old_z, old_s) = asgn[li][pos];
+                    let (new_z, new_s) = resample_token_inner(
+                        &mut nkw, &mut nk0, &mut nkx, &mut nk1, &mut ndk[li], l, ki, p,
+                        alpha_row, w, wt, old_z, old_s, &mut scratch, &mut rng,
+                    );
+                    asgn[li][pos] = (new_z, new_s);
+                }
+            }
+            WorkerOut { nkw, nk0, nkx, nk1, start, ndk, asgn }
+        })
+        .collect();
+
+    // Write back partition-local tables (disjoint document ranges).
+    for out in &outs {
+        for (li, (row, a)) in out.ndk.iter().zip(out.asgn.iter()).enumerate() {
+            model.ndk[out.start + li] = row.clone();
+            assignments[out.start + li] = a.clone();
+        }
+    }
+
+    // Reconcile the global tables: final = Σ_w worker_w − (W−1)·original,
+    // clamping tiny negative floating-point residues to zero.
+    let wm1 = (outs.len() as f64) - 1.0;
+    let k = p.num_topics;
+    for kk in 0..k {
+        for w in 0..p.num_types {
+            let sum: f64 = outs.iter().map(|o| o.nkw[kk][w]).sum();
+            model.nkw[kk][w] = (sum - wm1 * orig_nkw[kk][w]).max(0.0);
+        }
+        let sum0: f64 = outs.iter().map(|o| o.nk0[kk]).sum();
+        model.nk0[kk] = (sum0 - wm1 * orig_nk0[kk]).max(0.0);
+        let sum1: f64 = outs.iter().map(|o| o.nk1[kk]).sum();
+        model.nk1[kk] = (sum1 - wm1 * orig_nk1[kk]).max(0.0);
+        for j in 0..model.nkx[kk].len() {
+            let sumx: f64 = outs.iter().map(|o| o.nkx[kk][j]).sum();
+            model.nkx[kk][j] = (sumx - wm1 * orig_nkx[kk][j]).max(0.0);
+        }
+    }
+}
+
+/// Run one sweep, choosing the exact sequential path or the approximate parallel
+/// path by `num_threads`. The parallel path draws one seed from `rng` so it stays
+/// deterministic for a fixed seed and worker count.
+fn run_sweep<R: Rng>(
+    model: &mut KeyAtmModel,
+    docs: &[Vec<u32>],
+    assignments: &mut [Vec<(usize, u8)>],
+    ki: &KeywordIndex,
+    doc_alpha: &[Vec<f64>],
+    num_threads: usize,
+    rng: &mut R,
+) {
+    if num_threads <= 1 {
+        sweep(model, docs, assignments, ki, doc_alpha, rng);
+    } else {
+        let seed: u64 = rng.gen();
+        parallel_sweep_keyatm(model, docs, assignments, ki, doc_alpha, num_threads, seed);
     }
 }
 
@@ -559,6 +780,8 @@ pub fn fit_keyatm<R: Rng>(
     gamma1: f64,
     gamma2: f64,
     iters: usize,
+    weights: WeightScheme,
+    num_threads: usize,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(
@@ -568,14 +791,14 @@ pub fn fit_keyatm<R: Rng>(
     );
 
     let (mut model, mut assignments, ki) = init_state(
-        docs, num_types, num_topics, keywords, alpha, beta, beta_key, gamma1, gamma2, rng,
+        docs, num_types, num_topics, keywords, alpha, beta, beta_key, gamma1, gamma2, weights, rng,
     );
 
     // Symmetric prior: every document-topic gets the same α.
     let doc_alpha = vec![vec![alpha; num_topics]; docs.len()];
 
     for _ in 0..iters {
-        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
     }
     model
 }
@@ -595,6 +818,7 @@ fn init_state<R: Rng>(
     beta_key: f64,
     gamma1: f64,
     gamma2: f64,
+    weights: WeightScheme,
     rng: &mut R,
 ) -> (KeyAtmModel, Vec<Vec<(usize, u8)>>, KeywordIndex) {
     let d_count = docs.len();
@@ -603,6 +827,7 @@ fn init_state<R: Rng>(
     let l: Vec<usize> = keywords.iter().map(|kws| kws.len()).collect();
     let num_keyword_topics = keywords.iter().filter(|kws| !kws.is_empty()).count();
     let ki = KeywordIndex::build(keywords);
+    let vocab_weights = compute_vocab_weights(docs, v, weights);
 
     let mut word_keyword_topics: Vec<Vec<usize>> = vec![Vec::new(); v];
     for (kk, kws) in keywords.iter().enumerate() {
@@ -613,12 +838,12 @@ fn init_state<R: Rng>(
 
     // A token whose word is a keyword of some topic starts in that keyword topic
     // (random among ties) with the switch on (s=1); other tokens start in a
-    // uniformly random topic with s=0.
-    let mut ndk = vec![vec![0u32; k]; d_count];
-    let mut nkw = vec![vec![0u32; v]; k];
-    let mut nk0 = vec![0u32; k];
-    let mut nkx: Vec<Vec<u32>> = keywords.iter().map(|kws| vec![0u32; kws.len()]).collect();
-    let mut nk1 = vec![0u32; k];
+    // uniformly random topic with s=0. Each token contributes its word weight.
+    let mut ndk = vec![vec![0.0f64; k]; d_count];
+    let mut nkw = vec![vec![0.0f64; v]; k];
+    let mut nk0 = vec![0.0f64; k];
+    let mut nkx: Vec<Vec<f64>> = keywords.iter().map(|kws| vec![0.0f64; kws.len()]).collect();
+    let mut nk1 = vec![0.0f64; k];
 
     let assignments: Vec<Vec<(usize, u8)>> = docs
         .iter()
@@ -627,6 +852,7 @@ fn init_state<R: Rng>(
             doc.iter()
                 .map(|&word| {
                     let w = word as usize;
+                    let wt = vocab_weights[w];
                     let cands = &word_keyword_topics[w];
                     let (z, s): (usize, u8) = if cands.is_empty() {
                         ((rng.gen::<f64>() * k as f64) as usize % k, 0)
@@ -634,14 +860,14 @@ fn init_state<R: Rng>(
                         let z = cands[(rng.gen::<f64>() * cands.len() as f64) as usize % cands.len()];
                         (z, 1)
                     };
-                    ndk[d][z] += 1;
+                    ndk[d][z] += wt;
                     if s == 0 {
-                        nkw[z][w] += 1;
-                        nk0[z] += 1;
+                        nkw[z][w] += wt;
+                        nk0[z] += wt;
                     } else {
                         let j = ki.keyword_index(z, w).unwrap();
-                        nkx[z][j] += 1;
-                        nk1[z] += 1;
+                        nkx[z][j] += wt;
+                        nk1[z] += wt;
                     }
                     (z, s)
                 })
@@ -665,6 +891,7 @@ fn init_state<R: Rng>(
         nk0,
         nkx,
         nk1,
+        vocab_weights,
         lambda: None,
         features: None,
         dynamic: None,
@@ -695,6 +922,8 @@ pub fn fit_keyatm_cov<R: Rng>(
     burn_in: usize,
     prior_variance: f64,
     lbfgs_iters: usize,
+    weights: WeightScheme,
+    num_threads: usize,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -702,14 +931,14 @@ pub fn fit_keyatm_cov<R: Rng>(
 
     // α is replaced by the covariate prior; pass a nominal 1.0 for the struct.
     let (mut model, mut assignments, ki) = init_state(
-        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, rng,
+        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, weights, rng,
     );
 
     let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
     let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
 
     for it in 0..iters {
-        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
         if opt_interval > 0 && it + 1 > burn_in && (it + 1 - burn_in) % opt_interval == 0 {
             crate::dmr::optimize_lambda(
                 &mut lambda,
@@ -741,7 +970,7 @@ fn dyn_alpha_loglik(
     k: usize,
     doc_start: usize,
     doc_end: usize,
-    ndk: &[Vec<u32>],
+    ndk: &[Vec<f64>],
     doc_len: &[f64],
     prior_shape: f64,
     prior_scale: f64,
@@ -750,7 +979,7 @@ fn dyn_alpha_loglik(
     let fixed = lgamma(alpha_sum) - lgamma(alpha[k]);
     let mut loglik = gammapdfln(alpha[k], prior_shape, prior_scale);
     for d in doc_start..=doc_end {
-        loglik += fixed + lgamma(ndk[d][k] as f64 + alpha[k]) - lgamma(doc_len[d] + alpha_sum);
+        loglik += fixed + lgamma(ndk[d][k] + alpha[k]) - lgamma(doc_len[d] + alpha_sum);
     }
     loglik
 }
@@ -761,7 +990,7 @@ fn dyn_polyapdfln(
     alpha: &[f64],
     doc_start: usize,
     doc_end: usize,
-    ndk: &[Vec<u32>],
+    ndk: &[Vec<f64>],
     doc_len: &[f64],
 ) -> f64 {
     let alpha_sum: f64 = alpha.iter().sum();
@@ -771,7 +1000,7 @@ fn dyn_polyapdfln(
     for d in doc_start..=doc_end {
         loglik += lg_alpha_sum - lgamma(doc_len[d] + alpha_sum);
         for (k, &a) in alpha.iter().enumerate() {
-            loglik += lgamma(ndk[d][k] as f64 + a) - lg_alpha[k];
+            loglik += lgamma(ndk[d][k] + a) - lg_alpha[k];
         }
     }
     loglik
@@ -787,7 +1016,7 @@ fn dyn_sample_alpha_state<R: Rng>(
     num_keyword_topics: usize,
     doc_start: usize,
     doc_end: usize,
-    ndk: &[Vec<u32>],
+    ndk: &[Vec<f64>],
     doc_len: &[f64],
     eta1: f64,
     eta2: f64,
@@ -877,6 +1106,8 @@ pub fn fit_keyatm_dynamic<R: Rng>(
     eta1_reg: f64,
     eta2_reg: f64,
     iters: usize,
+    weights: WeightScheme,
+    num_threads: usize,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -907,15 +1138,21 @@ pub fn fit_keyatm_dynamic<R: Rng>(
         time_doc_end[num_time - 1] = docs.len() - 1;
     }
 
-    let doc_len: Vec<f64> = docs.iter().map(|d| d.len() as f64).collect();
     let min_v = shrinkp(1e-9);
     let max_v = shrinkp(100.0);
 
     // α is replaced by the per-state HMM prior; pass a nominal 1.0 for the struct.
     let (mut model, mut assignments, ki) = init_state(
-        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, rng,
+        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, weights, rng,
     );
     let num_keyword_topics = model.num_keyword_topics;
+
+    // Weighted document lengths (Σ token weights), matching the weighted counts
+    // the Dirichlet-multinomial marginal (alpha_loglik / polyapdfln) consumes.
+    let doc_len: Vec<f64> = docs
+        .iter()
+        .map(|d| d.iter().map(|&w| model.vocab_weights[w as usize]).sum())
+        .collect();
 
     // --- Initialise HMM state ---
     // Per-state α, keyATM's 50/K start.
@@ -959,7 +1196,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
             .iter()
             .map(|&t| alphas[r_est[t]].clone())
             .collect();
-        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
 
         // 2. Slice-sample each state's α over the documents it currently owns.
         // States are contiguous in time, so walk the segment ranges in order.
@@ -1096,7 +1333,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, WeightScheme::None, 1, &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -1143,7 +1380,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, WeightScheme::None, 1, &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -1179,7 +1416,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, WeightScheme::None, 1, &mut rng,
         );
 
         let d = docs.len();
@@ -1237,7 +1474,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         let model = fit_keyatm_dynamic(
             &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0,
-            2.0, 1.0, 300, &mut rng,
+            2.0, 1.0, 300, WeightScheme::None, 1, &mut rng,
         );
 
         let dyn_ = model.dynamic.as_ref().expect("dynamic state present");
@@ -1271,10 +1508,10 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(9);
         let mut r2 = ChaCha8Rng::seed_from_u64(9);
         let m1 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, &mut r1,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, WeightScheme::None, 1, &mut r1,
         );
         let m2 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, &mut r2,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, WeightScheme::None, 1, &mut r2,
         );
         assert_eq!(
             m1.dynamic.as_ref().unwrap().r_est,
@@ -1300,8 +1537,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, WeightScheme::None, 1, &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, WeightScheme::None, 1, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),

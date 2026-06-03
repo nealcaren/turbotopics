@@ -51,6 +51,12 @@ model.fit(docs, iters=1500)
 model.keyword_rate        # per-topic share drawn from the keyword distribution
 ```
 
+By default keyATM applies information-theory token weighting (each token counts
+by its word's surprisal in bits), which downweights frequent words and sharpens
+topics. Set `weights="inv-freq"` or `weights="none"` to change it. On large
+corpora, pass `num_threads=N` to sample document partitions in parallel
+(approximate distributed Gibbs); both options apply to every variant below.
+
 ### Covariate keyATM
 
 Pass `covariates` to let document metadata shape topic prevalence, the keyATM
