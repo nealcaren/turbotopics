@@ -1,6 +1,24 @@
-# turbotopics — Fast SparseLDA Topic Modeling in Python
+# turbotopics — fast, all-purpose topic modeling for Python
 
-`turbotopics` brings MALLET's SparseLDA Gibbs sampler to Python without the JVM. The core sampler is [RustMallet](https://github.com/mimno/RustMallet), David Mimno's Rust reimplementation of MALLET's three-bucket SparseLDA scheme (Yao, Mimno & McCallum, KDD 2009); these bindings wrap its library crate via PyO3/maturin, giving native-code speed with a clean, numpy-native Python API. Results are fully deterministic for a given seed, and reproduce the upstream `train` CLI bit-for-bit on the same corpus and parameters. Input is pre-tokenized lists of strings; output is numpy arrays you can feed directly into any downstream analysis.
+`turbotopics` is a topic-modeling library with a Rust core and a clean, numpy-native Python API. It gathers a broad family of models — from classic LDA to the Structural Topic Model — under one roof, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
+
+**Models:**
+
+| Model | What it's for |
+|-------|---------------|
+| **`LDA`** | Classic topics via fast collapsed-Gibbs (SparseLDA), with optional multi-threaded training |
+| **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
+| **`LabeledLDA`** | Supervised topics tied to document labels |
+| **`CTM`** | Correlated topics (logistic-normal) |
+| **`STM`** | The Structural Topic Model: correlated topics with prevalence **and** content covariates |
+| **`SAGE`** | Content-covariate topics — the same topic worded differently across groups |
+| **`HDP`** | Nonparametric LDA that *infers* the number of topics |
+| **`DTM`** | Dynamic topics that evolve across time slices |
+| **`SupervisedLDA`** | Topics shaped to predict a per-document response |
+
+Everything takes pre-tokenized `list[list[str]]` (or a `Corpus`) and returns numpy arrays ready for downstream analysis, plus an `stm`-style toolkit (covariate effects, FREX, topic correlation, `searchK`) and fit diagnostics (held-out perplexity, coherence). The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores automatically while staying bit-for-bit deterministic.
+
+The implementations are faithful and validated, not approximations: the `LDA` core binds David Mimno's [RustMallet](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit, while the other models are original Rust ports checked against their reference implementations — Java MALLET, the R `stm` package, and Blei's dynamic-topic-model code.
 
 ---
 
@@ -18,12 +36,13 @@ Pre-built abi3 wheels are provided for CPython >= 3.9 on Linux, macOS, and Windo
 
 ```bash
 pip install maturin
-git clone https://github.com/mimno/RustMallet
-cd RustMallet
-maturin develop --features python
+git clone https://github.com/nealcaren/turbotopics
+cd turbotopics
+python -m venv .venv && source .venv/bin/activate
+maturin develop --release --features python
 ```
 
-A `numpy` dependency is required (`numpy >= 1.21`).
+A `numpy` dependency is required (`numpy >= 1.21`). Use `--release` for an optimized build (the debug build is much slower).
 
 ---
 
