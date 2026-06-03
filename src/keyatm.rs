@@ -1199,29 +1199,78 @@ pub fn fit_keyatm_dynamic<R: Rng>(
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
 
         // 2. Slice-sample each state's α over the documents it currently owns.
-        // States are contiguous in time, so walk the segment ranges in order.
-        let mut seg = 0usize;
-        for r in 0..num_states {
-            let seg_start = seg;
-            let seg_end = seg + r_count[r] - 1;
-            seg = seg_end + 1;
-            let d_start = time_doc_start[seg_start];
-            let d_end = time_doc_end[seg_end];
-            dyn_sample_alpha_state(
-                &mut alphas[r], num_keyword_topics, d_start, d_end, &model.ndk, &doc_len,
-                eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, rng,
-            );
+        // States are contiguous in time; their document ranges are disjoint, so
+        // the per-state slice sampling is independent and parallelises cleanly.
+        // The α slice sampler dominates the per-sweep cost on large corpora.
+        let ranges: Vec<(usize, usize)> = {
+            let mut seg = 0usize;
+            (0..num_states)
+                .map(|r| {
+                    let seg_start = seg;
+                    let seg_end = seg + r_count[r] - 1;
+                    seg = seg_end + 1;
+                    (time_doc_start[seg_start], time_doc_end[seg_end])
+                })
+                .collect()
+        };
+        if num_threads > 1 {
+            use rand_chacha::rand_core::SeedableRng;
+            use rand_chacha::ChaCha8Rng;
+            use rayon::prelude::*;
+            let base: u64 = rng.gen();
+            let ndk = &model.ndk;
+            alphas
+                .par_iter_mut()
+                .zip(ranges.par_iter())
+                .enumerate()
+                .for_each(|(r, (alpha, &(d_start, d_end)))| {
+                    let mut srng = ChaCha8Rng::seed_from_u64(
+                        base ^ (r as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                    );
+                    dyn_sample_alpha_state(
+                        alpha, num_keyword_topics, d_start, d_end, ndk, &doc_len,
+                        eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, &mut srng,
+                    );
+                });
+        } else {
+            for (r, &(d_start, d_end)) in ranges.iter().enumerate() {
+                dyn_sample_alpha_state(
+                    &mut alphas[r], num_keyword_topics, d_start, d_end, &model.ndk, &doc_len,
+                    eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, rng,
+                );
+            }
         }
 
-        // 3. Forward filter: Prk[t][r] = p(state_t = r | y_{1..t}).
+        // 3. Forward filter: Prk[t][r] = p(state_t = r | y_{1..t}). The Pólya
+        // likelihoods logfy[t][r] are independent across (t, r); precompute them
+        // (in parallel when threaded — this does not change results, only speed).
+        let logfy_all: Vec<Vec<f64>> = if num_threads > 1 {
+            use rayon::prelude::*;
+            let ndk = &model.ndk;
+            (1..num_time)
+                .into_par_iter()
+                .map(|t| {
+                    (0..num_states)
+                        .map(|r| dyn_polyapdfln(&alphas[r], time_doc_start[t], time_doc_end[t], ndk, &doc_len))
+                        .collect()
+                })
+                .collect()
+        } else {
+            (1..num_time)
+                .map(|t| {
+                    (0..num_states)
+                        .map(|r| dyn_polyapdfln(&alphas[r], time_doc_start[t], time_doc_end[t], &model.ndk, &doc_len))
+                        .collect()
+                })
+                .collect()
+        };
+
         for v in prk[0].iter_mut() {
             *v = 0.0;
         }
         prk[0][0] = 1.0; // first segment is always state 0
         for t in 1..num_time {
-            let logfy: Vec<f64> = (0..num_states)
-                .map(|r| dyn_polyapdfln(&alphas[r], time_doc_start[t], time_doc_end[t], &model.ndk, &doc_len))
-                .collect();
+            let logfy = &logfy_all[t - 1];
             // rt_k[r] = Σ_j Prk[t-1][j] · P[j][r]
             let rt_k: Vec<f64> = (0..num_states)
                 .map(|r| (0..num_states).map(|j| prk[t - 1][j] * p_est[j][r]).sum())
