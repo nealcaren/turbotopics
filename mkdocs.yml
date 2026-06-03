@@ -10,15 +10,15 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep orange
-      accent: deep orange
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep orange
-      accent: deep orange
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
@@ -32,6 +32,9 @@ theme:
     - content.code.annotate
     - toc.follow
     - search.suggest
+
+extra_css:
+  - stylesheets/extra.css
 
 markdown_extensions:
   - admonition

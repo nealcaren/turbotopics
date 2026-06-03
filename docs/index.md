@@ -1,9 +1,13 @@
 # Topica
 
-**Fast, all-purpose topic modeling for Python.** A Rust core gives you MALLET's
-algorithm without the JVM and the Structural Topic Model without R, plus
-diagnostics, validation, and covariate analysis. Everything returns plain
-NumPy arrays.
+`topica` is a topic-modeling library with a Rust core and a numpy-native Python
+API. It covers a family of models (from classic LDA to the Structural Topic
+Model), fits them in native code (no JVM, no pure-Python inner loops), and keeps
+every fit **deterministic for a given seed**. It is built for working social
+scientists: every model ships with the validation, covariate-effect, and
+reporting tools that contemporary social science journals expect, so the output
+is an analysis that holds up in peer review, not a quick demonstration. Pass
+pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
 
 ```bash
 pip install topica

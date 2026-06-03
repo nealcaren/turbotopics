@@ -1,8 +1,8 @@
-# Topica — fast, all-purpose topic modeling for Python
+# Topica: fast, all-purpose topic modeling for Python
 
-📖 **Documentation: [nealcaren.github.io/topica](https://nealcaren.github.io/topica/)** — guides, a full API reference, worked examples, and a [*Publishing in a social science journal*](https://nealcaren.github.io/topica/publishing/) methodology track.
+📖 **[Documentation](https://nealcaren.github.io/topica/)**: guides, a full API reference, worked examples, and a [*Publishing in a social science journal*](https://nealcaren.github.io/topica/publishing/) methodology track.
 
-`topica` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models — from classic LDA to the Structural Topic Model — fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**. Pass pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
+`topica` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models (from classic LDA to the Structural Topic Model), fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**. It is built for working social scientists: every model ships with the validation, covariate-effect, and reporting tools that contemporary social science journals expect, so the output is an analysis that holds up in peer review, not a quick demonstration. Pass pre-tokenized `list[list[str]]` (or a `Corpus`); get back plain numpy arrays.
 
 ```bash
 pip install topica            # once published; pre-built abi3 wheels, no Rust toolchain needed
@@ -29,7 +29,7 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 | **`LabeledLDA`** | Supervised topics tied to document labels |
 | **`CTM`** | Correlated topics (logistic-normal) |
 | **`STM`** | The Structural Topic Model: correlated topics with prevalence **and** content covariates |
-| **`SAGE`** | Content-covariate topics — the same topic worded differently across groups |
+| **`SAGE`** | Content-covariate topics: the same topic worded differently across groups |
 | **`HDP`** | Nonparametric LDA that *infers* the number of topics |
 | **`DTM`** | Dynamic topics that evolve across time slices |
 | **`SupervisedLDA`** | Topics shaped to predict a per-document response |
@@ -41,7 +41,7 @@ Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `d
 
 ## Diagnostics & analysis
 
-Model-agnostic — they work on any fitted model's `topic_word`/`doc_topic`:
+Model-agnostic: they work on any fitted model's `topic_word`/`doc_topic`:
 
 - **Quality:** `coherence` (`u_mass`, `c_v`, `c_uci`, `c_npmi`; computed in the Rust core), `exclusivity`, `topic_diversity`, `quality_frontier`
 - **Labeling:** `label_topics` (prob / FREX / lift / score), `frex`, `relevance`, `find_thoughts`, `topic_table`, `summary`
@@ -67,15 +67,15 @@ Requires `numpy >= 1.21`. Use `--release` (the debug build is much slower).
 
 Topica stands on a generation of open topic-modeling research and code. The `LDA` core binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) and reproduces [**MALLET**](https://github.com/mimno/Mallet)'s `train` output bit-for-bit; the other models are Rust ports or reimplementations, validated against their reference implementations:
 
-- [**MALLET**](https://github.com/mimno/Mallet) (McCallum) — SparseLDA, DMR, hyperparameter optimization
-- [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley) — the Structural Topic Model, `estimateEffect`, `searchK`, FREX, spectral initialization, method of composition
-- [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab) — the CTM, Dynamic Topic Model, and HDP samplers
-- [**gensim**](https://github.com/piskvorky/gensim) — coherence measures and the `LdaSeqModel` DTM reference
-- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min) — API conventions (`summary`, short-text models)
-- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki) — keyword-assisted topic models
-- [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe) — seeded LDA
-- [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al.) — the alias-table Metropolis-Hastings sampler
-- **GSDMM** (Yin & Wang 2014) — the movie-group-process mixture for short text
+- [**MALLET**](https://github.com/mimno/Mallet) (McCallum): SparseLDA, DMR, hyperparameter optimization
+- [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley): the Structural Topic Model, `estimateEffect`, `searchK`, FREX, spectral initialization, method of composition
+- [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab): the CTM, Dynamic Topic Model, and HDP samplers
+- [**gensim**](https://github.com/piskvorky/gensim): coherence measures and the `LdaSeqModel` DTM reference
+- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min): API conventions (`summary`, short-text models)
+- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki): keyword-assisted topic models
+- [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe): seeded LDA
+- [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al.): the alias-table Metropolis-Hastings sampler
+- **GSDMM** (Yin & Wang 2014): the movie-group-process mixture for short text
 
 Underlying methods are credited to their authors in the [documentation](https://nealcaren.github.io/topica/) and the source. The SparseLDA scheme is Yao, Mimno & McCallum (KDD 2009).
 
