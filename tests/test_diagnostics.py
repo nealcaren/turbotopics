@@ -4,7 +4,7 @@ alignment / stability utilities (turbotopics.stm)."""
 import numpy as np
 import pytest
 
-from turbotopics import LDA, stm
+from turbotopics import LDA, stm, diagnostics
 
 
 @pytest.fixture(scope="module")
@@ -73,10 +73,10 @@ class TestCheckResiduals:
 
     def test_chisq_sf_matches_known_values(self):
         # chi-square survival function sanity checks.
-        assert abs(stm._chisq_sf(0.0, 4) - 1.0) < 1e-9
+        assert abs(diagnostics._chisq_sf(0.0, 4) - 1.0) < 1e-9
         # median of chi^2_4 is ~3.357 -> SF ~ 0.5
-        assert abs(stm._chisq_sf(3.357, 4) - 0.5) < 0.02
-        assert stm._chisq_sf(1000.0, 10) < 1e-6
+        assert abs(diagnostics._chisq_sf(3.357, 4) - 0.5) < 0.02
+        assert diagnostics._chisq_sf(1000.0, 10) < 1e-6
 
     def test_doc_mismatch_raises(self, two_topic):
         m, docs = two_topic
@@ -113,10 +113,10 @@ class TestAlignment:
     def test_hungarian_optimal(self):
         # Cost matrix whose optimal assignment is the anti-diagonal.
         cost = np.array([[9.0, 1.0], [1.0, 9.0]])
-        pairs = stm._hungarian(cost)
+        pairs = diagnostics._hungarian(cost)
         assert sorted(pairs) == [(0, 1), (1, 0)]
         cost2 = np.array([[1.0, 9.0], [9.0, 1.0]])
-        assert sorted(stm._hungarian(cost2)) == [(0, 0), (1, 1)]
+        assert sorted(diagnostics._hungarian(cost2)) == [(0, 0), (1, 1)]
 
 
 class TestStability:

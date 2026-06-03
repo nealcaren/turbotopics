@@ -1154,6 +1154,34 @@ The first argument is a fitted model (its top words are read automatically) or a
 print("Topic diversity:", tt.topic_diversity(model, topn=25))
 ```
 
+### Exclusivity and the coherence–exclusivity plot
+
+`tt.exclusivity(model, n=10)` returns per-topic **exclusivity** — how concentrated each topic's top words are in that topic rather than shared across topics. It's the companion to per-topic coherence in the standard STM topic-quality workflow: plot one against the other and good topics sit toward the upper-right (coherent *and* distinctive).
+
+```python
+import numpy as np
+
+coh  = model.coherence(10)        # per-topic UMass coherence
+excl = tt.exclusivity(model, 10)  # per-topic exclusivity, same shape
+for t, (c, e) in enumerate(zip(coh, excl)):
+    print(f"topic {t}: coherence={c:+.2f}  exclusivity={e:.3f}")
+# scatter coh (x) vs excl (y) to spot weak topics in the lower-left
+```
+
+### Human validation: intrusion tests
+
+The intrusion tests of Chang et al. (2009, *Reading Tea Leaves*) are the standard way social scientists validate that topics are humanly interpretable — and they work on any fitted model.
+
+`tt.word_intrusion(model, n_words=5, seed=0)` builds, per topic, its top words plus one **intruder** (a word salient in another topic but rare here). Show the shuffled `words` to a human; if they can reliably pick the `intruder`, the topic is coherent.
+
+```python
+for t in tt.word_intrusion(model, n_words=5, seed=0):
+    print(f"Topic {t['topic']}: {t['words']}")
+    print(f"  answer -> intruder '{t['intruder']}' at position {t['intruder_index']}")
+```
+
+`tt.document_intrusion(model, texts=None, n_docs=3, seed=0)` does the same with documents: each topic's most representative documents plus one where the topic is nearly absent. Pass `texts` to get `texts` previews alongside the `doc_indices`; the answer key is `intruder_index`. Both are deterministic for a fixed `seed`.
+
 ### Diagnostics table
 
 `diagnostics(n)` returns one dict per topic with the following fields:
@@ -1267,7 +1295,28 @@ for row in results:
           f"perplexity={row.get('perplexity', 'n/a')}")
 ```
 
-### stm submodule API summary
+### API summary
+
+turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc analyses — labeling, interpretation, comparison, visualization — are exported at the **top level** (and also live in `turbotopics.diagnostics`). They take any fitted model's `topic_word`/`doc_topic`, not just an STM. The handful of genuinely *structural* operations (regressing topics on covariates) stay in the `turbotopics.stm` submodule.
+
+**General diagnostics** (`tt.<name>`, also `tt.diagnostics.<name>`; the `stm.<name>` aliases still work):
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `frex(topic_word, vocabulary, *, w=0.5, n=10)` | `list[list[(word, score)]]` | FREX (frequency–exclusivity) top words per topic. |
+| `label_topics(topic_word, vocabulary, *, n=10)` | `list[dict]` | Per-topic word lists: keys `prob`, `frex`, `lift`, `score`. |
+| `topic_correlation(doc_topic, *, threshold=0.05)` | `TopicCorrelation` | Correlation network: `.cor`, `.adjacency`, `.edges`. |
+| `find_thoughts(doc_topic, texts=None, *, topic, n=3)` | `list[(idx, prop, text)]` | Top-n docs for a topic, sorted by descending proportion. |
+| `search_k(docs, ks, *, held_out=None, iterations=500, ...)` | `list[dict]` | Fit LDA per K; report coherence, exclusivity, perplexity. |
+| `relevance(topic_word, vocabulary, *, topic=None, lam=0.6, n=10, term_frequency=None)` | `list[(word, score)]` | LDAvis relevance (Sievert & Shirley 2014); the FREX cousin the LDAvis slider tunes. |
+| `prepare_pyldavis(model, docs, **kwargs)` | `PreparedData` or `PyLDAvisInputs` | Build the LDAvis intertopic-distance view; returns `pyLDAvis`'s object if installed, else the input arrays. |
+| `check_residuals(model, docs, *, tol=0.01)` | `ResidualCheck` | Taddy (2012) residual-dispersion test for whether K is too small (faithful to stm's `checkResiduals`). `.dispersion`, `.pvalue`, `.df`. |
+| `align_topics(a, b, *, metric="cosine")` | `list[(topic_a, topic_b, dist)]` | One-to-one topic matching across two fits (Hungarian); `metric` ∈ `cosine`/`js`. |
+| `topic_stability(runs, *, topn=10, metric="cosine")` | `float` | Term-centric stability across fits (Greene et al. 2014): mean top-N Jaccard of matched topics. |
+| `exclusivity(model, *, n=10)` | `ndarray (K,)` | Per-topic exclusivity (see [Exclusivity](#exclusivity-and-the-coherenceexclusivity-plot)). |
+| `word_intrusion` / `document_intrusion` | `list[dict]` | Human-validation intrusion tests (see [Human validation](#human-validation-intrusion-tests)). |
+
+**Structural topic model** (`turbotopics.stm` — covariates on topic prevalence):
 
 | Function | Returns | Notes |
 |----------|---------|-------|
@@ -1275,16 +1324,6 @@ for row in results:
 | `stm.posterior_theta_samples(model, nsims=25, seed=0)` | `ndarray (nsims, D, K)` | Draw θ from an `STM`/`CTM` variational posterior (`eta_mean`/`eta_cov`); feed to `estimate_effect` for proper uncertainty. |
 | `stm.spline(x, df=4, knots=None)` | `(ndarray (n, df), names)` | Restricted cubic-spline basis for nonlinear terms (R `stm`'s `s(x)`). |
 | `stm.interaction(a, b, name="interaction")` | `(ndarray, names)` | Pairwise-product interaction columns (R `stm`'s `a*b`). |
-| `stm.frex(topic_word, vocabulary, *, w=0.5, n=10)` | `list[list[(word, score)]]` | FREX (frequency–exclusivity) top words per topic. |
-| `stm.label_topics(topic_word, vocabulary, *, n=10)` | `list[dict]` | Per-topic word lists: keys `prob`, `frex`, `lift`, `score`. |
-| `stm.topic_correlation(doc_topic, *, threshold=0.05)` | `TopicCorrelation` | Correlation network: `.cor`, `.adjacency`, `.edges`. |
-| `stm.find_thoughts(doc_topic, texts=None, *, topic, n=3)` | `list[(idx, prop, text)]` | Top-n docs for a topic, sorted by descending proportion. |
-| `stm.search_k(docs, ks, *, held_out=None, iterations=500, ...)` | `list[dict]` | Fit LDA per K; report coherence, exclusivity, perplexity. |
-| `stm.relevance(topic_word, vocabulary, *, topic=None, lam=0.6, n=10, term_frequency=None)` | `list[(word, score)]` | LDAvis relevance (Sievert & Shirley 2014); the FREX cousin the LDAvis slider tunes. |
-| `stm.prepare_pyldavis(model, docs, **kwargs)` | `PreparedData` or `PyLDAvisInputs` | Build the LDAvis intertopic-distance view; returns `pyLDAvis`'s object if installed, else the input arrays. |
-| `stm.check_residuals(model, docs, *, tol=0.01)` | `ResidualCheck` | Taddy (2012) residual-dispersion test for whether K is too small (faithful to stm's `checkResiduals`). `.dispersion`, `.pvalue`, `.df`. |
-| `stm.align_topics(a, b, *, metric="cosine")` | `list[(topic_a, topic_b, dist)]` | One-to-one topic matching across two fits (Hungarian); `metric` ∈ `cosine`/`js`. |
-| `stm.topic_stability(runs, *, topn=10, metric="cosine")` | `float` | Term-centric stability across fits (Greene et al. 2014): mean top-N Jaccard of matched topics. |
 
 `TopicEffect` fields: `.topic`, `.feature_names`, `.coef`, `.se`, `.z`, `.ci_low`, `.ci_high`, `.r_squared`, `.as_dict()`. The OLS intercept is prepended by default (`add_intercept=True`); pass `add_intercept=False` to suppress it.
 

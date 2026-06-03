@@ -279,3 +279,160 @@ def topic_diversity(topics, topn=25):
             seen.add(w)
             total += 1
     return len(seen) / total if total else float("nan")
+
+
+# ---------------------------------------------------------------------------
+# Exclusivity + human-validation intrusion tests
+#
+# These are general topic-model diagnostics — they operate on any fitted
+# model's ``topic_word`` (φ) / ``doc_topic`` (θ), not just STM — so they live
+# beside coherence/topic_diversity rather than in the stm toolkit.
+# ---------------------------------------------------------------------------
+
+def _as_topic_word(obj):
+    """A fitted model (use its ``topic_word``) or a ``(K, V)`` array."""
+    if hasattr(obj, "topic_word") and not isinstance(obj, np.ndarray):
+        return np.asarray(obj.topic_word, dtype=np.float64)
+    return np.asarray(obj, dtype=np.float64)
+
+
+def _as_doc_topic(obj):
+    """A fitted model (use its ``doc_topic``) or a ``(D, K)`` array."""
+    if hasattr(obj, "doc_topic") and not isinstance(obj, np.ndarray):
+        return np.asarray(obj.doc_topic, dtype=np.float64)
+    return np.asarray(obj, dtype=np.float64)
+
+
+def _vocabulary_of(obj, vocabulary):
+    if vocabulary is not None:
+        return list(vocabulary)
+    if hasattr(obj, "vocabulary"):
+        return list(obj.vocabulary)
+    raise ValueError("vocabulary is required when the model/array carries none")
+
+
+def exclusivity(model_or_phi, *, n=10):
+    """Per-topic exclusivity, shape ``(num_topics,)``.
+
+    For each topic, the mean over its top-``n`` words (by probability) of the
+    exclusivity ``φ_{t,v} / Σ_k φ_{k,v}`` — how concentrated a word is in this
+    topic rather than shared across topics. Pair with per-topic coherence (e.g.
+    a model's ``coherence(n)``) to make stm's coherence-vs-exclusivity quality
+    plot: good topics sit toward the upper-right (coherent *and* distinctive).
+
+    `model_or_phi` is a fitted model (uses its ``topic_word``) or a ``(K, V)``
+    array.
+    """
+    phi = _as_topic_word(model_or_phi)
+    K, _ = phi.shape
+    col = phi.sum(axis=0)
+    col[col == 0] = 1.0
+    excl = phi / col
+    out = np.empty(K, dtype=np.float64)
+    for t in range(K):
+        top = np.argsort(phi[t])[::-1][:n]
+        out[t] = excl[t, top].mean()
+    return out
+
+
+def word_intrusion(model_or_phi, vocabulary=None, *, n_words=5, seed=0):
+    """Build a *word intrusion* test for human topic validation.
+
+    For each topic, take its top ``n_words`` words and splice in one **intruder**
+    — a word that ranks highly in some *other* topic but has low probability in
+    this one. A coherent topic is one where a human can reliably spot the
+    intruder (Chang et al. 2009, "Reading Tea Leaves"). Returns a list (per
+    topic) of dicts with:
+
+    - ``topic`` — the topic index,
+    - ``words`` — the ``n_words + 1`` words in shuffled, presentation order,
+    - ``intruder`` — the intruder word,
+    - ``intruder_index`` — its position in ``words`` (the answer key).
+
+    `model_or_phi` is a fitted model (uses its ``topic_word`` / ``vocabulary``)
+    or a ``(K, V)`` array (then pass ``vocabulary``). Deterministic for a fixed
+    ``seed``.
+    """
+    phi = _as_topic_word(model_or_phi)
+    vocab = _vocabulary_of(model_or_phi, vocabulary)
+    K, V = phi.shape
+    if K < 2:
+        raise ValueError("word intrusion needs at least 2 topics")
+    order = np.argsort(phi, axis=1)[:, ::-1]      # words per topic, best first
+    top_sets = [set(order[t, :n_words]) for t in range(K)]
+    salient = set().union(*top_sets)              # any topic's top words
+
+    out = []
+    for t in range(K):
+        rng = np.random.RandomState(seed + t)
+        top = list(order[t, :n_words])
+        top_set = top_sets[t]
+        # Intruder candidates: salient in another topic, not a top word here, and
+        # low probability in this topic (below this topic's median word prob).
+        median = float(np.median(phi[t]))
+        cands = [w for w in salient if w not in top_set and phi[t, w] <= median]
+        if not cands:  # fall back to any low-prob word in this topic
+            low = order[t, ::-1]
+            cands = [int(w) for w in low[: max(1, V // 2)]]
+        intruder = int(cands[rng.randint(len(cands))])
+        words_idx = top + [intruder]
+        perm = rng.permutation(len(words_idx))
+        shuffled = [int(words_idx[i]) for i in perm]
+        out.append({
+            "topic": t,
+            "words": [vocab[i] for i in shuffled],
+            "intruder": vocab[intruder],
+            "intruder_index": int(np.where(perm == n_words)[0][0]),
+        })
+    return out
+
+
+def document_intrusion(model_or_theta, texts=None, *, n_docs=3, seed=0):
+    """Build a *document intrusion* test for human topic validation.
+
+    For each topic, take the ``n_docs`` documents with the highest proportion of
+    that topic and splice in one **intruder** — a document where the topic is
+    nearly absent (and another topic dominates). A topic that captures real
+    document similarity is one where a human can spot the intruder. Returns a
+    list (per topic) of dicts with:
+
+    - ``topic`` — the topic index,
+    - ``doc_indices`` — the ``n_docs + 1`` document indices in shuffled order,
+    - ``intruder_index`` — the intruder's position in ``doc_indices``,
+    - ``texts`` — the corresponding text previews (only if ``texts`` is given).
+
+    `model_or_theta` is a ``(D, K)`` θ array (or a fitted model, whose
+    ``doc_topic`` is used). Deterministic for a fixed ``seed``.
+    """
+    theta = _as_doc_topic(model_or_theta)
+    D, K = theta.shape
+    if K < 2:
+        raise ValueError("document intrusion needs at least 2 topics")
+    if D < n_docs + 1:
+        raise ValueError(f"need at least {n_docs + 1} documents, got {D}")
+    dominant = theta.argmax(axis=1)
+
+    out = []
+    for t in range(K):
+        rng = np.random.RandomState(seed + t)
+        ranked = np.argsort(theta[:, t])[::-1]
+        top = [int(d) for d in ranked[:n_docs]]
+        # Intruder: a doc dominated by another topic, drawn from the bottom
+        # quartile of this topic's proportion.
+        tail = ranked[-max(1, D // 4):]
+        cands = [int(d) for d in tail if dominant[d] != t]
+        if not cands:
+            cands = [int(d) for d in tail]
+        intruder = int(cands[rng.randint(len(cands))])
+        docs_idx = top + [intruder]
+        perm = rng.permutation(len(docs_idx))
+        shuffled = [int(docs_idx[i]) for i in perm]
+        entry = {
+            "topic": t,
+            "doc_indices": shuffled,
+            "intruder_index": int(np.where(perm == n_docs)[0][0]),
+        }
+        if texts is not None:
+            entry["texts"] = [str(texts[i])[:120] for i in shuffled]
+        out.append(entry)
+    return out

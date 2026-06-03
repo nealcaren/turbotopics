@@ -86,8 +86,27 @@ def summary(model, topn=8):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from . import diagnostics  # noqa: E402
 from . import phrases  # noqa: E402
-from .coherence import coherence, topic_diversity  # noqa: E402
+from .coherence import (  # noqa: E402
+    coherence,
+    topic_diversity,
+    exclusivity,
+    word_intrusion,
+    document_intrusion,
+)
+from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analyses
+    frex,
+    label_topics,
+    topic_correlation,
+    find_thoughts,
+    search_k,
+    relevance,
+    prepare_pyldavis,
+    check_residuals,
+    align_topics,
+    topic_stability,
+)
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 
 __all__ = [
@@ -110,7 +129,21 @@ __all__ = [
     "phrases",
     "coherence",
     "topic_diversity",
+    "exclusivity",
+    "word_intrusion",
+    "document_intrusion",
+    "frex",
+    "label_topics",
+    "topic_correlation",
+    "find_thoughts",
+    "search_k",
+    "relevance",
+    "prepare_pyldavis",
+    "check_residuals",
+    "align_topics",
+    "topic_stability",
     "summary",
+    "diagnostics",
     "learn_phrases",
     "apply_phrases",
     "Phrases",
