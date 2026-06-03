@@ -74,6 +74,81 @@ def _ols(y, X, hat, XtX_inv, dof):
     return beta, cov, r2
 
 
+def _link_inv(eta, link):
+    if link == "logit":
+        return 1.0 / (1.0 + np.exp(-np.clip(eta, -700, 700)))
+    if link == "log":
+        return np.exp(np.clip(eta, -700, 700))
+    return eta
+
+
+def _sandwich(X, bread, score_resid, groups, n, p):
+    """Robust covariance ``bread · meat · bread``. With `groups` (a list of index
+    arrays) the cluster-robust CR1 estimator; otherwise heteroskedasticity-robust
+    HC1. `score_resid` is the estimating-equation residual (y−μ)."""
+    if groups is None:
+        meat = X.T @ (X * (score_resid ** 2)[:, None])
+        cov = bread @ meat @ bread
+        cov *= n / max(n - p, 1)                       # HC1 small-sample factor
+    else:
+        g_count = len(groups)
+        meat = np.zeros((p, p))
+        for g in groups:
+            s = X[g].T @ score_resid[g]
+            meat += np.outer(s, s)
+        cov = bread @ meat @ bread
+        if g_count > 1:                                # CR1 small-sample factor
+            cov *= (g_count / (g_count - 1)) * ((n - 1) / max(n - p, 1))
+    return cov
+
+
+def _glm_irls(y, X, link, *, iters=50, tol=1e-9):
+    """Iteratively reweighted least squares for a quasi-likelihood GLM (binomial
+    for ``logit``, Poisson for ``log``). Returns (beta, final IRLS weights)."""
+    p = X.shape[1]
+    beta = np.zeros(p)
+    W = np.ones(X.shape[0])
+    for _ in range(iters):
+        eta = X @ beta
+        mu = _link_inv(eta, link)
+        if link == "logit":
+            mu = np.clip(mu, 1e-8, 1 - 1e-8)
+            gprime = 1.0 / (mu * (1.0 - mu))
+            W = mu * (1.0 - mu)                        # 1 / (g'(μ)² · V(μ))
+        else:  # log / quasi-Poisson
+            mu = np.clip(mu, 1e-8, None)
+            gprime = 1.0 / mu
+            W = mu
+        z = eta + (y - mu) * gprime                    # working response
+        new = np.linalg.pinv(X.T @ (X * W[:, None])) @ (X.T @ (W * z))
+        if np.max(np.abs(new - beta)) < tol:
+            beta = new
+            break
+        beta = new
+    return beta, np.clip(W, 1e-12, None)
+
+
+def _fit_one(y, X, *, link, groups, hat, XtX_inv, dof):
+    """Fit one topic's regression. ``link`` is identity (OLS) / logit (fractional
+    logit) / log (quasi-Poisson); ``groups`` (or None) selects cluster-robust vs
+    classical/robust covariance. Returns (beta, cov, r2)."""
+    n, p = X.shape
+    if link == "identity" and groups is None:
+        return _ols(y, X, hat, XtX_inv, dof)           # legacy classical OLS
+    if link == "identity":
+        beta = hat @ y
+        cov = _sandwich(X, XtX_inv, y - X @ beta, groups, n, p)
+        mu = X @ beta
+    else:
+        beta, W = _glm_irls(y, X, link)
+        bread = np.linalg.pinv(X.T @ (X * W[:, None]))
+        mu = _link_inv(X @ beta, link)
+        cov = _sandwich(X, bread, y - mu, groups, n, p)  # GLM ψ_i = X_i(y_i−μ_i)
+    tss = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - float(((y - mu) ** 2).sum()) / tss if tss > 0 else 0.0
+    return beta, cov, r2
+
+
 def estimate_effect(
     doc_topic,
     X,
@@ -82,6 +157,8 @@ def estimate_effect(
     topics=None,
     add_intercept=True,
     ci=0.95,
+    cluster=None,
+    link="identity",
 ):
     """Regress each topic's proportion on document covariates.
 
@@ -91,6 +168,19 @@ def estimate_effect(
     regressed and the results are pooled by Rubin's rules, so the reported
     standard errors include the topic-estimation uncertainty, not just OLS
     sampling error. Get draws with :func:`posterior_theta_samples`.
+
+    For paper-grade inference two extras matter:
+
+    - ``cluster`` — a length-``num_docs`` array of group labels (e.g. speaker,
+      user, outlet). Text data is almost always nested, and ignoring it
+      understates uncertainty. Supplying it switches the standard errors to the
+      **cluster-robust** (CR1) sandwich estimator. (With posterior draws, each
+      draw is clustered and the per-draw covariances are then Rubin-pooled.)
+    - ``link`` — ``"identity"`` (default OLS), ``"logit"`` (fractional logit, via
+      binomial quasi-likelihood), or ``"log"`` (quasi-Poisson). Because topic
+      proportions live in ``[0, 1]``, the logit link keeps fitted values in
+      bounds where OLS can wander outside them (Papke & Wooldridge). Non-identity
+      links report heteroskedasticity- or cluster-robust standard errors.
 
     Parameters
     ----------
@@ -140,6 +230,15 @@ def estimate_effect(
         X = np.hstack([np.ones((n, 1)), X])
         names = ["intercept"] + names
 
+    if link not in ("identity", "logit", "log"):
+        raise ValueError("link must be 'identity', 'logit', or 'log'")
+    groups = None
+    if cluster is not None:
+        cluster = np.asarray(cluster)
+        if cluster.shape[0] != n:
+            raise ValueError("cluster must have one label per document")
+        groups = [np.where(cluster == g)[0] for g in np.unique(cluster)]
+
     p = X.shape[1]
     XtX_inv = np.linalg.pinv(X.T @ X)
     hat = XtX_inv @ X.T  # (p, n)
@@ -156,7 +255,8 @@ def estimate_effect(
             within = np.zeros((p, p))
             r2s = np.empty(nsims)
             for m in range(nsims):
-                b, cov_m, r2_m = _ols(theta[m, :, t], X, hat, XtX_inv, dof)
+                b, cov_m, r2_m = _fit_one(theta[m, :, t], X, link=link, groups=groups,
+                                          hat=hat, XtX_inv=XtX_inv, dof=dof)
                 betas[m] = b
                 within += cov_m
                 r2s[m] = r2_m
@@ -169,7 +269,8 @@ def estimate_effect(
             se = np.sqrt(np.clip(np.diag(total), 0.0, None))
             r2 = float(r2s.mean())
         else:
-            beta, cov, r2 = _ols(theta[:, t], X, hat, XtX_inv, dof)
+            beta, cov, r2 = _fit_one(theta[:, t], X, link=link, groups=groups,
+                                     hat=hat, XtX_inv=XtX_inv, dof=dof)
             se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
         with np.errstate(divide="ignore", invalid="ignore"):
             zvals = np.where(se > 0, beta / se, 0.0)

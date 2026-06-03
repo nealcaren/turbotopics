@@ -16,6 +16,7 @@ from ._turbotopics import (
     DTM,
     SupervisedLDA,
     PT,
+    GSDMM,
     PA,
     HLDA,
     Corpus,
@@ -100,6 +101,9 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     label_topics,
     topic_correlation,
     find_thoughts,
+    find_thoughts_html,
+    quality_frontier,
+    bootstrap_stability,
     search_k,
     relevance,
     prepare_pyldavis,
@@ -107,6 +111,8 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     align_topics,
     topic_stability,
 )
+from .keywords import fighting_words, top_fighting_words  # noqa: E402
+from .preprocess import split_documents  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 
 __all__ = [
@@ -120,6 +126,7 @@ __all__ = [
     "DTM",
     "SupervisedLDA",
     "PT",
+    "GSDMM",
     "PA",
     "HLDA",
     "Corpus",
@@ -142,8 +149,16 @@ __all__ = [
     "check_residuals",
     "align_topics",
     "topic_stability",
+    "find_thoughts_html",
+    "quality_frontier",
+    "bootstrap_stability",
+    "fighting_words",
+    "top_fighting_words",
+    "split_documents",
     "summary",
     "diagnostics",
+    "keywords",
+    "preprocess",
     "learn_phrases",
     "apply_phrases",
     "Phrases",

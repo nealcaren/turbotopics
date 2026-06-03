@@ -19,11 +19,13 @@ exclusivity, and the intrusion tests live in :mod:`turbotopics.coherence`.
 
 from __future__ import annotations
 
+import html as _html
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .coherence import _as_topic_word
+from .coherence import _as_topic_word, _as_doc_topic
 
 # ---------------------------------------------------------------------------
 # labelTopics: prob / FREX / lift / score
@@ -510,12 +512,226 @@ def topic_stability(runs, *, topn=10, metric="cosine"):
     return float(np.mean(scores)) if scores else float("nan")
 
 
+# ---------------------------------------------------------------------------
+# Qualitative validation: highlighted close-reading export
+# ---------------------------------------------------------------------------
+
+def find_thoughts_html(
+    model,
+    texts,
+    *,
+    topics=None,
+    n_docs=3,
+    n_words=8,
+    max_chars=400,
+    markdown=False,
+):
+    """Render each topic's most representative documents for close reading, with
+    the topic's top words **highlighted** in the document text.
+
+    Distant reading (top words) is only half of topic validation; the other half
+    is reading the actual documents a topic loads on. This builds a self-contained
+    HTML snippet (or Markdown) you can ``display`` in a notebook: per topic, its
+    top words followed by its `n_docs` highest-θ documents, each truncated to
+    ``max_chars`` with the topic's words marked.
+
+    `model` is any fitted model exposing ``topic_word``, ``doc_topic`` and
+    ``vocabulary``; `texts` are the original document strings, aligned to the
+    rows of ``doc_topic``. Returns a string (HTML unless ``markdown=True``).
+    """
+    phi = _as_topic_word(model)
+    theta = _as_doc_topic(model)
+    vocab = list(model.vocabulary)
+    if len(texts) != theta.shape[0]:
+        raise ValueError("texts must be aligned with the model's documents")
+    K = phi.shape[0]
+    topics = range(K) if topics is None else topics
+
+    blocks = []
+    for t in topics:
+        top_ids = np.argsort(phi[t])[::-1][:n_words]
+        words = [vocab[i] for i in top_ids]
+        docs = np.argsort(theta[:, t])[::-1][:n_docs]
+        if markdown:
+            blocks.append(_thoughts_md(t, words, docs, theta, texts, max_chars))
+        else:
+            blocks.append(_thoughts_html(t, words, docs, theta, texts, max_chars))
+    if markdown:
+        return "\n\n".join(blocks)
+    return "<div class=\"tt-thoughts\">\n" + "\n".join(blocks) + "\n</div>"
+
+
+def _keyword_pattern(words):
+    # Match the readable surface form of each top word (phrase tokens use "_").
+    surfaces = sorted({w.replace("_", " ") for w in words}, key=len, reverse=True)
+    surfaces = [re.escape(s) for s in surfaces if s]
+    if not surfaces:
+        return None
+    return re.compile(r"\b(" + "|".join(surfaces) + r")\b", re.IGNORECASE)
+
+
+def _truncate(text, max_chars):
+    text = " ".join(text.split())
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0]
+    return cut + " …"
+
+
+def _thoughts_html(t, words, docs, theta, texts, max_chars):
+    pat = _keyword_pattern(words)
+    head = (f"<h4>Topic {t}</h4>\n<p><em>"
+            + ", ".join(_html.escape(w.replace('_', ' ')) for w in words)
+            + "</em></p>\n<ul>")
+    items = []
+    for d in docs:
+        body = _html.escape(_truncate(str(texts[d]), max_chars))
+        if pat is not None:
+            body = pat.sub(lambda m: f"<mark>{m.group(0)}</mark>", body)
+        items.append(f"<li><small>doc {int(d)} (θ={theta[d, t]:.2f})</small><br>{body}</li>")
+    return head + "\n" + "\n".join(items) + "\n</ul>"
+
+
+def _thoughts_md(t, words, docs, theta, texts, max_chars):
+    pat = _keyword_pattern(words)
+    lines = [f"### Topic {t}",
+             "*" + ", ".join(w.replace("_", " ") for w in words) + "*", ""]
+    for d in docs:
+        body = _truncate(str(texts[d]), max_chars)
+        if pat is not None:
+            body = pat.sub(lambda m: f"**{m.group(0)}**", body)
+        lines.append(f"- **doc {int(d)}** (θ={theta[d, t]:.2f}): {body}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Model-quality frontier + bootstrap stability
+# ---------------------------------------------------------------------------
+
+def quality_frontier(model, *, n=10, texts=None, coherence_type="u_mass", plot=False):
+    """Per-topic coherence, exclusivity, and prevalence — the data behind stm's
+    classic coherence-vs-exclusivity quality plot.
+
+    Returns a dict of equal-length arrays: ``topic``, ``coherence``,
+    ``exclusivity``, ``prevalence`` (mean θ). By default coherence is the fast
+    per-topic UMass score; pass ``texts`` and a windowed ``coherence_type`` (e.g.
+    ``"c_v"``) for the human-aligned measure. Feed the dict straight to pandas /
+    matplotlib; with ``plot=True`` (and matplotlib installed) a labeled scatter
+    ``Figure`` is returned alongside the dict as ``(data, fig)``.
+    """
+    from .coherence import coherence as _coherence, exclusivity as _exclusivity
+
+    phi = _as_topic_word(model)
+    theta = _as_doc_topic(model)
+    K = phi.shape[0]
+    if texts is not None and coherence_type != "u_mass":
+        coh = np.asarray(_coherence(model, texts, coherence_type=coherence_type, topn=n))
+    else:
+        coh = np.asarray(model.coherence(n))
+    data = {
+        "topic": np.arange(K),
+        "coherence": coh,
+        "exclusivity": _exclusivity(phi, n=n),
+        "prevalence": theta.mean(axis=0),
+    }
+    if not plot:
+        return data
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError("plot=True requires matplotlib") from exc
+    fig, ax = plt.subplots()
+    ax.scatter(data["coherence"], data["exclusivity"],
+               s=300 * data["prevalence"] + 20)
+    for t in range(K):
+        ax.annotate(str(t), (data["coherence"][t], data["exclusivity"][t]))
+    ax.set_xlabel("Semantic coherence")
+    ax.set_ylabel("Exclusivity")
+    ax.set_title("Topic quality (size ∝ prevalence)")
+    return data, fig
+
+
+def bootstrap_stability(
+    docs,
+    *,
+    k,
+    n_boot=20,
+    topn=10,
+    seed=0,
+    model_factory=None,
+    metric="cosine",
+    **fit_kwargs,
+):
+    """Flag fragile topics by refitting on bootstrap resamples of the corpus.
+
+    The standard defense against "topic modeling is a fishing expedition": fit a
+    reference model on the full corpus, then refit on `n_boot` resamples of the
+    documents (drawn with replacement). Each bootstrap model's topics are matched
+    to the reference's, and a reference topic's **stability** is the mean Jaccard
+    overlap of its top-`topn` words with its matched bootstrap topic. Topics that
+    dissolve under resampling score low.
+
+    Parameters
+    ----------
+    docs : the corpus (``list[list[str]]`` or a ``Corpus``).
+    k : number of topics.
+    n_boot : number of bootstrap resamples.
+    model_factory : ``callable(seed) -> unfitted model``. Defaults to
+        ``LDA(num_topics=k, seed=seed)``. Use it to bootstrap any model.
+    fit_kwargs : forwarded to each model's ``fit`` (e.g. ``iterations=500``).
+
+    Returns
+    -------
+    dict with ``topic`` (indices), ``stability`` (per-topic mean Jaccard in
+    ``[0, 1]``), ``mean`` (overall), and ``reference`` (the full-corpus model).
+    """
+    from . import LDA  # local import to avoid a cycle at module load
+
+    if hasattr(docs, "docs") and hasattr(docs, "id_to_word"):
+        raise TypeError("bootstrap_stability needs a list of token lists, not a Corpus")
+    docs = [list(d) for d in docs]
+    D = len(docs)
+    if D < 2:
+        raise ValueError("need at least two documents to resample")
+    factory = model_factory or (lambda s: LDA(num_topics=k, seed=s))
+
+    ref = factory(seed)
+    ref.fit(docs, **fit_kwargs)
+    ref_phi = _as_topic_word(ref)
+    K = ref_phi.shape[0]
+    ref_top = [set(np.argsort(ref_phi[t])[::-1][:topn]) for t in range(K)]
+
+    rng = np.random.RandomState(seed)
+    per_topic = [[] for _ in range(K)]
+    for b in range(n_boot):
+        pick = rng.randint(0, D, size=D)
+        sample = [docs[i] for i in pick]
+        m = factory(seed + b + 1)
+        m.fit(sample, **fit_kwargs)
+        phi = _as_topic_word(m)
+        for i, j, _ in align_topics(ref_phi, phi, metric=metric):
+            other = set(np.argsort(phi[j])[::-1][:topn])
+            union = ref_top[i] | other
+            per_topic[i].append(len(ref_top[i] & other) / len(union) if union else 0.0)
+
+    stability = np.array([float(np.mean(s)) if s else float("nan") for s in per_topic])
+    return {
+        "topic": np.arange(K),
+        "stability": stability,
+        "mean": float(np.nanmean(stability)),
+        "reference": ref,
+    }
+
+
 __all__ = [
     "frex",
     "label_topics",
     "topic_correlation",
     "TopicCorrelation",
     "find_thoughts",
+    "find_thoughts_html",
+    "quality_frontier",
+    "bootstrap_stability",
     "search_k",
     "relevance",
     "prepare_pyldavis",

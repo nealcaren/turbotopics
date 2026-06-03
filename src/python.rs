@@ -22,6 +22,7 @@ use numpy::{PyArray1, PyArray2, PyArray3, PyReadonlyArray2, ToPyArray};
 
 use crate::dmr;
 use crate::dtm;
+use crate::gsdmm;
 use crate::hdp;
 use crate::hlda;
 use crate::pa;
@@ -167,6 +168,12 @@ struct SldaState {
 struct PtState {
     num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GsdmmState {
+    k_max: usize, alpha: f64, beta: f64, seed: u64, fitted: bool, num_used: usize,
+    phi: Option<Arr2>, theta: Option<Arr2>, doc_cluster: Vec<usize>,
+    corpus: Option<corpus::Corpus>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PaState {
@@ -5126,6 +5133,191 @@ impl PT {
 }
 
 // ---------------------------------------------------------------------------
+// GSDMM: Gibbs Sampling Dirichlet Multinomial Mixture (short-text clustering)
+// ---------------------------------------------------------------------------
+
+/// GSDMM — the "Movie Group Process" (Yin & Wang 2014). A mixture model for
+/// **short texts** (tweets, survey answers, headlines) where each document
+/// belongs to exactly *one* topic, not a mixture. You set an upper bound `K` on
+/// the number of clusters; empty clusters die out during sampling, so the
+/// effective `num_topics` is inferred from the data (≤ K). Handles the sparsity
+/// of short documents far better than LDA.
+#[pyclass(module = "turbotopics")]
+pub struct GSDMM {
+    k_max: usize,
+    alpha: f64,
+    beta: f64,
+    seed: u64,
+    fitted: bool,
+    num_used: usize,
+    phi: Option<Array2<f64>>,        // num_used × V (used clusters only)
+    theta: Option<Array2<f64>>,      // num_docs × num_used (soft assignment)
+    doc_cluster: Vec<usize>,         // hard assignment per doc, remapped to 0..num_used
+    corpus: Option<corpus::Corpus>,
+}
+
+impl GSDMM {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl GSDMM {
+    /// Create an unfitted model. `num_topics` is the *maximum* number of clusters
+    /// `K`; the number actually used (non-empty after fitting) is reported by the
+    /// `num_topics` getter and is usually smaller. `alpha` controls the pull
+    /// toward populous clusters; `beta` is the word-Dirichlet smoothing.
+    #[new]
+    #[pyo3(signature = (num_topics, *, alpha=0.1, beta=0.1, seed=42))]
+    fn new(num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("num_topics (max clusters) must be >= 2"));
+        }
+        if alpha <= 0.0 || beta <= 0.0 {
+            return Err(PyValueError::new_err("alpha and beta must be > 0"));
+        }
+        Ok(GSDMM {
+            k_max: num_topics, alpha, beta, seed,
+            fitted: false, num_used: 0, phi: None, theta: None,
+            doc_cluster: Vec::new(), corpus: None,
+        })
+    }
+
+    /// Fit by the Movie Group Process (collapsed Gibbs) for `iters` sweeps.
+    #[pyo3(signature = (data, *, iters=30))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_types = corpus.num_types();
+        let (k, a, b) = (self.k_max, self.alpha, self.beta);
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = gsdmm::fit_gsdmm(&corpus.docs, num_types, k, a, b, iters, &mut rng);
+            (m, corpus)
+        });
+
+        // Keep only non-empty clusters; remap their ids to a dense 0..num_used.
+        let used = model.used_clusters();
+        let mut remap = vec![usize::MAX; self.k_max];
+        for (new_i, &old) in used.iter().enumerate() {
+            remap[old] = new_i;
+        }
+        let num_used = used.len();
+
+        let phi_rows: Vec<Vec<f64>> = used.iter().map(|&k| model.cluster_word(k)).collect();
+        self.phi = Some(vecs_to_arr2(&phi_rows));
+
+        // Soft per-doc distribution restricted to the used clusters, renormalized.
+        let dist = model.doc_cluster_dist(&corpus.docs);
+        let d = dist.len();
+        let mut theta = Array2::<f64>::zeros((d, num_used));
+        for (di, row) in dist.iter().enumerate() {
+            let mut s = 0.0;
+            for &old in &used {
+                s += row[old];
+            }
+            let s = if s > 0.0 { s } else { 1.0 };
+            for (&old, ni) in used.iter().zip(0..) {
+                theta[[di, ni]] = row[old] / s;
+            }
+        }
+        self.theta = Some(theta);
+        self.doc_cluster = model.doc_cluster().iter().map(|&c| remap[c]).collect();
+        self.num_used = num_used;
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// Topic-word matrix β, shape ``(num_topics, num_words)`` (used clusters only).
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Hard cluster assignment of each document, shape ``(num_docs,)``; values in
+    /// ``0..num_topics``. GSDMM gives each document a single cluster.
+    #[getter]
+    fn doc_cluster<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i64>>> {
+        self.require_fitted()?;
+        let v: Vec<i64> = self.doc_cluster.iter().map(|&c| c as i64).collect();
+        Ok(Array1::from(v).to_pyarray_bound(py))
+    }
+    /// The number of *non-empty* clusters discovered (≤ the `K` you set).
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_used
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        topic_words_helper(py, self.phi.as_ref().unwrap(), &self.corpus.as_ref().unwrap().id_to_word, self.num_used, n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_used, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with `GSDMM.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &GsdmmState {
+            k_max: self.k_max, alpha: self.alpha, beta: self.beta, seed: self.seed,
+            fitted: self.fitted, num_used: self.num_used,
+            phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
+            doc_cluster: self.doc_cluster.clone(), corpus: self.corpus.clone(),
+        })
+    }
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: GsdmmState = read_state(path)?;
+        Ok(GSDMM {
+            k_max: s.k_max, alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
+            num_used: s.num_used, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            doc_cluster: s.doc_cluster, corpus: s.corpus,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("GSDMM(num_topics={}, k_max={}, fitted={})", self.num_used, self.k_max, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PA: Pachinko Allocation Model (super-/sub-topic hierarchy)
 // ---------------------------------------------------------------------------
 
@@ -5483,6 +5675,7 @@ fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DTM>()?;
     m.add_class::<SupervisedLDA>()?;
     m.add_class::<PT>()?;
+    m.add_class::<GSDMM>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;

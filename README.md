@@ -15,8 +15,12 @@
 | **`HDP`** | Nonparametric LDA that *infers* the number of topics |
 | **`DTM`** | Dynamic topics that evolve across time slices |
 | **`SupervisedLDA`** | Topics shaped to predict a per-document response |
+| **`PT`** | Pseudo-document topics for short texts (Zuo et al. 2016) |
+| **`GSDMM`** | One-topic-per-document mixture for short texts — tweets, survey answers (Yin & Wang 2014) |
+| **`PA`** | Pachinko Allocation: super-/sub-topic hierarchy |
+| **`HLDA`** | Hierarchical LDA over a nested-CRP topic tree |
 
-Everything takes pre-tokenized `list[list[str]]` (or a `Corpus`) and returns numpy arrays ready for downstream analysis, plus an `stm`-style toolkit (covariate effects, FREX, topic correlation, `searchK`) and fit diagnostics (held-out perplexity, coherence). The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores automatically while staying bit-for-bit deterministic.
+Everything takes pre-tokenized `list[list[str]]` (or a `Corpus`) and returns numpy arrays ready for downstream analysis, plus general model-agnostic diagnostics (coherence, exclusivity, FREX/labeling, intrusion tests, topic alignment, Fighting Words), an `stm`-style toolkit (covariate effects with clustered SEs and GLM links, topic correlation, `searchK`), and fit diagnostics (held-out perplexity). The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores automatically while staying bit-for-bit deterministic.
 
 The implementations are faithful and validated, not approximations: the `LDA` core binds David Mimno's [RustMallet](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit, while the other models are original Rust ports checked against their reference implementations — Java MALLET, the R `stm` package, and Blei's dynamic-topic-model code.
 
@@ -1315,12 +1319,17 @@ turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc
 | `topic_stability(runs, *, topn=10, metric="cosine")` | `float` | Term-centric stability across fits (Greene et al. 2014): mean top-N Jaccard of matched topics. |
 | `exclusivity(model, *, n=10)` | `ndarray (K,)` | Per-topic exclusivity (see [Exclusivity](#exclusivity-and-the-coherenceexclusivity-plot)). |
 | `word_intrusion` / `document_intrusion` | `list[dict]` | Human-validation intrusion tests (see [Human validation](#human-validation-intrusion-tests)). |
+| `quality_frontier(model, *, n=10, texts=None, plot=False)` | `dict` (or `(dict, fig)`) | Per-topic coherence, exclusivity, prevalence — the data behind the coherence-vs-exclusivity quality plot. |
+| `bootstrap_stability(docs, *, k, n_boot=20, ...)` | `dict` | Refit on bootstrap resamples; per-topic mean Jaccard flags topics that dissolve. Answers the "fishing expedition" critique. |
+| `find_thoughts_html(model, texts, *, n_docs=3, n_words=8, markdown=False)` | `str` | Representative documents per topic with the topic's words highlighted, for close reading in a notebook. |
+| `fighting_words(corpus_a, corpus_b, *, prior=0.01, informative=False)` | `list[(word, z)]` | Monroe-Colaresi-Quinn weighted log-odds: words that distinguish two corpora, with significance. `top_fighting_words(...)` returns the top-n per side. |
+| `split_documents(texts, metadata=None, *, max_words=200, min_words=50)` | `(chunks, chunk_meta)` | Segment long documents into comparable chunks, copying each source's metadata onto every chunk. |
 
 **Structural topic model** (`turbotopics.stm` — covariates on topic prevalence):
 
 | Function | Returns | Notes |
 |----------|---------|-------|
-| `stm.estimate_effect(doc_topic, X, *, feature_names=None, topics=None, add_intercept=True, ci=0.95)` | `list[TopicEffect]` | Regress each topic's θ on covariates. `doc_topic` 2-D → OLS; 3-D (posterior draws) → method-of-composition (Rubin pooling). |
+| `stm.estimate_effect(doc_topic, X, *, feature_names=None, topics=None, add_intercept=True, ci=0.95, cluster=None, link="identity")` | `list[TopicEffect]` | Regress each topic's θ on covariates. `doc_topic` 2-D → OLS; 3-D (posterior draws) → method-of-composition (Rubin pooling). `cluster=` (per-doc group labels) → cluster-robust CR1 SEs for nested data; `link=` `"logit"`/`"log"` → fractional-logit / quasi-Poisson GLM. |
 | `stm.posterior_theta_samples(model, nsims=25, seed=0)` | `ndarray (nsims, D, K)` | Draw θ from an `STM`/`CTM` variational posterior (`eta_mean`/`eta_cov`); feed to `estimate_effect` for proper uncertainty. |
 | `stm.spline(x, df=4, knots=None)` | `(ndarray (n, df), names)` | Restricted cubic-spline basis for nonlinear terms (R `stm`'s `s(x)`). |
 | `stm.interaction(a, b, name="interaction")` | `(ndarray, names)` | Pairwise-product interaction columns (R `stm`'s `a*b`). |

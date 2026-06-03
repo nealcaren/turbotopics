@@ -2,6 +2,7 @@ pub mod corpus;
 pub mod ctm;
 pub mod dmr;
 pub mod dtm;
+pub mod gsdmm;
 pub mod hdp;
 pub mod hlda;
 pub mod labeled;
