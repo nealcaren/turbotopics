@@ -87,6 +87,7 @@ nav:
       - Guided topics (seed words): guides/guided.md
       - Short text: guides/short-text.md
       - Held-out inference: guides/transform.md
+  - Benchmarks: benchmarks.md
   - Publishing in a journal:
       - Overview: publishing/index.md
       - 1. Build a defensible corpus: publishing/corpus.md

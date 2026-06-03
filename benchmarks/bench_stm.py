@@ -125,7 +125,7 @@ def main():
     have_r = r_stm_available()
     print(f"topica threads: {threads};  EM iterations: {EM_ITERS};  "
           f"R stm: {'available' if have_r else 'not found (topica only)'}\n")
-    header = f"{'docs':>6} {'vocab':>6} {'K':>3} | {'topica's:>12}"
+    header = f"{'docs':>6} {'vocab':>6} {'K':>3} | {'topica':>12}"
     if have_r:
         header += f" {'R stm':>10} {'speedup':>8}"
     print(header)
