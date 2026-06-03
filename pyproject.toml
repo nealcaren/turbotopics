@@ -3,14 +3,14 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "turbotopics"
+name = "topica"
 version = "0.1.0"
-description = "Fast SparseLDA topic modeling (MALLET's algorithm) in Rust, with a Pythonic API"
+description = "Topica: fast, all-purpose topic modeling for Python — a Rust core for LDA, STM, and more"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
-authors = [{ name = "David Mimno and contributors" }]
-keywords = ["lda", "topic-modeling", "mallet", "nlp", "gibbs-sampling", "rust"]
+authors = [{ name = "Neal Caren" }]
+keywords = ["topic-modeling", "lda", "stm", "nlp", "text-analysis", "rust"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -23,15 +23,16 @@ classifiers = [
 dependencies = ["numpy>=1.21"]
 
 [project.urls]
-Homepage = "https://github.com/mimno/RustMallet"
-Repository = "https://github.com/mimno/RustMallet"
+Homepage = "https://nealcaren.github.io/topica/"
+Repository = "https://github.com/nealcaren/topica"
+Documentation = "https://nealcaren.github.io/topica/"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
 
 [tool.maturin]
-# Mixed Rust/Python layout: pure-Python wrapper in python/, compiled ext as turbotopics._turbotopics.
+# Mixed Rust/Python layout: pure-Python wrapper in python/, compiled ext as topica._topica.
 python-source = "python"
-module-name = "turbotopics._turbotopics"
+module-name = "topica._topica"
 features = ["python"]
 # Build a single abi3 wheel per platform (works on CPython >=3.9).

@@ -8,7 +8,7 @@ uncertainty and clustered errors, see [Measure effects properly](../publishing/e
 ## Prevalence covariates
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 X, names = tt.one_hot(party)                      # design matrix + column names
 model = tt.STM(num_topics=20, seed=1)
@@ -39,7 +39,7 @@ Regress topic proportions on covariates with honest uncertainty, using the metho
 of composition, optionally with clustered standard errors and GLM links:
 
 ```python
-from turbotopics import stm
+from topica import stm
 
 draws = stm.posterior_theta_samples(model, nsims=50, seed=0)
 effects = stm.estimate_effect(

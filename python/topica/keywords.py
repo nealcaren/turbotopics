@@ -1,6 +1,6 @@
 """Corpus-comparison keyword metrics — which words distinguish two groups.
 
-Unlike :class:`~turbotopics.SAGE` and the model-based ``word_contrast``, these
+Unlike :class:`~topica.SAGE` and the model-based ``word_contrast``, these
 operate directly on two raw token corpora with no fitted model. The headline is
 the **Fighting Words** estimator (Monroe, Colaresi & Quinn 2008, *Fightin'
 Words*, *Political Analysis*): a log-odds-ratio with an informative Dirichlet

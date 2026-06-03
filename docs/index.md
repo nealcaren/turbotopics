@@ -1,4 +1,4 @@
-# turbotopics
+# Topica
 
 **Fast, all-purpose topic modeling for Python.** A Rust core gives you MALLET's
 algorithm without the JVM and the Structural Topic Model without R, plus
@@ -6,11 +6,11 @@ diagnostics, validation, and covariate analysis. Everything returns plain
 NumPy arrays.
 
 ```bash
-pip install turbotopics
+pip install topica
 ```
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 docs = [["cat", "dog", "fish"]] * 15 + [["planet", "star", "moon"]] * 15
 model = tt.LDA(num_topics=2, seed=42)
@@ -20,7 +20,7 @@ for i, words in enumerate(model.top_words(5)):
     print(f"Topic {i}:", " ".join(w for w, _ in words))
 ```
 
-## Why turbotopics
+## Why topica
 
 - **One package, many models.** LDA, DMR, Labeled LDA, SAGE, CTM, the full STM
   (prevalence **and** content covariates), HDP, dynamic topics, supervised LDA,
@@ -38,15 +38,15 @@ for i, words in enumerate(model.top_words(5)):
 
 | Model | What it's for |
 |-------|---------------|
-| [`LDA`](api/models.md#turbotopics.LDA) | Classic topics via fast collapsed-Gibbs (SparseLDA) |
-| [`DMR`](api/models.md#turbotopics.DMR) | Topics conditioned on document metadata |
-| [`LabeledLDA`](api/models.md#turbotopics.LabeledLDA) | Supervised topics tied to document labels |
-| [`CTM`](api/models.md#turbotopics.CTM) | Correlated topics (logistic-normal) |
-| [`STM`](api/models.md#turbotopics.STM) | Structural Topic Model: prevalence **and** content covariates |
-| [`SAGE`](api/models.md#turbotopics.SAGE) | The same topic worded differently across groups |
-| [`HDP`](api/models.md#turbotopics.HDP) | Nonparametric LDA that *infers* the number of topics |
-| [`DTM`](api/models.md#turbotopics.DTM) | Dynamic topics that evolve across time slices |
-| [`SupervisedLDA`](api/models.md#turbotopics.SupervisedLDA) | Topics shaped to predict a per-document response |
+| [`LDA`](api/models.md#topica.LDA) | Classic topics via fast collapsed-Gibbs (SparseLDA) |
+| [`DMR`](api/models.md#topica.DMR) | Topics conditioned on document metadata |
+| [`LabeledLDA`](api/models.md#topica.LabeledLDA) | Supervised topics tied to document labels |
+| [`CTM`](api/models.md#topica.CTM) | Correlated topics (logistic-normal) |
+| [`STM`](api/models.md#topica.STM) | Structural Topic Model: prevalence **and** content covariates |
+| [`SAGE`](api/models.md#topica.SAGE) | The same topic worded differently across groups |
+| [`HDP`](api/models.md#topica.HDP) | Nonparametric LDA that *infers* the number of topics |
+| [`DTM`](api/models.md#topica.DTM) | Dynamic topics that evolve across time slices |
+| [`SupervisedLDA`](api/models.md#topica.SupervisedLDA) | Topics shaped to predict a per-document response |
 | [`PT`](guides/short-text.md) / [`GSDMM`](guides/short-text.md) | Short-text models for tweets, survey answers |
 | [`SeededLDA`](guides/guided.md) / [`KeyATM`](guides/guided.md) | Guided topics steered by seed words |
 | `PA` / `HLDA` | Topic hierarchies (Pachinko, nested-CRP) |
@@ -64,4 +64,4 @@ Three end-to-end analyses on real, redistributable corpora:
 
 ---
 
-turbotopics is open source on [GitHub](https://github.com/nealcaren/turbotopics).
+topica is open source on [GitHub](https://github.com/nealcaren/topica).

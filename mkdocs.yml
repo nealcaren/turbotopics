@@ -1,8 +1,8 @@
-site_name: turbotopics
+site_name: Topica
 site_description: Fast, all-purpose topic modeling for Python — a Rust core with the MALLET, STM, tomotopy, and gensim toolkits in one package.
-site_url: https://nealcaren.github.io/turbotopics/
-repo_url: https://github.com/nealcaren/turbotopics
-repo_name: nealcaren/turbotopics
+site_url: https://nealcaren.github.io/topica/
+repo_url: https://github.com/nealcaren/topica
+repo_name: nealcaren/topica
 edit_uri: ""
 
 theme:

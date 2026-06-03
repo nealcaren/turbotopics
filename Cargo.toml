@@ -1,10 +1,10 @@
 [package]
-name = "turbotopics"
+name = "topica"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "turbotopics"
+name = "topica"
 path = "src/lib.rs"
 # cdylib: Python extension module (maturin). rlib: keep the four CLI binaries linkable.
 crate-type = ["cdylib", "rlib"]

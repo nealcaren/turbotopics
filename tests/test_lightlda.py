@@ -14,8 +14,8 @@ import tempfile
 import numpy as np
 import pytest
 
-import turbotopics as tt
-from turbotopics import Corpus
+import topica as tt
+from topica import Corpus
 
 
 # Two cleanly separated topics; both samplers must recover them.

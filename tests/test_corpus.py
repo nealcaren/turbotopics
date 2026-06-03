@@ -2,7 +2,7 @@
 
 import pytest
 
-from turbotopics import Corpus
+from topica import Corpus
 
 
 # ---------------------------------------------------------------------------

@@ -2,20 +2,20 @@
 
 ## Distinguishing words
 
-::: turbotopics.fighting_words
+::: topica.fighting_words
 
-::: turbotopics.top_fighting_words
+::: topica.top_fighting_words
 
 ## Preprocessing
 
-::: turbotopics.tokenize
+::: topica.tokenize
 
-::: turbotopics.split_documents
+::: topica.split_documents
 
-::: turbotopics.one_hot
+::: topica.one_hot
 
 ## Phrases
 
-::: turbotopics.learn_phrases
+::: topica.learn_phrases
 
-::: turbotopics.apply_phrases
+::: topica.apply_phrases

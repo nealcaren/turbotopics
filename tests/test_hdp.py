@@ -7,7 +7,7 @@ deterministic.
 import numpy as np
 import pytest
 
-from turbotopics import HDP, Corpus
+from topica import HDP, Corpus
 
 
 def _planted_corpus(n_blocks=5, words_per_block=6, n_docs=250):

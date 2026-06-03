@@ -21,7 +21,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import LDA
+from topica import LDA
 
 
 # ---------------------------------------------------------------------------

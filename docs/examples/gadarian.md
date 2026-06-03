@@ -14,8 +14,8 @@ question is whether the prime changed *what people wrote about*.
     nested-data clustering see [Poliblog](poliblog.md); for corpus building see
     [Du Bois](dubois.md).
 
-    Data: [`examples/gadarian.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/gadarian.csv) ·
-    full script: [`examples/stm_vignette.py`](https://github.com/nealcaren/turbotopics/blob/main/examples/stm_vignette.py)
+    Data: [`examples/gadarian.csv`](https://github.com/nealcaren/topica/blob/main/examples/gadarian.csv) ·
+    full script: [`examples/stm_vignette.py`](https://github.com/nealcaren/topica/blob/main/examples/stm_vignette.py)
 
 ## Why STM, and fit it
 
@@ -27,8 +27,8 @@ honest standard errors. A small `K` suits short responses and a handful of
 theoretically motivated frames.
 
 ```python
-import csv, numpy as np, turbotopics as tt
-from turbotopics import tokenize, stm
+import csv, numpy as np, topica as tt
+from topica import tokenize, stm
 
 rows = list(csv.DictReader(open("examples/gadarian.csv")))
 docs = [tokenize(r["open.ended.response"], stopwords=stop, min_length=3) for r in rows]
@@ -101,6 +101,6 @@ doc 160 (θ=0.95): i am most worried about the conception that forms in the rela
 doc 284 (θ=0.94): the fact that congress doesn't have the balls to enforce the laws alread
 ```
 
-The [full vignette script](https://github.com/nealcaren/turbotopics/blob/main/examples/stm_vignette.py)
+The [full vignette script](https://github.com/nealcaren/topica/blob/main/examples/stm_vignette.py)
 adds the rest of the reviewer-proof apparatus on this dataset: the
 topic-correlation network and a `searchK` check. It is guarded by the test suite.

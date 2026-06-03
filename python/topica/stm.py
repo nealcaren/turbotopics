@@ -1,4 +1,4 @@
-"""STM-style analysis toolkit on top of turbotopics's Gibbs topic models.
+"""STM-style analysis toolkit on top of topica's Gibbs topic models.
 
 These are post-hoc analyses of a fitted model's outputs (the topic-word matrix
 ``topic_word`` = φ and the document-topic matrix ``doc_topic`` = θ), mirroring
@@ -454,9 +454,9 @@ def _normal_ppf(q: float) -> float:
 
 # ---------------------------------------------------------------------------
 # Back-compatibility: the general post-hoc diagnostics were moved to
-# ``turbotopics.diagnostics`` (they apply to any model, not just STM) and are
+# ``topica.diagnostics`` (they apply to any model, not just STM) and are
 # also exported at the package top level. They are re-exported here so existing
-# ``turbotopics.stm.<name>`` calls keep working.
+# ``topica.stm.<name>`` calls keep working.
 # ---------------------------------------------------------------------------
 from .diagnostics import (  # noqa: E402,F401
     frex,

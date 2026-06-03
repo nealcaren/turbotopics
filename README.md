@@ -1,8 +1,8 @@
-# turbotopics — fast, all-purpose topic modeling for Python
+# Topica — fast, all-purpose topic modeling for Python
 
-📖 **Documentation: [nealcaren.github.io/turbotopics](https://nealcaren.github.io/turbotopics/)** — guides, a full API reference, and a [*Publishing in a social science journal*](https://nealcaren.github.io/turbotopics/publishing/) methodology track.
+📖 **Documentation: [nealcaren.github.io/topica](https://nealcaren.github.io/topica/)** — guides, a full API reference, and a [*Publishing in a social science journal*](https://nealcaren.github.io/topica/publishing/) methodology track.
 
-`turbotopics` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models, from classic LDA to the Structural Topic Model, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
+`topica` is a topic-modeling library with a Rust core and a numpy-native Python API. It covers a family of models, from classic LDA to the Structural Topic Model, fits them in native code (no JVM, no pure-Python inner loops), and keeps every fit **deterministic for a given seed**.
 
 **Models:**
 
@@ -35,7 +35,7 @@ The implementations are validated, not approximations. The `LDA` core binds Davi
 ### From PyPI (once published)
 
 ```bash
-pip install turbotopics
+pip install topica
 ```
 
 Pre-built abi3 wheels are provided for CPython >= 3.9 on Linux, macOS, and Windows. No Rust toolchain needed.
@@ -44,8 +44,8 @@ Pre-built abi3 wheels are provided for CPython >= 3.9 on Linux, macOS, and Windo
 
 ```bash
 pip install maturin
-git clone https://github.com/nealcaren/turbotopics
-cd turbotopics
+git clone https://github.com/nealcaren/topica
+cd topica
 python -m venv .venv && source .venv/bin/activate
 maturin develop --release --features python
 ```
@@ -57,7 +57,7 @@ A `numpy` dependency is required (`numpy >= 1.21`). Use `--release` for an optim
 ## Quickstart
 
 ```python
-from turbotopics import LDA
+from topica import LDA
 
 # Pre-tokenized documents — any list[list[str]]
 animal_docs = [["cat", "dog", "fish", "cat", "dog"]] * 15
@@ -105,7 +105,7 @@ The Structural Topic Model (Roberts, Stewart & Tingley) extends the Correlated T
 
 ```python
 import numpy as np
-from turbotopics import STM, stm
+from topica import STM, stm
 
 # ── 1. Build a corpus with a strong binary covariate ────────────────────────
 rng = np.random.default_rng(0)
@@ -166,10 +166,10 @@ The `stm.estimate_effect` function (see the [stm analysis toolkit section](#stm-
 
 ### Covariate effects with proper uncertainty (method of composition)
 
-`estimate_effect` on the point `doc_topic` gives OLS standard errors, but those treat θ as if it were observed exactly, understating uncertainty. R `stm` instead uses the **method of composition**: draw θ from the model's posterior, run the regression on each draw, and pool by Rubin's rules. turbotopics exposes the STM/CTM variational posterior (`eta_mean`, `eta_cov`), so you can do the same:
+`estimate_effect` on the point `doc_topic` gives OLS standard errors, but those treat θ as if it were observed exactly, understating uncertainty. R `stm` instead uses the **method of composition**: draw θ from the model's posterior, run the regression on each draw, and pool by Rubin's rules. topica exposes the STM/CTM variational posterior (`eta_mean`, `eta_cov`), so you can do the same:
 
 ```python
-from turbotopics import STM, stm
+from topica import STM, stm
 
 model = STM(num_topics=20, seed=1)
 model.fit(docs, X, prevalence_names=["treatment", "pid"], em_iters=80)
@@ -207,7 +207,7 @@ Pass a list of group labels (strings or ints) as `content=`. Use `content_names`
 
 ```python
 import numpy as np
-from turbotopics import STM
+from topica import STM
 
 # ── Bilingual corpus: same two topics (weather / food) in English and German ─
 en_weather = ["rain", "sun", "cloud", "wind", "storm"]
@@ -311,7 +311,7 @@ Returns the `n` words that most distinguish how `topic` is worded in `group_a` v
 
 ## CTM: correlated topics (the STM core)
 
-The Correlated Topic Model (Blei & Lafferty 2007) places a **logistic-normal prior** with a full covariance matrix Σ over the per-document topic proportions. Because documents draw from a multivariate normal before the softmax, topics can be positively or negatively correlated, which LDA's Dirichlet prior cannot represent. `CTM` is the only variational (non-Gibbs) model in `turbotopics`.
+The Correlated Topic Model (Blei & Lafferty 2007) places a **logistic-normal prior** with a full covariance matrix Σ over the per-document topic proportions. Because documents draw from a multivariate normal before the softmax, topics can be positively or negatively correlated, which LDA's Dirichlet prior cannot represent. `CTM` is the only variational (non-Gibbs) model in `topica`.
 
 The model is fit by **variational EM**: the E-step approximates each document's posterior over latent topic weights via Newton's method (a port of STM's `lhoodcpp`/`gradcpp`/`hpbcpp` Laplace approximation); the M-step updates the global topic-word distributions β and the covariance Σ. This is the inference engine that STM's prevalence and content covariate models build on.
 
@@ -321,7 +321,7 @@ The main output is `topic_correlation`: a `(num_topics, num_topics)` matrix givi
 
 ```python
 import numpy as np
-from turbotopics import CTM
+from topica import CTM
 
 # --- Build a corpus with a known co-occurrence structure ---
 # Topics A and B co-occur often; topic C is isolated.
@@ -396,7 +396,7 @@ Passing `list[list[str]]` to `fit()` builds an internal corpus with no frequency
 ### Building from token lists
 
 ```python
-from turbotopics import Corpus
+from topica import Corpus
 
 corpus = Corpus.from_documents(
     documents,
@@ -434,12 +434,12 @@ corpus = Corpus.from_text_file(
 
 `token_regex=None` (the default) uses `DEFAULT_TOKEN_REGEX`, a Unicode-letter pattern matching the upstream `preprocess` CLI. Tokenization lowercases all tokens.
 
-### Tokenizing raw text: `turbotopics.tokenize()`
+### Tokenizing raw text: `topica.tokenize()`
 
 For convenience when building `list[list[str]]` input outside of `Corpus.from_text_file`, use the module-level `tokenize` function. It applies the same regex-based tokenization as the corpus loader.
 
 ```python
-from turbotopics import tokenize
+from topica import tokenize
 
 tokens = tokenize("Well-known methods for the U.S.A. study.")
 # ['well-known', 'methods', 'for', 'the', 'u.s.a', 'study']
@@ -478,7 +478,7 @@ The `.corp` format is shared with the `preprocess`/`train`/`show`/`analyze` CLI 
 Every fitted model serializes to a compact binary file with `save(path)` and reloads with the class's `load(path)`, so you train once and reuse the model later without refitting:
 
 ```python
-from turbotopics import LDA
+from topica import LDA
 
 model = LDA(num_topics=50, seed=1)
 model.fit(documents, iterations=1000)
@@ -504,7 +504,7 @@ Labeled LDA (Ramage et al. 2009) is a supervised extension of LDA where each doc
 
 ```python
 import numpy as np
-from turbotopics import LabeledLDA
+from topica import LabeledLDA
 
 # Pre-tokenized documents, one label list per document
 docs = [
@@ -594,7 +594,7 @@ where `m_v` is a corpus background, `κT_{k,v}` is the topic deviation, `κC_{g,
 
 ```python
 import numpy as np
-from turbotopics import SAGE
+from topica import SAGE
 
 # Two groups ("en" / "de") with disjoint vocabulary for the same two topics
 en_weather = ["rain", "sun", "cloud", "wind", "storm"]
@@ -712,7 +712,7 @@ where `x_d` is a vector of document features (year, author group, treatment cond
 ```python
 import numpy as np
 import pandas as pd
-from turbotopics import DMR, one_hot
+from topica import DMR, one_hot
 
 # ── 1. Build documents and features ─────────────────────────────────────────
 
@@ -796,7 +796,7 @@ It is fit by the **direct-assignment Gibbs sampler** (the Chinese Restaurant Fra
 ### Example
 
 ```python
-from turbotopics import HDP
+from topica import HDP
 
 # `documents` is a list[list[str]] (or a Corpus).
 model = HDP(seed=1)            # alpha/gamma resampled from the data by default
@@ -837,7 +837,7 @@ Inference is variational with Kalman smoothing over the slices, a port of Blei's
 ### Example
 
 ```python
-from turbotopics import DTM
+from topica import DTM
 
 # documents in any order; `times[d]` is document d's slice index (0-based, contiguous).
 model = DTM(num_topics=5, seed=1)
@@ -890,7 +890,7 @@ Inference is the variational EM of Blei & McAuliffe: a per-document coordinate a
 
 ```python
 import numpy as np
-from turbotopics import SupervisedLDA
+from topica import SupervisedLDA
 
 # `documents` is list[list[str]]; `y` is one real number per document.
 model = SupervisedLDA(num_topics=10, seed=1)
@@ -930,7 +930,7 @@ Fitting is deterministic for a fixed `seed`.
 After fitting a model, use `transform()` to infer the document-topic distribution (θ) for documents that were not part of training, such as a held-out test set or freshly collected texts. The fitted topic-word distributions (φ) are held fixed; only the new documents' topic assignments are inferred.
 
 ```python
-from turbotopics import LDA, tokenize
+from topica import LDA, tokenize
 
 # Train on existing documents
 train_docs = [tokenize(text) for text in train_texts]
@@ -1064,7 +1064,7 @@ assert (m1.topic_word == m2.topic_word).all()  # True
 `LDA` supports opt-in multi-threaded training via the `num_threads` constructor parameter.
 
 ```python
-from turbotopics import LDA
+from topica import LDA
 
 model = LDA(num_topics=50, num_threads=8)
 model.fit(documents, iterations=1000)
@@ -1099,7 +1099,7 @@ For large vocabularies, the STM/CTM spectral (anchor-word) initialization also s
 Held-out perplexity measures how well a fitted model predicts tokens it has not seen during training: lower is better. A practical strategy is to fit models over a range of candidate topic counts and choose the K whose held-out perplexity is lowest.
 
 ```python
-from turbotopics import LDA
+from topica import LDA
 
 # Pre-tokenized documents split into train / held-out sets
 train_docs = [...]   # list[list[str]]
@@ -1139,10 +1139,10 @@ print(c)                     # e.g. [-2.1, -1.1]  — all values <= 0
 print("Mean coherence:", np.mean(c))
 ```
 
-For the windowed, PMI-based measures that correlate better with human judgement (and that anyone coming from gensim's `CoherenceModel` will expect), use the module-level `turbotopics.coherence(...)` with a `coherence_type=` switch:
+For the windowed, PMI-based measures that correlate better with human judgement (and that anyone coming from gensim's `CoherenceModel` will expect), use the module-level `topica.coherence(...)` with a `coherence_type=` switch:
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 # `documents` is the reference corpus (your training docs, or an external
 # corpus like a Wikipedia dump for a more human-aligned signal).
@@ -1223,14 +1223,14 @@ print(df[["topic", "coherence", "exclusivity", "effective_words", "rank1_docs", 
 
 ## stm-style analysis toolkit
 
-`turbotopics.stm` is a pure-Python (numpy) post-hoc analysis toolkit that mirrors the user-facing functions of the R `stm` (Structural Topic Model) package. It operates on the `topic_word` (φ) and `doc_topic` (θ) arrays produced by any fitted turbotopics model (`LDA`, `DMR`, or `LabeledLDA`), so no extra fitting step is needed.
+`topica.stm` is a pure-Python (numpy) post-hoc analysis toolkit that mirrors the user-facing functions of the R `stm` (Structural Topic Model) package. It operates on the `topic_word` (φ) and `doc_topic` (θ) arrays produced by any fitted topica model (`LDA`, `DMR`, or `LabeledLDA`), so no extra fitting step is needed.
 
 **Uncertainty:** `estimate_effect` does ordinary OLS when given a point θ. Given posterior draws of θ from an `STM`/`CTM` fit, it instead uses the **method of composition** that R `stm` uses: each draw is regressed and the results are pooled by Rubin's rules, so the standard errors propagate topic-estimation uncertainty, not just OLS sampling error. See [Covariate effects with proper uncertainty](#covariate-effects-with-proper-uncertainty-method-of-composition) below. Confidence intervals use a normal approximation (no scipy dependency).
 
 ### Quick example
 
 ```python
-from turbotopics import LDA, stm
+from topica import LDA, stm
 import numpy as np
 
 # ── 1. Fit a model (or load pre-fitted arrays) ───────────────────────────────
@@ -1310,7 +1310,7 @@ for row in results:
 
 ### API summary
 
-turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc analyses (labeling, interpretation, comparison, visualization) are exported at the **top level** (and also live in `turbotopics.diagnostics`). They take any fitted model's `topic_word`/`doc_topic`, not just an STM. The handful of genuinely *structural* operations (regressing topics on covariates) stay in the `turbotopics.stm` submodule.
+topica is a **general** topic-modeling tool, so the model-agnostic post-hoc analyses (labeling, interpretation, comparison, visualization) are exported at the **top level** (and also live in `topica.diagnostics`). They take any fitted model's `topic_word`/`doc_topic`, not just an STM. The handful of genuinely *structural* operations (regressing topics on covariates) stay in the `topica.stm` submodule.
 
 **General diagnostics** (`tt.<name>`, also `tt.diagnostics.<name>`; the `stm.<name>` aliases still work):
 
@@ -1334,7 +1334,7 @@ turbotopics is a **general** topic-modeling tool, so the model-agnostic post-hoc
 | `fighting_words(corpus_a, corpus_b, *, prior=0.01, informative=False)` | `list[(word, z)]` | Monroe-Colaresi-Quinn weighted log-odds: words that distinguish two corpora, with significance. `top_fighting_words(...)` returns the top-n per side. |
 | `split_documents(texts, metadata=None, *, max_words=200, min_words=50)` | `(chunks, chunk_meta)` | Segment long documents into comparable chunks, copying each source's metadata onto every chunk. |
 
-**Structural topic model** (`turbotopics.stm` — covariates on topic prevalence):
+**Structural topic model** (`topica.stm` — covariates on topic prevalence):
 
 | Function | Returns | Notes |
 |----------|---------|-------|
@@ -1501,7 +1501,7 @@ All properties below raise `RuntimeError("model is not fitted yet; call fit() fi
 
 ### `CTM`
 
-Correlated Topic Model (Blei & Lafferty 2007). Topics drawn from a logistic-normal prior with full covariance, so they can correlate, unlike LDA. The only variational (non-Gibbs) model in `turbotopics`. See the [CTM section](#ctm-correlated-topics-the-stm-core) for a usage guide.
+Correlated Topic Model (Blei & Lafferty 2007). Topics drawn from a logistic-normal prior with full covariance, so they can correlate, unlike LDA. The only variational (non-Gibbs) model in `topica`. See the [CTM section](#ctm-correlated-topics-the-stm-core) for a usage guide.
 
 #### Constructor
 
@@ -1745,32 +1745,32 @@ SupervisedLDA(num_topics: int, *, alpha: float = 0.1, seed: int = 42)
 
 ## Performance
 
-turbotopics fits in native Rust, and its variational models parallelize the per-document E-step across cores (deterministically: the result is bit-for-bit identical regardless of thread count). This makes the Structural Topic Model substantially faster than the reference R `stm` package on the same data.
+topica fits in native Rust, and its variational models parallelize the per-document E-step across cores (deterministically: the result is bit-for-bit identical regardless of thread count). This makes the Structural Topic Model substantially faster than the reference R `stm` package on the same data.
 
-The table times **STM fit only** (excluding startup), matched on `K`, EM iterations (30), and Spectral initialization, on fixed-seed synthetic corpora. R `stm` is single-threaded by design, so turbotopics is shown both pinned to one core (apples-to-apples) and on all cores (its default). Measured on a 14-core machine:
+The table times **STM fit only** (excluding startup), matched on `K`, EM iterations (30), and Spectral initialization, on fixed-seed synthetic corpora. R `stm` is single-threaded by design, so topica is shown both pinned to one core (apples-to-apples) and on all cores (its default). Measured on a 14-core machine:
 
-| docs | vocab | K | R `stm` | turbotopics (1 core) | turbotopics (all cores) |
+| docs | vocab | K | R `stm` | topica (1 core) | topica (all cores) |
 |------:|------:|--:|--------:|---------------------:|------------------------:|
 | 1,000 |   500 | 10 |  3.1s | 0.49s — **6.3×** | 0.12s — **25×** |
 | 2,000 | 2,000 | 10 |  6.7s | 1.41s — **4.6×** | 0.43s — **16×** |
 | 5,000 | 5,000 | 20 | 26.6s | 8.95s — **3.0×** | 2.67s — **10×** |
 
-Even on a single core, turbotopics runs roughly **3–6× faster per iteration** than R `stm`, from the native Rust inner loop with no per-iteration interpreter overhead. Spreading the E-step across cores (the default) brings it to **~10–25×** in these configurations.
+Even on a single core, topica runs roughly **3–6× faster per iteration** than R `stm`, from the native Rust inner loop with no per-iteration interpreter overhead. Spreading the E-step across cores (the default) brings it to **~10–25×** in these configurations.
 
 **Caveats, stated plainly:** this compares *per-iteration* cost (both run a fixed 30 EM iterations rather than to convergence), on synthetic data, on one machine. Treat the numbers as indicative, not a guarantee: speed depends on corpus, vocabulary, `K`, and hardware. The benchmark is in the repo, so you can run your own regime:
 
 ```bash
-python benchmarks/bench_stm.py                      # turbotopics on all cores
+python benchmarks/bench_stm.py                      # topica on all cores
 RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single-threaded
 ```
 
-(The comparison column needs `Rscript` with the `stm` package installed; without it the script prints turbotopics timings only.)
+(The comparison column needs `Rscript` with the `stm` package installed; without it the script prints topica timings only.)
 
 ---
 
 ## Comparison to Alternatives
 
-| | **turbotopics** | **gensim LdaModel** | **MALLET Java CLI** |
+| | **topica** | **gensim LdaModel** | **MALLET Java CLI** |
 |---|---|---|---|
 | Language / runtime | Python + Rust | Python (C extensions) | Python or shell + JVM |
 | Algorithm | SparseLDA (three-bucket Gibbs) | Collapsed variational Bayes or online LDA | SparseLDA (three-bucket Gibbs) |
@@ -1781,7 +1781,7 @@ RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single-threaded
 | JVM required | No | No | Yes |
 | MALLET-compatible corpus format | Yes (`.corp` round-trip with CLI tools) | No | Yes |
 
-`turbotopics` uses native Rust with no JVM startup overhead. See [Performance](#performance) above for measured STM timings against R `stm`; comparisons against other Python LDA implementations depend heavily on corpus size and hardware.
+`topica` uses native Rust with no JVM startup overhead. See [Performance](#performance) above for measured STM timings against R `stm`; comparisons against other Python LDA implementations depend heavily on corpus size and hardware.
 
 ---
 

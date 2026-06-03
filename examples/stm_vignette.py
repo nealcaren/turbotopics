@@ -1,9 +1,9 @@
-"""Reproduce the STM (Structural Topic Model) R-package vignette with turbotopics.
+"""Reproduce the STM (Structural Topic Model) R-package vignette with topica.
 
 Works through the same analysis as Roberts, Stewart & Tingley's `stm` vignette,
 on the same data (`gadarian`: 341 open-ended survey responses about immigration,
-with an experimental `treatment` and party-id `pid_rep`), using turbotopics
-instead of R. Maps each vignette step to its turbotopics equivalent:
+with an experimental `treatment` and party-id `pid_rep`), using topica
+instead of R. Maps each vignette step to its topica equivalent:
 
     textProcessor / prepDocuments  ->  tokenize + stopwords + frequency pruning
     stm(prevalence = ~treatment)   ->  STM(K).fit(docs, prevalence=X)
@@ -23,7 +23,7 @@ from collections import Counter
 
 import numpy as np
 
-from turbotopics import STM, tokenize, stm
+from topica import STM, tokenize, stm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -56,7 +56,7 @@ def preprocess(text, stopwords, min_doc_freq=3):
 
 def main():
     print("=" * 70)
-    print("STM vignette — gadarian immigration survey — in turbotopics")
+    print("STM vignette — gadarian immigration survey — in topica")
     print("=" * 70)
 
     text, treatment, pid_rep = load_gadarian()
@@ -112,7 +112,7 @@ def main():
         print(f"  Topic {t} (theta={prop:.2f}): {doc[:150].strip()}...")
 
     print("\n" + "=" * 70)
-    print("Vignette complete — full STM workflow reproduced in turbotopics.")
+    print("Vignette complete — full STM workflow reproduced in topica.")
     print("=" * 70)
 
 

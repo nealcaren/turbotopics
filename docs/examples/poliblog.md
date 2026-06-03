@@ -13,7 +13,7 @@ tagged with the blog's `rating` (Conservative / Liberal), the `day`, and the
     cleaning and dynamic topics see [Du Bois](dubois.md); for the experimental
     effect estimation see [Gadarian](gadarian.md).
 
-    Data: [`examples/poliblog.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/poliblog.csv)
+    Data: [`examples/poliblog.csv`](https://github.com/nealcaren/topica/blob/main/examples/poliblog.csv)
     (reconstructed from `stm`'s preprocessed, stemmed `poliblog5k.docs`).
 
 ## 1–2. Corpus and model
@@ -23,8 +23,8 @@ by ideology. That covariate question makes the
 [right model](../publishing/choosing-model.md) the STM.
 
 ```python
-import csv, numpy as np, turbotopics as tt
-from turbotopics import Corpus, stm
+import csv, numpy as np, topica as tt
+from topica import Corpus, stm
 
 rows = list(csv.DictReader(open("examples/poliblog.csv")))
 docs = [r["text"].split() for r in rows]          # already tokenized + stemmed by stm

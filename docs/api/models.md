@@ -4,34 +4,34 @@ All models share the same shape of API: construct with hyperparameters and a
 `seed`, call `fit(documents, ...)`, then read `topic_word` (φ), `doc_topic` (θ),
 `top_words(n)`, `coherence(n)`, and `save` / `load`.
 
-::: turbotopics.LDA
+::: topica.LDA
 
-::: turbotopics.DMR
+::: topica.DMR
 
-::: turbotopics.LabeledLDA
+::: topica.LabeledLDA
 
-::: turbotopics.SAGE
+::: topica.SAGE
 
-::: turbotopics.CTM
+::: topica.CTM
 
-::: turbotopics.STM
+::: topica.STM
 
-::: turbotopics.HDP
+::: topica.HDP
 
-::: turbotopics.DTM
+::: topica.DTM
 
-::: turbotopics.SupervisedLDA
+::: topica.SupervisedLDA
 
-::: turbotopics.PT
+::: topica.PT
 
-::: turbotopics.GSDMM
+::: topica.GSDMM
 
-::: turbotopics.SeededLDA
+::: topica.SeededLDA
 
-::: turbotopics.KeyATM
+::: topica.KeyATM
 
-::: turbotopics.PA
+::: topica.PA
 
-::: turbotopics.HLDA
+::: topica.HLDA
 
-::: turbotopics.Corpus
+::: topica.Corpus

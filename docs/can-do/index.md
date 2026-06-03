@@ -1,6 +1,6 @@
 # What you can do
 
-turbotopics is a general topic-modeling toolkit. This section tours what it does.
+topica is a general topic-modeling toolkit. This section tours what it does.
 If your goal is a publishable analysis, pair it with
 [Publishing in a journal](../publishing/index.md).
 

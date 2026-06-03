@@ -6,7 +6,7 @@ Every model takes pre-tokenized documents, a `list[list[str]]` or a
 ## Fit a model
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 animal_docs = [["cat", "dog", "fish", "cat", "dog"]] * 15
 space_docs  = [["planet", "star", "moon", "rocket", "planet"]] * 15

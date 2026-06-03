@@ -1,4 +1,4 @@
-"""turbotopics quickstart — two-theme toy corpus demo.
+"""topica quickstart — two-theme toy corpus demo.
 
 This script is self-contained: it builds a small corpus entirely in memory,
 fits an LDA model, inspects results, and demonstrates Corpus save/load. No
@@ -11,10 +11,10 @@ Run from the project root:
 import os
 import tempfile
 
-import turbotopics
-from turbotopics import LDA, Corpus
+import topica
+from topica import LDA, Corpus
 
-print(f"turbotopics version: {turbotopics.__version__}")
+print(f"topica version: {topica.__version__}")
 print()
 
 # ---------------------------------------------------------------------------

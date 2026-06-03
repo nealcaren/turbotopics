@@ -25,7 +25,7 @@ A complete methods section covers the corpus, the preprocessing, the model and
 > We validated the topics with word- and document-intrusion tests
 > ([accuracy / agreement]), per-topic coherence and exclusivity, and bootstrap
 > stability across **B** resamples; [k] topics flagged as unstable are
-> interpreted cautiously. Software: turbotopics [version].
+> interpreted cautiously. Software: topica [version].
 
 ## Results section
 
@@ -37,7 +37,7 @@ A complete methods section covers the corpus, the preprocessing, the model and
 
 ```python
 import pandas as pd
-import turbotopics as tt
+import topica as tt
 
 labels = tt.label_topics(model.topic_word, model.vocabulary, n=7)
 prevalence = model.doc_topic.mean(axis=0)
@@ -69,12 +69,12 @@ model.save("model.tt")                                    # full state, reloadab
 
 ## Make the pipeline reproducible
 
-- **Fix every seed.** turbotopics fits are bit-for-bit deterministic for a given
+- **Fix every seed.** topica fits are bit-for-bit deterministic for a given
   `seed`, across machines and core counts. State the seeds you used.
 - **Script the whole pipeline** end to end, from raw text → preprocessing → fit →
   tables/figures, so it runs from one command.
-- **Pin versions.** Record the turbotopics and NumPy versions
-  (`turbotopics.__version__`).
+- **Pin versions.** Record the topica and NumPy versions
+  (`topica.__version__`).
 - **Share the model.** `model.save(path)` writes the complete fitted state;
   `Model.load(path)` brings it back, so reviewers can reproduce every number
   without refitting.

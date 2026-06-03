@@ -8,7 +8,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import SAGE, Corpus
+from topica import SAGE, Corpus
 
 
 # ---------------------------------------------------------------------------

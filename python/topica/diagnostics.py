@@ -4,8 +4,8 @@ Interpretation, labeling, comparison, and visualization helpers that operate on
 any fitted model's topic-word (φ) and document-topic (θ) arrays — independent of
 how the model was fit (LDA, DMR, CTM, STM, HDP, …). The structural / covariate
 pieces (``estimate_effect``, ``posterior_theta_samples``, ``spline``,
-``interaction``) live in :mod:`turbotopics.stm`; coherence, diversity,
-exclusivity, and the intrusion tests live in :mod:`turbotopics.coherence`.
+``interaction``) live in :mod:`topica.stm`; coherence, diversity,
+exclusivity, and the intrusion tests live in :mod:`topica.coherence`.
 
 - :func:`frex` / :func:`label_topics` — prob / FREX / lift / score topic words
   (≈ ``stm::labelTopics``).
@@ -196,8 +196,8 @@ def search_k(
 ):
     """Fit a model for each K and report quality metrics (stm's ``searchK``).
 
-    With ``model="lda"`` (default) fits an :class:`~turbotopics.LDA` per K. With
-    ``model="stm"`` fits an :class:`~turbotopics.STM` per K — pass ``prevalence``
+    With ``model="lda"`` (default) fits an :class:`~topica.LDA` per K. With
+    ``model="stm"`` fits an :class:`~topica.STM` per K — pass ``prevalence``
     (a covariate design matrix) to scan K for the model you'll actually report.
 
     Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass),

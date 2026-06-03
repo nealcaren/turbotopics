@@ -10,9 +10,9 @@ check on `K`.
     `K` sanity check. For topic validation and clustered errors see
     [Poliblog](poliblog.md); for the experimental effect see [Gadarian](gadarian.md).
 
-    Data: [`examples/dubois_crisis.csv`](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_crisis.csv) ·
+    Data: [`examples/dubois_crisis.csv`](https://github.com/nealcaren/topica/blob/main/examples/dubois_crisis.csv) ·
     full notebook (adds STM decade-prevalence + held-out `transform`):
-    [`dubois_tutorial.ipynb`](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
+    [`dubois_tutorial.ipynb`](https://github.com/nealcaren/topica/blob/main/examples/dubois_tutorial.ipynb)
 
 ## 1. Build the corpus
 
@@ -20,8 +20,8 @@ The articles run 1910–1934, Du Bois's editorship. A few corpus-specific
 stopwords (`crisis`, `negro`, `colored`) would otherwise dominate every topic.
 
 ```python
-import csv, numpy as np, turbotopics as tt
-from turbotopics import Corpus, tokenize
+import csv, numpy as np, topica as tt
+from topica import Corpus, tokenize
 
 rows = list(csv.DictReader(open("examples/dubois_crisis.csv")))
 for r in rows:
@@ -176,7 +176,7 @@ africa     ['africa', 'world', 'war', 'great', 'church', 'america', 'england']
 Education, voting, and Africa land cleanly on their seeds; labor stays diffuse
 because Du Bois ties labor to race throughout the corpus — a substantive signal,
 not a model failure. `ka.keyword_rate` reports how much each topic leans on its
-seeds. The [full notebook](https://github.com/nealcaren/turbotopics/blob/main/examples/dubois_tutorial.ipynb)
+seeds. The [full notebook](https://github.com/nealcaren/topica/blob/main/examples/dubois_tutorial.ipynb)
 continues with STM decade-prevalence (labor rises, women's suffrage falls after
 1920) and held-out `transform`, following the
 [publishing workflow](../publishing/index.md) end to end.

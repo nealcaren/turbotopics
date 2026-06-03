@@ -7,13 +7,13 @@ to humans, (b) **reproducible**, and (c) **interpretable** as substantive themes
 ## Human validation: intrusion tests
 
 The field-standard test (Chang et al. 2009, *Reading Tea Leaves*) asks whether a
-human can tell a topic apart from noise. turbotopics builds both variants for
+human can tell a topic apart from noise. topica builds both variants for
 you, with an answer key.
 
 **Word intrusion**: each topic's top words plus one intruder from another topic.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 tests = tt.word_intrusion(model, n_words=5, seed=0)
 for t in tests:

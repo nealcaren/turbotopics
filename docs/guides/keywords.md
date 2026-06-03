@@ -6,7 +6,7 @@ that with statistical significance, and, unlike a raw log-odds ratio, it doesn't
 let rare words dominate.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 conservative = [tokenize(t) for t in con_texts]
 liberal      = [tokenize(t) for t in lib_texts]

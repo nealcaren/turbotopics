@@ -4,7 +4,7 @@ from typing import Any, Sequence
 import numpy
 import numpy.typing
 
-from ._turbotopics import (
+from ._topica import (
     LDA as LDA,
     DMR as DMR,
     LabeledLDA as LabeledLDA,
@@ -84,7 +84,7 @@ def document_intrusion(
     ...
 
 
-# General, model-agnostic post-hoc analyses (also in turbotopics.diagnostics).
+# General, model-agnostic post-hoc analyses (also in topica.diagnostics).
 def frex(topic_word: Any, vocabulary: Sequence[str], *, w: float = 0.5, n: int = 10) -> list:
     """FREX (frequency-exclusivity) top words per topic."""
     ...

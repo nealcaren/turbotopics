@@ -5,14 +5,14 @@ Covers:
 - LDA.top_documents()
 - LDA.topic_divergence (property)
 - LDA.similar_documents()
-- turbotopics.tokenize()
+- topica.tokenize()
 """
 
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import LDA, Corpus, tokenize
+from topica import LDA, Corpus, tokenize
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +315,7 @@ class TestSimilarDocuments:
 
 
 # ---------------------------------------------------------------------------
-# turbotopics.tokenize()
+# topica.tokenize()
 # ---------------------------------------------------------------------------
 
 class TestTokenize:

@@ -11,7 +11,7 @@ The Structural Topic Model lets a document's topic proportions depend on its
 metadata. Fit prevalence as a regression on your covariates:
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 X, names = tt.one_hot(party)                     # or build any design matrix
 model = tt.STM(num_topics=20, seed=1)
@@ -24,10 +24,10 @@ A naive regression of point topic proportions on covariates treats θ as if it
 were observed exactly. It isn't. R's `stm` uses the **method of composition**
 (Treier & Jackman 2008): draw θ from the model's posterior, regress each draw,
 and pool by Rubin's rules so the standard errors include topic-estimation
-uncertainty. turbotopics does the same:
+uncertainty. topica does the same:
 
 ```python
-from turbotopics import stm
+from topica import stm
 
 draws = stm.posterior_theta_samples(model, nsims=50, seed=0)   # (50, D, K)
 effects = stm.estimate_effect(draws, X, feature_names=names)

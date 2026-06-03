@@ -31,7 +31,7 @@ def window_cooccurrence(
 
     docs holds relevant-word ids per token, 4294967295 marks a non-relevant
     token; pairs are (a, b) with a < b; window=0 requests document-level
-    co-occurrence. Returns (occ, co, n_windows). Used by turbotopics.coherence.
+    co-occurrence. Returns (occ, co, n_windows). Used by topica.coherence.
     """
     ...
 
@@ -328,7 +328,7 @@ class STM:
     @property
     def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
         """gamma, shape (num_features, num_topics-1). RuntimeError if no
-        prevalence. Prefer turbotopics.stm.estimate_effect for inference."""
+        prevalence. Prefer topica.stm.estimate_effect for inference."""
         ...
     @property
     def feature_names(self) -> list[str]: ...

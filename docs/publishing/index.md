@@ -1,6 +1,6 @@
 # Publishing in a social science journal
 
-The rest of this site shows **what turbotopics can do**. This section is about
+The rest of this site shows **what topica can do**. This section is about
 what you **should** do if you want a topic-modeling analysis to survive peer
 review in sociology, political science, communication, or a related field.
 
@@ -10,7 +10,7 @@ Reviewers know this, and they push back. A publishable analysis answers their
 objections before they raise them. It treats the topic model as a **measurement
 instrument** that must be specified, validated, and used with honest uncertainty.
 
-This is a six-step workflow. Each step maps onto specific turbotopics functions.
+This is a six-step workflow. Each step maps onto specific topica functions.
 
 <div class="grid cards" markdown>
 

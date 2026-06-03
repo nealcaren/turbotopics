@@ -1,6 +1,6 @@
-"""Cross-implementation validation: turbotopics STM vs. the R `stm` package.
+"""Cross-implementation validation: topica STM vs. the R `stm` package.
 
-R's `stm` and turbotopics are independent implementations of the same model
+R's `stm` and topica are independent implementations of the same model
 (logistic-normal variational EM with prevalence covariates and Arora-style
 spectral initialization). They share no code and no RNG, so they are never
 byte-identical — validation here means *statistical* agreement: fit both on the
@@ -9,7 +9,7 @@ SAME tokenized corpus + metadata and ask whether they land on the same topics.
 The benchmark is R's own reproducibility. The gadarian K=3 model is multimodal
 (many local optima), so two R runs from different *random* seeds only agree to a
 topic-word cosine of ~0.57. Under matched initialization (both Spectral), R-vs-
-turbotopics agreement should meet or exceed that self-consistency floor — i.e.
+topica agreement should meet or exceed that self-consistency floor — i.e.
 we reproduce R as faithfully as R reproduces itself.
 
 This shells out to `Rscript` with the `stm` package installed; callers should
@@ -158,7 +158,7 @@ def run(verbose: bool = True) -> dict:
     if not r_stm_available():
         raise RuntimeError("Rscript with the 'stm' package is not available")
 
-    from turbotopics import STM
+    from topica import STM
 
     docs, treatment, pid, _ = load_and_prep()
 
@@ -183,21 +183,21 @@ def run(verbose: bool = True) -> dict:
         r_rand1 = _read_r_beta(os.path.join(d, "r_rand1.csv"), r_vocab)
         r_rand2 = _read_r_beta(os.path.join(d, "r_rand2.csv"), r_vocab)
 
-        # turbotopics, spectral init (its default), same docs + covariates.
+        # topica, spectral init (its default), same docs + covariates.
         X = np.column_stack([treatment, pid])
         model = STM(num_topics=3, init="spectral")
         model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], em_iters=80)
         tt_vocab = list(model.vocabulary)
         tt_beta_raw = np.asarray(model.topic_word)  # K x |tt_vocab|
 
-        # Align turbotopics beta onto R's vocab order for a like-for-like compare.
+        # Align topica beta onto R's vocab order for a like-for-like compare.
         tt_idx = {w: i for i, w in enumerate(tt_vocab)}
         tt_beta = np.zeros((tt_beta_raw.shape[0], len(r_vocab)))
         for j, w in enumerate(r_vocab):
             if w in tt_idx:
                 tt_beta[:, j] = tt_beta_raw[:, tt_idx[w]]
 
-    # Headline: how close is turbotopics' Spectral solution to R's Spectral one?
+    # Headline: how close is topica's Spectral solution to R's Spectral one?
     spectral_cosine = _best_alignment_cosine(r_spectral, tt_beta)
     # Benchmark 1: R's own run-to-run spread across random seeds (multimodality).
     r_self_cosine = _best_alignment_cosine(r_rand1, r_rand2)
@@ -218,7 +218,7 @@ def run(verbose: bool = True) -> dict:
     }
     if verbose:
         print(f"corpus: {result['n_docs']} docs, {result['vocab_size']} vocab")
-        print(f"R-Spectral vs turbotopics-Spectral cosine : {spectral_cosine:.3f}")
+        print(f"R-Spectral vs topica-Spectral cosine : {spectral_cosine:.3f}")
         print(f"R-Spectral vs R-Random (within-R basins)  : {r_spec_vs_rand:.3f}")
         print(f"R Random-vs-Random self-consistency       : {r_self_cosine:.3f}")
         # gadarian K=3 is multimodal; the fair bar is R's own Spectral-vs-Random
@@ -226,7 +226,7 @@ def run(verbose: bool = True) -> dict:
         gap = r_spec_vs_rand - spectral_cosine
         if gap <= 0.05:
             verdict = (
-                "PASS — turbotopics' Spectral is as close to R's Spectral as R's "
+                "PASS — topica's Spectral is as close to R's Spectral as R's "
                 "own init variants are to each other"
             )
         elif gap <= 0.15:

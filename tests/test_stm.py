@@ -1,4 +1,4 @@
-"""Tests for the turbotopics.stm analysis toolkit.
+"""Tests for the topica.stm analysis toolkit.
 
 Covers: estimate_effect, frex, label_topics, topic_correlation,
 find_thoughts, search_k, and _normal_ppf.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from turbotopics import LDA, stm
+from topica import LDA, stm
 
 
 # ---------------------------------------------------------------------------

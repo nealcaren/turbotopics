@@ -1,6 +1,6 @@
-"""Topics in W.E.B. Du Bois's *Crisis* writing — an end-to-end turbotopics tour.
+"""Topics in W.E.B. Du Bois's *Crisis* writing — an end-to-end topica tour.
 
-This tutorial works the turbotopics topic-modeling library through a real
+This tutorial works the topica topic-modeling library through a real
 corpus: 704 articles from *The Crisis*, the NAACP magazine Du Bois edited from
 its founding in 1910 until he left in 1934. The articles span 1910-1934 (the
 great bulk are Du Bois's own editorials), so the corpus lets us ask not only
@@ -12,7 +12,7 @@ The data file `examples/dubois_crisis.csv` is produced by the corpus builder
 that ships alongside this script; columns are
 ``title,year,decade,volume,issue,author,subjects,text``.
 
-We move through turbotopics' models in the order you would in real research:
+We move through topica's models in the order you would in real research:
 
     1. Preprocess  : tokenize + stoplist, build a pruned ``Corpus``.
     2. Phrases     : learn collocations ("jim crow", "colored people") first.
@@ -36,8 +36,8 @@ import tempfile
 
 import numpy as np
 
-import turbotopics as tt
-from turbotopics import Corpus, DTM, HDP, LDA, STM, stm, tokenize
+import topica as tt
+from topica import Corpus, DTM, HDP, LDA, STM, stm, tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(HERE, "dubois_crisis.csv")
@@ -70,7 +70,7 @@ def load_corpus_rows():
 
 
 def main():
-    banner("Du Bois in *The Crisis* — a turbotopics walkthrough")
+    banner("Du Bois in *The Crisis* — a topica walkthrough")
 
     # ------------------------------------------------------------------ #
     # 0. Load the corpus.
@@ -87,7 +87,7 @@ def main():
           + ", ".join(f"{d}s={n}" for d, n in sorted(by_decade.items())))
 
     # ------------------------------------------------------------------ #
-    # 1. PREPROCESS.  turbotopics.tokenize does the lowercase / regex /
+    # 1. PREPROCESS.  topica.tokenize does the lowercase / regex /
     #    stoplist / min-length work the corpus loader uses internally. We
     #    keep the per-document token lists around (`docs`) because several
     #    helpers (coherence, phrases, pyLDAvis) want the tokenized texts.
@@ -168,7 +168,7 @@ def main():
     # ------------------------------------------------------------------ #
     # 4. STM.  The Structural Topic Model lets topic *prevalence* depend on
     #    document metadata. We make prevalence a function of DECADE (one-hot
-    #    dummies via turbotopics.one_hot), so the model can express that, say,
+    #    dummies via topica.one_hot), so the model can express that, say,
     #    a "Harlem Renaissance" topic is more common in the 1920s.
     #
     #    To ask "which topics rose or fell over time" with proper uncertainty,
@@ -323,7 +323,7 @@ def main():
     banner("[8] Utilities: summary, save/load, pyLDAvis")
 
     # summary() — a tomotopy-style one-shot overview of a fitted model.
-    print("turbotopics.summary(lda):\n")
+    print("topica.summary(lda):\n")
     print(tt.summary(lda, topn=6))
 
     # save/load — persist a fitted model and read it straight back.
@@ -363,7 +363,7 @@ def main():
         words = ", ".join(w for w, _ in lda.top_words(6, topic=top))
         print(f"  snippet {i}: top topic T{top} (p={row[top]:.2f}) -> {words}")
 
-    banner("Done — that's the full turbotopics workflow on Du Bois's Crisis.")
+    banner("Done — that's the full topica workflow on Du Bois's Crisis.")
     print("Scale up K, iterations, and EM sweeps (see the inline comments) for "
           "a publication-grade analysis.")
 

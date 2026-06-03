@@ -1,7 +1,7 @@
 """Vocabulary filtering (min_cf / rm_top) on Corpus.from_documents and the
 summary() overview helper."""
 
-import turbotopics as tt
+import topica as tt
 
 DOCS = [
     ["the", "cat", "sat"],

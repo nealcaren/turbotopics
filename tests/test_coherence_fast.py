@@ -4,8 +4,8 @@ fallback exactly, and must be the path used when the extension is present."""
 import numpy as np
 import pytest
 
-import turbotopics as tt
-import turbotopics._turbotopics as ext
+import topica as tt
+import topica._topica as ext
 
 
 DOCS = (

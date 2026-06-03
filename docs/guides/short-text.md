@@ -2,7 +2,7 @@
 
 Tweets, headlines, search queries, and open-ended survey answers break standard
 LDA: documents are too short for a stable mixture of topics to be estimated.
-turbotopics has two models built for this regime.
+topica has two models built for this regime.
 
 ## GSDMM — one topic per document
 
@@ -12,7 +12,7 @@ topic. You give it an upper bound `K`; empty clusters die out during sampling, s
 it effectively **infers** the number of topics.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 model = tt.GSDMM(num_topics=30, seed=1)     # 30 is the MAX number of clusters
 model.fit(short_docs, iters=30)

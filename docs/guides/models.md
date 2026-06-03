@@ -28,7 +28,7 @@ sampler. Fits are bit-for-bit reproducible, with optional approximate
 multi-threaded training.
 
 ```python
-import turbotopics as tt
+import topica as tt
 model = tt.LDA(num_topics=20, seed=42)
 model.fit(docs, iterations=1000)
 model.top_words(10)

@@ -8,7 +8,7 @@ words you already believe belong together. You seed *topics with keywords*, not
 
 This is squarely a social-science tool: it improves [measurement validity and
 reproducibility](../publishing/validation.md), the things reviewers push on.
-turbotopics has two, matching the two standard R packages.
+topica has two, matching the two standard R packages.
 
 ## SeededLDA
 
@@ -17,7 +17,7 @@ freely. Faithful to the `seededlda` package (Watanabe): a seed word gets a
 `weight × 100` prior pseudocount in its topic, plus seeded initialization.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 model = tt.SeededLDA(
     {"economy": ["jobs", "wages", "tax"],
@@ -61,6 +61,6 @@ Both feed the same [diagnostics](diagnostics.md), [effects](../publishing/effect
 and [validation](../publishing/validation.md) as every other model.
 
 !!! note "Faithful to the references"
-    On a shared corpus with identical seeds, turbotopics recovers the same
+    On a shared corpus with identical seeds, topica recovers the same
     seeded-topic vocabulary as R's `seededlda` and the same keyword-topic words
     as R's `keyATM` (verified word-for-word against both packages).

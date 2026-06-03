@@ -21,7 +21,7 @@ documents are long and heterogeneous, segment them into comparable chunks,
 keeping each chunk tied to its source document's metadata.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 # `texts` are long documents; `meta` is one dict of covariates per document.
 chunks, chunk_meta = tt.split_documents(
@@ -39,7 +39,7 @@ is exactly when you'll want [clustered standard errors](effects.md).
 ## Tokenize and prune the vocabulary, and say how
 
 ```python
-from turbotopics import Corpus, tokenize
+from topica import Corpus, tokenize
 
 stop = open("stoplist.txt").read().split()
 docs = [tokenize(t, stopwords=stop, min_length=3) for t in chunks]
@@ -57,7 +57,7 @@ A few defensible defaults, all of which you should report:
 - **Lowercase, drop punctuation and very short tokens.** Standard.
 - **Do not stem.** Stemming wrecks interpretability (`citizen`, `citizenship`,
   and `city` can collapse together). Prefer lemmatization in your own pipeline if
-  you need it; turbotopics deliberately does neither for you.
+  you need it; topica deliberately does neither for you.
 - **Prune rare and ubiquitous terms** (`min_doc_freq`, `max_doc_fraction`,
   `rm_top`). Rare terms add noise and `junk` topics; ubiquitous terms add nothing.
 - **Custom stopwords** for corpus-specific boilerplate (a magazine's own name, a

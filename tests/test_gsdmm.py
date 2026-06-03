@@ -4,7 +4,7 @@ shapes, one-topic-per-document assignment, determinism, and save/load."""
 import numpy as np
 import pytest
 
-import turbotopics as tt
+import topica as tt
 
 
 def _short_corpus(seed=0, n=150):

@@ -1,4 +1,4 @@
-use turbotopics::corpus;
+use topica::corpus;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufWriter, Write};

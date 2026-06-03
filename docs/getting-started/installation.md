@@ -1,15 +1,15 @@
 # Installation
 
-turbotopics ships as a compiled wheel. No Rust toolchain or JVM required.
+topica ships as a compiled wheel. No Rust toolchain or JVM required.
 
 ```bash
-pip install turbotopics
+pip install topica
 ```
 
 or, with [uv](https://github.com/astral-sh/uv):
 
 ```bash
-uv pip install turbotopics
+uv pip install topica
 ```
 
 The only runtime dependency is **NumPy**. A few features light up if you also
@@ -32,8 +32,8 @@ If you want to build from the repository (e.g. to hack on the Rust core) you'll
 need a Rust toolchain and [maturin](https://github.com/PyO3/maturin):
 
 ```bash
-git clone https://github.com/nealcaren/turbotopics
-cd turbotopics
+git clone https://github.com/nealcaren/topica
+cd topica
 python -m venv .venv && source .venv/bin/activate
 pip install maturin numpy pytest
 maturin develop --release --features python

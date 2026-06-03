@@ -5,7 +5,7 @@ models: structure recovery, output shapes, determinism, and save/load.
 import numpy as np
 import pytest
 
-import turbotopics as tt
+import topica as tt
 
 
 # ---------------------------------------------------------------------------

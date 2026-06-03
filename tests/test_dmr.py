@@ -4,7 +4,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import DMR, Corpus, one_hot
+from topica import DMR, Corpus, one_hot
 
 
 # ---------------------------------------------------------------------------

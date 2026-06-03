@@ -9,7 +9,7 @@ human intrusion validation.
 import numpy as np
 import pytest
 
-import turbotopics as tt
+import topica as tt
 
 
 A = ["cat", "dog", "pet", "kitten", "puppy", "vet"]

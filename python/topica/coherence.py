@@ -259,7 +259,7 @@ def _occurrences(texts, vocab, tops, window):
     when available and falling back to the pure-Python scan otherwise. A
     ``window`` of 0 requests document-level co-occurrence (UMass)."""
     try:
-        from ._turbotopics import window_cooccurrence
+        from ._topica import window_cooccurrence
     except ImportError:
         window_cooccurrence = None
 

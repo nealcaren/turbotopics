@@ -2,14 +2,14 @@
 
 All of these are **model-agnostic**: they take any fitted model's `topic_word` /
 `doc_topic`, so they work the same across LDA, STM, HDP, and the rest. They're
-exported at the top level (`tt.<name>`) and in `turbotopics.diagnostics`. For how
+exported at the top level (`tt.<name>`) and in `topica.diagnostics`. For how
 to *use* them to make an analysis publishable, see
 [Validate the topics](../publishing/validation.md).
 
 ## Quality metrics
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 model.coherence(10)                                   # per-topic UMass (built in)
 tt.coherence(model, texts, coherence_type="c_v")      # windowed, human-aligned

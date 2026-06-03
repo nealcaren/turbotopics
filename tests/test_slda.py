@@ -7,7 +7,7 @@ that prediction works on held-out documents, and that outputs/validation behave.
 import numpy as np
 import pytest
 
-from turbotopics import SupervisedLDA, Corpus
+from topica import SupervisedLDA, Corpus
 
 T0 = ["a", "b", "c", "d", "e", "f"]
 T1 = ["g", "h", "i", "j", "k", "l"]

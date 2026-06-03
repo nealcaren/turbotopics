@@ -5,7 +5,7 @@ documents while holding the fitted topics (φ) fixed: a held-out test set, or
 freshly collected texts.
 
 ```python
-import turbotopics as tt
+import topica as tt
 
 model = tt.LDA(num_topics=20, seed=42)
 model.fit(train_docs, iterations=1000)

@@ -1,11 +1,11 @@
-"""turbotopics: fast SparseLDA topic modeling (MALLET's algorithm) in Rust.
+"""topica: fast SparseLDA topic modeling (MALLET's algorithm) in Rust.
 
-The heavy lifting lives in the compiled extension ``turbotopics._turbotopics``;
-this module just re-exports its public surface so ``import turbotopics`` works
+The heavy lifting lives in the compiled extension ``topica._topica``;
+this module just re-exports its public surface so ``import topica`` works
 and editors/type-checkers see a stable namespace.
 """
 
-from ._turbotopics import (
+from ._topica import (
     LDA,
     DMR,
     LabeledLDA,

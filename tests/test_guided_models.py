@@ -6,7 +6,7 @@ learning the rest of the vocabulary.
 import numpy as np
 import pytest
 
-import turbotopics as tt
+import topica as tt
 
 
 def _blocky_corpus(seed=3, n=400, n_blocks=5, doc_len=15):

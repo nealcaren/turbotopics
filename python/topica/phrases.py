@@ -10,7 +10,7 @@ Workflow
 --------
 1. Learn bigrams from raw tokens::
 
-       from turbotopics.phrases import learn_phrases, apply_phrases
+       from topica.phrases import learn_phrases, apply_phrases
 
        phrases1 = learn_phrases(docs, min_count=5, threshold=10.0)
        docs1    = apply_phrases(docs, phrases1)

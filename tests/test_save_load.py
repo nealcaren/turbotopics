@@ -8,7 +8,7 @@ import tempfile
 import numpy as np
 import pytest
 
-import turbotopics as tt
+import topica as tt
 
 DOCS = [["cat", "dog", "pet"]] * 30 + [["star", "moon", "sky"]] * 30
 

@@ -13,7 +13,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import CTM, Corpus
+from topica import CTM, Corpus
 
 
 # ---------------------------------------------------------------------------

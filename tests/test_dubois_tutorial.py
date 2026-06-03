@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from turbotopics import LDA, Corpus, tokenize
+from topica import LDA, Corpus, tokenize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)

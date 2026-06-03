@@ -6,8 +6,8 @@ frontier, bootstrap topic stability, and clustered / GLM-link estimate_effect.
 import numpy as np
 import pytest
 
-import turbotopics as tt
-from turbotopics import stm
+import topica as tt
+from topica import stm
 
 
 # ---------------------------------------------------------------------------

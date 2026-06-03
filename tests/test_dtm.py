@@ -8,7 +8,7 @@ that the input contract (per-document time slices) is validated.
 import numpy as np
 import pytest
 
-from turbotopics import DTM, Corpus
+from topica import DTM, Corpus
 
 
 def _drift_corpus():

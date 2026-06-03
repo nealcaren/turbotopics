@@ -1,4 +1,4 @@
-use turbotopics::{corpus, model, optimize, output, sampler};
+use topica::{corpus, model, optimize, output, sampler};
 use std::path::Path;
 use std::time::Instant;
 

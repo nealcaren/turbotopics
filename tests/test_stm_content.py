@@ -20,7 +20,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import STM, stm
+from topica import STM, stm
 
 # ---------------------------------------------------------------------------
 # Bilingual corpus vocabulary

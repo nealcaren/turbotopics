@@ -1,4 +1,4 @@
-use turbotopics::corpus::{self, InputFormat, LoadOptions, DEFAULT_TOKEN_REGEX};
+use topica::corpus::{self, InputFormat, LoadOptions, DEFAULT_TOKEN_REGEX};
 use std::path::Path;
 
 fn print_usage() {

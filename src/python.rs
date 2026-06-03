@@ -1,6 +1,6 @@
 //! PyO3 bindings: a Pythonic `LDA` + `Corpus` surface over the SparseLDA core.
 //!
-//! The compiled module is exposed to Python as `turbotopics._turbotopics`
+//! The compiled module is exposed to Python as `topica._topica`
 //! (see pyproject.toml). A thin pure-Python package re-exports it.
 //!
 //! Design notes:
@@ -100,7 +100,7 @@ fn write_state<S: serde::Serialize>(path: &str, state: &S) -> PyResult<()> {
 fn read_state<S: serde::de::DeserializeOwned>(path: &str) -> PyResult<S> {
     let bytes = std::fs::read(path).map_err(io_err)?;
     bincode::deserialize(&bytes)
-        .map_err(|e| PyValueError::new_err(format!("not a valid turbotopics model file: {e}")))
+        .map_err(|e| PyValueError::new_err(format!("not a valid topica model file: {e}")))
 }
 
 // Per-model serializable snapshots (ndarray fields stored as Arr2/Arr3/Vec).
@@ -377,7 +377,7 @@ fn build_corpus_from_docs(
 /// :meth:`Corpus.from_documents`, from a raw text file with
 /// :meth:`Corpus.from_text_file`, or load a binary corpus written by the
 /// ``preprocess`` CLI with :meth:`Corpus.load`.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 #[derive(Clone)]
 pub struct Corpus {
     inner: corpus::Corpus,
@@ -538,7 +538,7 @@ impl Corpus {
 /// :class:`Corpus` or a list of token lists. After fitting, the estimated
 /// distributions are available as :attr:`topic_word` (φ) and
 /// :attr:`doc_topic` (θ).
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct LDA {
     num_topics: usize,
     alpha_sum: Option<f64>,
@@ -2003,7 +2003,7 @@ fn parse_features(data: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f64>>> {
 /// of document features: ``α_{d,t} = exp(λ_t · x_d)``. After fitting, the
 /// learned weights are available as :attr:`feature_effects` — how each covariate
 /// shifts each topic's prevalence.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct DMR {
     num_topics: usize,
     beta: f64,
@@ -2503,7 +2503,7 @@ impl DMR {
 /// labels' topics. The number of topics is the number of distinct labels.
 ///
 /// Documents with an empty label set are treated as unconstrained (all topics).
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct LabeledLDA {
     alpha: f64,
     beta: f64,
@@ -2872,7 +2872,7 @@ fn parse_groups(obj: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// document-level **group** covariate, so you can read how a topic is worded
 /// differently across groups. Construct, then :meth:`fit` on documents plus a
 /// per-document group label.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct SAGE {
     num_topics: usize,
     alpha: f64,
@@ -3396,7 +3396,7 @@ fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
 /// unlike LDA's Dirichlet. Fit by variational EM (STM's Laplace E-step).
 ///
 /// This is the engine STM builds on; prevalence/content covariates layer on top.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct CTM {
     num_topics: usize,
     sigma_shrink: f64,
@@ -3681,8 +3681,8 @@ impl CTM {
 /// core (:class:`CTM`) with **prevalence covariates**: a document's prior topic
 /// mean is a regression on its covariates, `μ_d = X_d γ`, so covariates shift
 /// which topics a document discusses. After fitting, `prevalence_effects` holds
-/// the learned γ; pair it with `turbotopics.stm.estimate_effect` for inference.
-#[pyclass(module = "turbotopics")]
+/// the learned γ; pair it with `topica.stm.estimate_effect` for inference.
+#[pyclass(module = "topica")]
 pub struct STM {
     num_topics: usize,
     sigma_shrink: f64,
@@ -3994,7 +3994,7 @@ impl STM {
     /// Prevalence coefficients γ, shape ``(num_features, num_topics-1)`` — how
     /// each covariate (row 0 is the intercept) shifts each topic's log-prior.
     /// The last topic is the softmax reference. For inference, prefer
-    /// ``turbotopics.stm.estimate_effect(model.doc_topic, X)``.
+    /// ``topica.stm.estimate_effect(model.doc_topic, X)``.
     #[getter]
     fn prevalence_effects<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
@@ -4273,7 +4273,7 @@ fn tokenize(
 /// concentration parameters `alpha` (document level) and `gamma` (corpus level)
 /// govern how readily new topics appear; by default both are resampled from the
 /// data (a faithful port of blei-lab/hdp), so you typically don't tune them.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct HDP {
     alpha: f64,
     gamma: f64,
@@ -4539,7 +4539,7 @@ impl HDP {
 /// port of Blei's C `dtm` / gensim's `LdaSeqModel`. After fitting, query a
 /// topic's word distribution at any slice with `topic_word(time)` and trace a
 /// word's trajectory with `word_evolution(topic, word)`.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct DTM {
     num_topics: usize,
     alpha: f64,
@@ -4855,7 +4855,7 @@ impl DTM {
 /// Fitting is supervised by the response, so topics are shaped to be predictive
 /// and the coefficients `η` report how each topic moves `y`. Fit by variational
 /// EM; `predict` returns ŷ for new documents.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct SupervisedLDA {
     num_topics: usize,
     alpha: f64,
@@ -5165,7 +5165,7 @@ impl SupervisedLDA {
 /// are aggregated into `num_pseudo` pseudo-documents that carry the topic
 /// distributions, so the topic structure is estimated from richer aggregated
 /// statistics than individual short documents would provide. Collapsed Gibbs.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct PT {
     num_topics: usize,
     num_pseudo: usize,
@@ -5310,7 +5310,7 @@ impl PT {
 /// the number of clusters; empty clusters die out during sampling, so the
 /// effective `num_topics` is inferred from the data (≤ K). Handles the sparsity
 /// of short documents far better than LDA.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct GSDMM {
     k_max: usize,
     alpha: f64,
@@ -5531,7 +5531,7 @@ fn seed_word_ids(
 /// Useful when theory tells you which themes to expect (Jagarlamudi et al. 2012;
 /// the seeding follows koheiw/seededlda — seed words get a `weight × 100`
 /// prior pseudocount in their topic).
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct SeededLDA {
     seed_names: Vec<String>,
     seed_words: Vec<Vec<String>>,
@@ -5709,7 +5709,7 @@ impl SeededLDA {
 /// from a distribution over only that topic's keywords or from the topic's full
 /// distribution. This anchors keyword topics to their keywords while still
 /// learning the rest of the vocabulary. Faithful to keyATM/keyATM.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct KeyATM {
     key_names: Vec<String>,
     keywords: Vec<Vec<String>>,
@@ -5906,7 +5906,7 @@ impl KeyATM {
 /// super-topics over `num_sub` shared sub-topics over words, capturing topic
 /// *correlations* — `super_sub` reports which sub-topics each super-topic groups
 /// together. Collapsed Gibbs over (super, sub) pairs.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct PA {
     num_super: usize,
     num_sub: usize,
@@ -6068,7 +6068,7 @@ impl PA {
 /// the shared (general) topic; deeper nodes are progressively more specific.
 /// Each document follows a root-to-leaf path. Inspect the tree with
 /// `topic_word`/`node_levels`/`node_parents`/`doc_paths`.
-#[pyclass(module = "turbotopics")]
+#[pyclass(module = "topica")]
 pub struct HLDA {
     depth: usize,
     gamma: f64,
@@ -6245,7 +6245,7 @@ impl HLDA {
 }
 
 #[pymodule]
-fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LDA>()?;
     m.add_class::<DMR>()?;
     m.add_class::<LabeledLDA>()?;

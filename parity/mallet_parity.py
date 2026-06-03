@@ -1,12 +1,12 @@
-"""Cross-implementation parity: turbotopics vs. the original Java MALLET.
+"""Cross-implementation parity: topica vs. the original Java MALLET.
 
-Java MALLET and turbotopics are independent implementations with different RNGs,
+Java MALLET and topica are independent implementations with different RNGs,
 so they are never byte-identical — parity here means *statistical* agreement:
 given the same tokenized corpus and hyperparameters, do both recover the same
 topics? On a corpus with planted (disjoint-vocabulary) topics they should, and
 in practice the alignment is exact.
 
-`lda_parity` runs Java MALLET's `train-topics` and turbotopics's LDA on one
+`lda_parity` runs Java MALLET's `train-topics` and topica's LDA on one
 shared, pre-tokenized corpus, aligns the resulting topics, and reports the mean
 top-word Jaccard overlap and cosine similarity of the aligned topic pairs.
 
@@ -77,10 +77,10 @@ def _ensure_compiled(java_name: str) -> bool:
 
 
 def labeled_parity(seed: int = 0, iterations: int = 800, top_n: int = 6):
-    """Compare turbotopics.LabeledLDA to Java MALLET's LabeledLDA on a shared
+    """Compare topica.LabeledLDA to Java MALLET's LabeledLDA on a shared
     multi-label corpus. Topics correspond to labels, so they align by name.
     Returns a dict with mean cosine and per-label detail."""
-    from turbotopics import LabeledLDA
+    from topica import LabeledLDA
 
     if not _ensure_compiled("LabeledLDADriver"):
         raise RuntimeError("could not compile LabeledLDADriver")
@@ -229,11 +229,11 @@ def _align(a_phi, b_phi):
 
 
 def lda_parity(seed: int = 0, k: int | None = None, iterations: int = 800, top_n: int = 6):
-    """Compare turbotopics LDA to Java MALLET on a shared planted corpus.
+    """Compare topica LDA to Java MALLET on a shared planted corpus.
 
     Returns a dict with `mean_jaccard`, `mean_cosine`, and per-topic detail.
     """
-    from turbotopics import LDA
+    from topica import LDA
 
     docs, planted_k = planted_corpus(seed=seed)
     k = planted_k if k is None else k
@@ -266,12 +266,12 @@ def lda_parity(seed: int = 0, k: int | None = None, iterations: int = 800, top_n
 
 
 def dmr_parity(seed: int = 0, iterations: int = 800, num_docs: int = 160):
-    """Compare turbotopics.DMR to Java MALLET's DMRTopicModel. Because DMR fits
+    """Compare topica.DMR to Java MALLET's DMRTopicModel. Because DMR fits
     feature weights with L-BFGS (which differs between implementations), this is
     a *statistical* check: do the topics align, and does the covariate's effect
     agree in sign? Returns topic cosine and the (space - animal) covariate effect
     from each implementation."""
-    from turbotopics import DMR
+    from topica import DMR
 
     if not _ensure_compiled("DMRDriver"):
         raise RuntimeError("could not compile DMRDriver")
@@ -340,7 +340,7 @@ def dmr_parity(seed: int = 0, iterations: int = 800, num_docs: int = 160):
     return {
         "topic_cosine": cos,
         "mallet_effect": float(mal_lam[ms, 1] - mal_lam[1 - ms, 1]),
-        "turbotopics_effect": float(fe[os_, 1] - fe[1 - os_, 1]),
+        "topica_effect": float(fe[os_, 1] - fe[1 - os_, 1]),
     }
 
 
@@ -354,4 +354,4 @@ if __name__ == "__main__":
         print(f"LabeledLDA vs MALLET: cosine={rl['mean_cosine']:.3f}")
         rd = dmr_parity()
         print(f"DMR        vs MALLET: topic cosine={rd['topic_cosine']:.3f} "
-              f"effect MALLET={rd['mallet_effect']:+.2f} ours={rd['turbotopics_effect']:+.2f}")
+              f"effect MALLET={rd['mallet_effect']:+.2f} ours={rd['topica_effect']:+.2f}")

@@ -5,8 +5,8 @@ topic recovery, covariate recovery (the headline STM property), determinism,
 input type parity (Corpus vs list[list[str]]), multiple covariates,
 top_words, and coherence.
 
-NOTE: This file tests the STM *model class* (turbotopics.STM).
-      tests/test_stm.py tests the turbotopics.stm *analysis toolkit*.
+NOTE: This file tests the STM *model class* (topica.STM).
+      tests/test_stm.py tests the topica.stm *analysis toolkit*.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from turbotopics import STM, Corpus, stm
+from topica import STM, Corpus, stm
 
 
 # ---------------------------------------------------------------------------

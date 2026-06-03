@@ -3,46 +3,46 @@
 Model-agnostic quality, interpretation, and validation tools. They take any
 fitted model's `topic_word` / `doc_topic` (or raw arrays), so they work the same
 across every model family. All are available at the top level (`tt.<name>`) and
-in `turbotopics.diagnostics`.
+in `topica.diagnostics`.
 
 ## Quality
 
-::: turbotopics.coherence
+::: topica.coherence
 
-::: turbotopics.topic_diversity
+::: topica.topic_diversity
 
-::: turbotopics.exclusivity
+::: topica.exclusivity
 
-::: turbotopics.quality_frontier
+::: topica.quality_frontier
 
 ## Interpretation
 
-::: turbotopics.label_topics
+::: topica.label_topics
 
-::: turbotopics.frex
+::: topica.frex
 
-::: turbotopics.relevance
+::: topica.relevance
 
-::: turbotopics.find_thoughts
+::: topica.find_thoughts
 
-::: turbotopics.find_thoughts_html
+::: topica.find_thoughts_html
 
-::: turbotopics.topic_correlation
+::: topica.topic_correlation
 
-::: turbotopics.prepare_pyldavis
+::: topica.prepare_pyldavis
 
 ## Validation
 
-::: turbotopics.word_intrusion
+::: topica.word_intrusion
 
-::: turbotopics.document_intrusion
+::: topica.document_intrusion
 
-::: turbotopics.bootstrap_stability
+::: topica.bootstrap_stability
 
-::: turbotopics.search_k
+::: topica.search_k
 
-::: turbotopics.check_residuals
+::: topica.check_residuals
 
-::: turbotopics.align_topics
+::: topica.align_topics
 
-::: turbotopics.topic_stability
+::: topica.topic_stability

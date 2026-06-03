@@ -1,10 +1,10 @@
 """LDAvis relevance + pyLDAvis export, Taddy residual check, and topic
-alignment / stability utilities (turbotopics.stm)."""
+alignment / stability utilities (topica.stm)."""
 
 import numpy as np
 import pytest
 
-from turbotopics import LDA, stm, diagnostics
+from topica import LDA, stm, diagnostics
 
 
 @pytest.fixture(scope="module")

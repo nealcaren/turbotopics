@@ -1,4 +1,4 @@
-"""Tests for turbotopics.phrases — pure-Python collocation extraction.
+"""Tests for topica.phrases — pure-Python collocation extraction.
 
 Imported directly by file path so the compiled Rust extension is not required.
 """
@@ -17,7 +17,7 @@ import sys
 
 spec = importlib.util.spec_from_file_location(
     "phrases",
-    pathlib.Path(__file__).resolve().parents[1] / "python" / "turbotopics" / "phrases.py",
+    pathlib.Path(__file__).resolve().parents[1] / "python" / "topica" / "phrases.py",
 )
 phrases_mod = importlib.util.module_from_spec(spec)
 # Register before exec so @dataclass can resolve the module's __dict__.

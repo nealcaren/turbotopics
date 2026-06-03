@@ -40,7 +40,7 @@ For most published social-science work the answer is the **Structural Topic
 Model**. It is LDA's correlated cousin *plus* a regression layer, so a single fit
 gives you topics, their correlations, and how covariates move them, with
 [proper uncertainty](effects.md). The R `stm` package made it the field standard.
-turbotopics gives you the same model (spectral init, prevalence and content
+topica gives you the same model (spectral init, prevalence and content
 covariates, `estimateEffect`, `searchK`, FREX) in Python, faster, with
 [clustered standard errors](effects.md) and GLM links on top.
 

@@ -1,7 +1,7 @@
-"""Shared fixtures for the turbotopics test suite."""
+"""Shared fixtures for the topica test suite."""
 
 import pytest
-from turbotopics import Corpus
+from topica import Corpus
 
 
 def pytest_configure(config: pytest.Config) -> None:

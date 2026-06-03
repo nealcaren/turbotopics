@@ -37,7 +37,7 @@ artifacts)? Do topics split and merge sensibly as `K` grows?
 ## A concrete procedure
 
 ```python
-import turbotopics as tt
+import topica as tt
 import numpy as np
 
 # 1) Scan a theoretically plausible range.

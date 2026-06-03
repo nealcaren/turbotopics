@@ -1,13 +1,13 @@
 # Preprocessing
 
-turbotopics takes pre-tokenized documents, a `list[list[str]]`, or a `Corpus`.
+topica takes pre-tokenized documents, a `list[list[str]]`, or a `Corpus`.
 You control tokenization and vocabulary, because those choices are part of your
 method (see [Build a defensible corpus](../publishing/corpus.md)).
 
 ## Tokenize
 
 ```python
-from turbotopics import tokenize
+from topica import tokenize
 
 stop = open("stoplist.txt").read().split()        # a list, not a set
 tokens = tokenize(text, stopwords=stop, min_length=3)
@@ -20,7 +20,7 @@ you need it.
 ## Build a Corpus and prune the vocabulary
 
 ```python
-from turbotopics import Corpus
+from topica import Corpus
 
 corpus = Corpus.from_documents(
     docs,
@@ -41,7 +41,7 @@ Fixed expressions carry meaning together. Detect collocations and rewrite the
 tokens before modeling:
 
 ```python
-import turbotopics as tt
+import topica as tt
 phrases = tt.learn_phrases(docs, min_count=8, threshold=12.0)
 docs = tt.apply_phrases(docs, phrases)            # "health care" -> "health_care"
 ```

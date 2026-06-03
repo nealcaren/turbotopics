@@ -1,7 +1,7 @@
 """Statistical parity against the original Java MALLET.
 
 Independent implementations with different RNGs are never byte-identical, so we
-assert topic *agreement*: on a planted-topic corpus, turbotopics's LDA and Java
+assert topic *agreement*: on a planted-topic corpus, topica's LDA and Java
 MALLET should recover the same topics (high aligned top-word overlap). Skips
 cleanly when the `mallet` CLI is not installed.
 """
@@ -41,4 +41,4 @@ def test_dmr_matches_java_mallet():
     # statistical check: topics align, and the covariate effect agrees in sign
     # and is substantial in both implementations.
     assert r["topic_cosine"] > 0.9, r
-    assert r["mallet_effect"] > 1.0 and r["turbotopics_effect"] > 1.0, r
+    assert r["mallet_effect"] > 1.0 and r["topica_effect"] > 1.0, r

@@ -9,8 +9,8 @@ accept both explicit word lists and fitted models.
 import numpy as np
 import pytest
 
-import turbotopics as tt
-from turbotopics import LDA
+import topica as tt
+from topica import LDA
 
 ALL_TYPES = ["u_mass", "c_uci", "c_npmi", "c_v"]
 
