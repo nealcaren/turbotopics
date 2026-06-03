@@ -73,6 +73,29 @@ A larger `feature_effects[k, j]` means covariate `j` raises topic `k`'s
 prevalence. For uncertainty, pair the fitted `doc_topic` with
 [`estimate_effect`](covariates.md).
 
+### Dynamic keyATM
+
+Pass `timestamps` (one per document) to let topic prevalence shift over time.
+This is the keyATM dynamic model, a Chib (1998) change-point hidden Markov model:
+the timeline is split into `num_states` latent regimes, each with its own
+document-topic prior, and the model estimates where prevalence changes. Following
+the keyATM Supreme Court application (Eshima, Imai & Sasaki 2024, Section 3.3),
+documents carry a year and the model recovers when each topic rises or falls.
+
+```python
+model = topica.KeyATM(seeds, num_topics=14, seed=1)
+model.fit(docs, timestamps=years, num_states=5, iters=3000)
+
+model.time_labels        # ['1946', '1947', ..., '2012']  (T distinct timestamps)
+model.time_state         # [0, 0, 1, 1, ..., 4]  regime of each segment
+model.time_prevalence    # (T, num_topics): smoothed prevalence path, rows sum to 1
+model.transition_matrix  # (num_states, num_states), left-to-right
+```
+
+Documents may be passed in any order; they are sorted by timestamp internally and
+`doc_topic` is returned in the original order. Plot a column of `time_prevalence`
+against `time_labels` to see a topic's trajectory.
+
 ## Which to use
 
 - **`KeyATM`** is the better-validated choice and the one with the political-

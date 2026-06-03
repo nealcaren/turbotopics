@@ -1176,6 +1176,8 @@ class KeyATM:
         iters: int = 1500,
         covariates: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
         feature_names: list[str] | None = None,
+        timestamps: Sequence[float] | Sequence[str] | None = None,
+        num_states: int = 5,
         optimize_interval: int = 50,
         burn_in: int = 200,
         prior_variance: float = 1.0,
@@ -1184,7 +1186,13 @@ class KeyATM:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
         alpha_{d,k} = exp(x_d . lambda_k) (an intercept is prepended), and the
-        learned lambda is exposed as `feature_effects`."""
+        learned lambda is exposed as `feature_effects`.
+
+        Pass `timestamps` (one per document) for the dynamic keyATM: a Chib (1998)
+        change-point HMM lets topic prevalence shift over `num_states` regimes.
+        The smoothed path is exposed as `time_prevalence` (aligned with
+        `time_labels`) and the per-segment regime as `time_state`. `timestamps`
+        and `covariates` are mutually exclusive."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1202,6 +1210,27 @@ class KeyATM:
     @property
     def keyword_rate(self) -> numpy.typing.NDArray[numpy.float64]:
         """Per-topic keyword switch rate (0 for regular topics)."""
+        ...
+    @property
+    def time_prevalence(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Dynamic model: smoothed topic prevalence per time segment, shape
+        (T, num_topics), aligned with `time_labels`. Raises if fit without
+        `timestamps`."""
+        ...
+    @property
+    def time_state(self) -> list[int]:
+        """Dynamic model: latent HMM regime of each time segment (length T).
+        Empty for non-dynamic models."""
+        ...
+    @property
+    def time_labels(self) -> list[str]:
+        """Dynamic model: sorted distinct timestamp labels, one per time segment.
+        Empty for non-dynamic models."""
+        ...
+    @property
+    def transition_matrix(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Dynamic model: left-to-right state transition matrix, shape
+        (num_states, num_states). Raises if fit without `timestamps`."""
         ...
     @property
     def num_topics(self) -> int: ...

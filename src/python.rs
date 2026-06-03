@@ -2046,6 +2046,65 @@ fn parse_features(data: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<f64>>> {
     })
 }
 
+/// Map a per-document timestamp sequence to contiguous 0-based time-segment
+/// indices plus the sorted, distinct labels. Accepts numbers or strings; the
+/// distinct values are sorted to define the time order. Returns
+/// `(time_index_per_doc, labels)`.
+fn build_time_index(
+    data: &Bound<'_, PyAny>,
+    num_docs: usize,
+) -> PyResult<(Vec<usize>, Vec<String>)> {
+    // Numeric timestamps (e.g. years) — sort numerically.
+    if let Ok(vals) = data.extract::<Vec<f64>>() {
+        if vals.len() != num_docs {
+            return Err(PyValueError::new_err(format!(
+                "timestamps has {} entries but corpus has {} documents",
+                vals.len(),
+                num_docs
+            )));
+        }
+        let mut uniq = vals.clone();
+        uniq.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        uniq.dedup();
+        let idx: Vec<usize> = vals
+            .iter()
+            .map(|v| uniq.iter().position(|u| u == v).unwrap())
+            .collect();
+        let labels = uniq
+            .iter()
+            .map(|&u| {
+                if u.fract() == 0.0 {
+                    format!("{}", u as i64)
+                } else {
+                    format!("{u}")
+                }
+            })
+            .collect();
+        return Ok((idx, labels));
+    }
+    // String timestamps — sort lexicographically.
+    if let Ok(vals) = data.extract::<Vec<String>>() {
+        if vals.len() != num_docs {
+            return Err(PyValueError::new_err(format!(
+                "timestamps has {} entries but corpus has {} documents",
+                vals.len(),
+                num_docs
+            )));
+        }
+        let mut uniq = vals.clone();
+        uniq.sort();
+        uniq.dedup();
+        let idx: Vec<usize> = vals
+            .iter()
+            .map(|v| uniq.iter().position(|u| u == v).unwrap())
+            .collect();
+        return Ok((idx, uniq));
+    }
+    Err(PyValueError::new_err(
+        "timestamps must be a sequence of numbers or strings, one per document",
+    ))
+}
+
 /// Dirichlet-Multinomial Regression topic model (Mimno & McCallum, 2008).
 ///
 /// Like :class:`LDA`, but the per-document topic prior is a log-linear function
@@ -5778,6 +5837,13 @@ pub struct KeyATM {
     // Covariate model only: learned λ (K × F+1, intercept first) and column names.
     feature_effects: Option<Array2<f64>>,
     feature_names: Vec<String>,
+    // Dynamic model only: the HMM state of each time segment (length T), the
+    // smoothed prevalence per segment (T × K), the segment labels, and the
+    // left-to-right transition matrix (S × S).
+    time_state: Vec<usize>,
+    time_prevalence: Option<Array2<f64>>,
+    time_labels: Vec<String>,
+    transition_matrix: Option<Array2<f64>>,
 }
 
 impl KeyATM {
@@ -5829,6 +5895,8 @@ impl KeyATM {
             gamma1, gamma2, seed, fitted: false, topic_names: Vec::new(),
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
+            time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
+            transition_matrix: None,
         })
     }
 
@@ -5841,7 +5909,15 @@ impl KeyATM {
     /// intercept is prepended). `feature_names` (length F) labels the columns;
     /// the learned `λ` is exposed as `feature_effects`. With no `covariates`,
     /// this is the base symmetric-α keyATM.
+    ///
+    /// Pass `timestamps` (one value per document) for the **dynamic** keyATM: a
+    /// Chib (1998) change-point HMM lets topic prevalence shift over time across
+    /// `num_states` latent regimes. Documents are sorted by timestamp internally;
+    /// the smoothed prevalence path is exposed as `time_prevalence` (aligned with
+    /// `time_labels`) and the per-segment regime as `time_state`. `timestamps`
+    /// and `covariates` are mutually exclusive.
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
+                        timestamps=None, num_states=5,
                         optimize_interval=50, burn_in=200, prior_variance=1.0, lbfgs_iters=20))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
@@ -5851,6 +5927,8 @@ impl KeyATM {
         iters: usize,
         covariates: Option<&Bound<'_, PyAny>>,
         feature_names: Option<Vec<String>>,
+        timestamps: Option<&Bound<'_, PyAny>>,
+        num_states: usize,
         optimize_interval: usize,
         burn_in: usize,
         prior_variance: f64,
@@ -5873,6 +5951,64 @@ impl KeyATM {
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+
+        // --- Dynamic model: timestamps drive a change-point HMM on prevalence. ---
+        if let Some(ts) = timestamps {
+            if covariates.is_some() {
+                return Err(PyValueError::new_err(
+                    "`timestamps` (dynamic) and `covariates` are mutually exclusive",
+                ));
+            }
+            if num_states < 1 {
+                return Err(PyValueError::new_err("num_states must be >= 1"));
+            }
+            let (time_raw, labels) = build_time_index(ts, corpus.num_docs())?;
+            let num_time = labels.len();
+            if num_time < num_states {
+                return Err(PyValueError::new_err(format!(
+                    "num_states ({num_states}) cannot exceed the number of distinct timestamps ({num_time})"
+                )));
+            }
+            // keyATM requires documents ordered by time; sort, fit, then unsort θ.
+            let mut order: Vec<usize> = (0..corpus.num_docs()).collect();
+            order.sort_by_key(|&d| time_raw[d]);
+            let sorted_docs: Vec<Vec<u32>> = order.iter().map(|&d| corpus.docs[d].clone()).collect();
+            let sorted_time: Vec<usize> = order.iter().map(|&d| time_raw[d]).collect();
+
+            let model = py.allow_threads(move || {
+                keyatm::fit_keyatm_dynamic(
+                    &sorted_docs, num_types, num_topics, &keys, &sorted_time, num_states,
+                    beta, beta_key, g1, g2,
+                    1.0, 1.0, 2.0, 1.0, // keyATM α-prior defaults: eta_1, eta_2, eta_1_reg, eta_2_reg
+                    iters, &mut rng,
+                )
+            });
+
+            // θ comes back in sorted order; scatter it to the original doc order.
+            let theta_sorted = model.doc_topic();
+            let mut theta = vec![vec![0.0f64; num_topics]; corpus.num_docs()];
+            for (i, &d) in order.iter().enumerate() {
+                theta[d] = theta_sorted[i].clone();
+            }
+            self.theta = Some(vecs_to_arr2(&theta));
+            self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
+            self.keyword_rate = model.keyword_rate();
+            self.time_prevalence = model.time_prevalence().map(|tp| vecs_to_arr2(&tp));
+            if let Some(d) = &model.dynamic {
+                self.time_state = d.r_est.clone();
+                self.transition_matrix = Some(vecs_to_arr2(&d.p_est));
+            }
+            self.time_labels = labels;
+
+            let mut names = self.key_names.clone();
+            for i in self.key_names.len()..num_topics {
+                names.push(format!("topic_{}", i));
+            }
+            self.topic_names = names;
+            self.corpus = Some(corpus);
+            self.fitted = true;
+            return Ok(());
+        }
 
         // Build the (intercept-prepended) feature matrix if covariates were given.
         let (feats, cov_names): (Option<Vec<Vec<f64>>>, Vec<String>) = match covariates {
@@ -5964,6 +6100,43 @@ impl KeyATM {
         self.feature_names.clone()
     }
 
+    /// Dynamic model: smoothed topic prevalence per time segment, shape
+    /// ``(T, num_topics)``, rows sum to 1, aligned with `time_labels`. Raises if
+    /// the model was fit without `timestamps`.
+    #[getter]
+    fn time_prevalence<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        self.time_prevalence
+            .as_ref()
+            .map(|t| t.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err("model was fit without timestamps"))
+    }
+
+    /// Dynamic model: the latent HMM state (regime) of each time segment, length
+    /// T, aligned with `time_labels`. Empty for non-dynamic models.
+    #[getter]
+    fn time_state(&self) -> Vec<usize> {
+        self.time_state.clone()
+    }
+
+    /// Dynamic model: the distinct, sorted timestamp labels, one per time
+    /// segment (length T). Empty for non-dynamic models.
+    #[getter]
+    fn time_labels(&self) -> Vec<String> {
+        self.time_labels.clone()
+    }
+
+    /// Dynamic model: the left-to-right state transition matrix, shape
+    /// ``(num_states, num_states)``. Raises if fit without `timestamps`.
+    #[getter]
+    fn transition_matrix<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        self.transition_matrix
+            .as_ref()
+            .map(|t| t.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err("model was fit without timestamps"))
+    }
+
     #[getter]
     fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
@@ -6034,6 +6207,8 @@ impl KeyATM {
             gamma2: s.gamma2, seed: s.seed, fitted: s.fitted, topic_names: s.topic_names,
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
+            time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
+            transition_matrix: None,
         })
     }
 

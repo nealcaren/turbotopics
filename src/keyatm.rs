@@ -104,6 +104,35 @@ pub struct KeyAtmModel {
     /// Covariate model only: the document feature matrix used at fit time
     /// (`[D][F]`), kept for held-out inference. `None` for the base model.
     pub features: Option<Vec<Vec<f64>>>,
+    /// Dynamic model only: the fitted Chib (1998) change-point HMM over time
+    /// segments. `None` for the base and covariate models.
+    pub dynamic: Option<DynamicState>,
+}
+
+/// Fitted state of the keyATM **Dynamic** model (Eshima, Imai & Sasaki 2024,
+/// Section 3.3), a Chib (1998) change-point hidden Markov model on topic
+/// prevalence over time.
+///
+/// Documents are grouped into `num_time` ordered segments (one per timestamp).
+/// Each segment is assigned to one of `num_states` latent states via a
+/// left-to-right HMM (a segment stays in its state or advances to the next, so
+/// the state sequence is non-decreasing and every state is visited). Each state
+/// `r` owns its own document-topic Dirichlet prior `alphas[r]`, so topic
+/// prevalence shifts at the estimated change points.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct DynamicState {
+    /// Number of latent states S.
+    pub num_states: usize,
+    /// Number of time segments T (distinct timestamps).
+    pub num_time: usize,
+    /// `time_index[d]` — 0-based time segment of document d (length D).
+    pub time_index: Vec<usize>,
+    /// `alphas[r][k]` — per-state document-topic Dirichlet prior (S×K).
+    pub alphas: Vec<Vec<f64>>,
+    /// `r_est[t]` — latent state assigned to time segment t (length T).
+    pub r_est: Vec<usize>,
+    /// `p_est[r][r']` — left-to-right transition matrix (S×S).
+    pub p_est: Vec<Vec<f64>>,
 }
 
 impl KeyAtmModel {
@@ -168,6 +197,25 @@ impl KeyAtmModel {
     /// the symmetric α is replaced by the per-document prior
     /// `α_{d,k} = exp(x_d · λ_k)`.
     pub fn doc_topic(&self) -> Vec<Vec<f64>> {
+        // Dynamic model: each document's α is the prior of its time segment's
+        // current HMM state, `α_{d} = alphas[r_est[time_index[d]]]`.
+        if let Some(dyn_) = &self.dynamic {
+            return self
+                .ndk
+                .iter()
+                .enumerate()
+                .map(|(d, row)| {
+                    let a_row = &dyn_.alphas[dyn_.r_est[dyn_.time_index[d]]];
+                    let a_sum: f64 = a_row.iter().sum();
+                    let n_d: f64 = row.iter().map(|&c| c as f64).sum::<f64>() + a_sum;
+                    row.iter()
+                        .zip(a_row.iter())
+                        .map(|(&c, &a)| (c as f64 + a) / n_d)
+                        .collect()
+                })
+                .collect();
+        }
+
         // Covariate model: per-document, per-topic α from the regression.
         if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
             let doc_alpha = crate::dmr::compute_doc_alpha(lambda, features);
@@ -219,6 +267,26 @@ impl KeyAtmModel {
             })
             .collect()
     }
+
+    /// Dynamic model: smoothed topic prevalence per time segment, shape T×K,
+    /// rows sum to 1. For time segment t in state `r = r_est[t]`, the prevalence
+    /// is the normalised state prior `alphas[r] / Σ_k alphas[r][k]` — the
+    /// posterior mean topic proportion the HMM assigns to that period.
+    ///
+    /// Returns `None` for non-dynamic models.
+    pub fn time_prevalence(&self) -> Option<Vec<Vec<f64>>> {
+        let dyn_ = self.dynamic.as_ref()?;
+        Some(
+            dyn_.r_est
+                .iter()
+                .map(|&r| {
+                    let a_row = &dyn_.alphas[r];
+                    let s: f64 = a_row.iter().sum();
+                    a_row.iter().map(|&a| a / s).collect()
+                })
+                .collect(),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +305,86 @@ fn sample_index<R: Rng>(weights: &[f64], rng: &mut R) -> usize {
         }
     }
     weights.len() - 1
+}
+
+// ---------------------------------------------------------------------------
+// Numeric helpers for the dynamic (HMM) sampler
+// ---------------------------------------------------------------------------
+
+/// Stirling-series log Γ; shifts the argument up to z ≥ 10 for accuracy (same
+/// approximation `dtm.rs` uses, adequate for the small positive α and counts
+/// the Dirichlet-multinomial marginal needs).
+fn lgamma(mut z: f64) -> f64 {
+    const HALF_LOG_TWO_PI: f64 = 0.918_938_533_204_672_7;
+    let mut shift = 0i32;
+    while z < 10.0 {
+        z += 1.0;
+        shift += 1;
+    }
+    let mut result = HALF_LOG_TWO_PI + (z - 0.5) * z.ln() - z + 1.0 / (12.0 * z)
+        - 1.0 / (360.0 * z * z * z)
+        + 1.0 / (1260.0 * z * z * z * z * z);
+    while shift > 0 {
+        shift -= 1;
+        z -= 1.0;
+        result -= z.ln();
+    }
+    result
+}
+
+/// Log density of Gamma(shape `a`, scale `b`), matching keyATM's `gammapdfln`:
+/// `-a·ln(b) - lnΓ(a) + (a-1)·ln(x) - x/b`.
+fn gammapdfln(x: f64, a: f64, b: f64) -> f64 {
+    -a * b.ln() - lgamma(a) + (a - 1.0) * x.ln() - x / b
+}
+
+/// keyATM `shrinkp`: maps a positive α to (0, 1) via `x / (1 + x)`.
+#[inline]
+fn shrinkp(x: f64) -> f64 {
+    x / (1.0 + x)
+}
+
+/// Standard-normal variate (Box–Muller).
+fn sample_normal<R: Rng>(rng: &mut R) -> f64 {
+    let u1: f64 = rng.gen::<f64>().max(1e-300);
+    let u2: f64 = rng.gen::<f64>();
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
+/// Gamma(shape, 1) variate (Marsaglia & Tsang; boosted for shape < 1).
+fn sample_gamma<R: Rng>(shape: f64, rng: &mut R) -> f64 {
+    if shape < 1.0 {
+        let g = sample_gamma(shape + 1.0, rng);
+        let u: f64 = rng.gen::<f64>().max(1e-300);
+        return g * u.powf(1.0 / shape);
+    }
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+    loop {
+        let x = sample_normal(rng);
+        let v = (1.0 + c * x).powi(3);
+        if v <= 0.0 {
+            continue;
+        }
+        let u: f64 = rng.gen::<f64>();
+        if u < 1.0 - 0.0331 * x * x * x * x {
+            return d * v;
+        }
+        if u.ln() < 0.5 * x * x + d * (1.0 - v + v.ln()) {
+            return d * v;
+        }
+    }
+}
+
+/// Beta(a, b) variate via two Gamma draws.
+fn sample_beta<R: Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
+    let x = sample_gamma(a, rng);
+    let y = sample_gamma(b, rng);
+    if x + y <= 0.0 {
+        0.5
+    } else {
+        x / (x + y)
+    }
 }
 
 /// Per-topic precomputed keyword lookup structures.
@@ -519,6 +667,7 @@ fn init_state<R: Rng>(
         nk1,
         lambda: None,
         features: None,
+        dynamic: None,
     };
     (model, assignments, ki)
 }
@@ -577,6 +726,317 @@ pub fn fit_keyatm_cov<R: Rng>(
 
     model.lambda = Some(lambda);
     model.features = Some(features.to_vec());
+    model
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic model (Chib 1998 change-point HMM on topic prevalence)
+// ---------------------------------------------------------------------------
+
+/// Dirichlet-multinomial marginal log-likelihood of topic `k`'s contribution
+/// over documents `[doc_start, doc_end]` under state prior `alpha`, plus the
+/// Gamma(shape, scale) prior on `alpha[k]`. Matches keyATM's `alpha_loglik`.
+fn dyn_alpha_loglik(
+    alpha: &[f64],
+    k: usize,
+    doc_start: usize,
+    doc_end: usize,
+    ndk: &[Vec<u32>],
+    doc_len: &[f64],
+    prior_shape: f64,
+    prior_scale: f64,
+) -> f64 {
+    let alpha_sum: f64 = alpha.iter().sum();
+    let fixed = lgamma(alpha_sum) - lgamma(alpha[k]);
+    let mut loglik = gammapdfln(alpha[k], prior_shape, prior_scale);
+    for d in doc_start..=doc_end {
+        loglik += fixed + lgamma(ndk[d][k] as f64 + alpha[k]) - lgamma(doc_len[d] + alpha_sum);
+    }
+    loglik
+}
+
+/// Pólya (Dirichlet-multinomial) log-likelihood of all documents in time
+/// segment `[doc_start, doc_end]` under prior `alpha`. keyATM's `polyapdfln`.
+fn dyn_polyapdfln(
+    alpha: &[f64],
+    doc_start: usize,
+    doc_end: usize,
+    ndk: &[Vec<u32>],
+    doc_len: &[f64],
+) -> f64 {
+    let alpha_sum: f64 = alpha.iter().sum();
+    let lg_alpha_sum = lgamma(alpha_sum);
+    let lg_alpha: Vec<f64> = alpha.iter().map(|&a| lgamma(a)).collect();
+    let mut loglik = 0.0;
+    for d in doc_start..=doc_end {
+        loglik += lg_alpha_sum - lgamma(doc_len[d] + alpha_sum);
+        for (k, &a) in alpha.iter().enumerate() {
+            loglik += lgamma(ndk[d][k] as f64 + a) - lg_alpha[k];
+        }
+    }
+    loglik
+}
+
+/// Slice-sample every entry of one state's `alpha` vector in place, over the
+/// documents `[doc_start, doc_end]` that currently belong to the state. Keyword
+/// topics use the Gamma(`eta1`, `eta2`) prior, regular topics Gamma(`eta1_reg`,
+/// `eta2_reg`). Mirrors keyATM's `sample_alpha_state`.
+#[allow(clippy::too_many_arguments)]
+fn dyn_sample_alpha_state<R: Rng>(
+    alpha: &mut [f64],
+    num_keyword_topics: usize,
+    doc_start: usize,
+    doc_end: usize,
+    ndk: &[Vec<u32>],
+    doc_len: &[f64],
+    eta1: f64,
+    eta2: f64,
+    eta1_reg: f64,
+    eta2_reg: f64,
+    min_v: f64,
+    max_v: f64,
+    rng: &mut R,
+) {
+    const MAX_SHRINK_TIME: usize = 200;
+    let num_topics = alpha.len();
+    let order = shuffled_topic_ids(num_topics, rng);
+
+    for &k in &order {
+        let (shape, scale) = if k < num_keyword_topics {
+            (eta1, eta2)
+        } else {
+            (eta1_reg, eta2_reg)
+        };
+
+        let keep = alpha[k];
+        let store_loglik =
+            dyn_alpha_loglik(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale);
+
+        let mut start = min_v;
+        let mut end = max_v;
+        let previous_p = shrinkp(alpha[k]);
+        let slice_ = store_loglik - 2.0 * (1.0 - previous_p).ln() + rng.gen::<f64>().max(1e-300).ln();
+
+        for _ in 0..MAX_SHRINK_TIME {
+            let new_p = start + (end - start) * rng.gen::<f64>();
+            alpha[k] = new_p / (1.0 - new_p); // expandp
+            let new_loglik =
+                dyn_alpha_loglik(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale);
+            let new_likelihood = new_loglik - 2.0 * (1.0 - new_p).ln();
+
+            if slice_ < new_likelihood {
+                break;
+            } else if previous_p < new_p {
+                end = new_p;
+            } else if new_p < previous_p {
+                start = new_p;
+            } else {
+                alpha[k] = keep;
+                break;
+            }
+        }
+    }
+}
+
+/// Fisher–Yates shuffle of `0..n` using `rng` (deterministic for a fixed seed).
+fn shuffled_topic_ids<R: Rng>(n: usize, rng: &mut R) -> Vec<usize> {
+    let mut v: Vec<usize> = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = (rng.gen::<f64>() * (i as f64 + 1.0)) as usize % (i + 1);
+        v.swap(i, j);
+    }
+    v
+}
+
+/// Fit a keyATM **Dynamic** model: a Chib (1998) change-point HMM over time
+/// segments, each state carrying its own document-topic prior `alphas[r]`
+/// (Eshima, Imai & Sasaki 2024, Section 3.3).
+///
+/// `time_index` gives the 0-based time segment of each document. Documents must
+/// be sorted by time so segments are contiguous (validated). `num_states` is the
+/// number of latent regimes the prevalence path is allowed to occupy.
+///
+/// The token (z, s) sampler is identical to the base model; on top of it each
+/// sweep slice-samples the per-state `alphas`, then runs forward filtering /
+/// backward sampling (FFBS) of the state path and resamples the left-to-right
+/// transition matrix.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_keyatm_dynamic<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_topics: usize,
+    keywords: &[Vec<usize>],
+    time_index: &[usize],
+    num_states: usize,
+    beta: f64,
+    beta_key: f64,
+    gamma1: f64,
+    gamma2: f64,
+    eta1: f64,
+    eta2: f64,
+    eta1_reg: f64,
+    eta2_reg: f64,
+    iters: usize,
+    rng: &mut R,
+) -> KeyAtmModel {
+    assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
+    assert_eq!(time_index.len(), docs.len(), "time_index length must equal number of documents");
+    assert!(num_states >= 1, "num_states must be at least 1");
+
+    // Time segments must be contiguous and non-decreasing (docs sorted by time).
+    for w in time_index.windows(2) {
+        assert!(w[1] >= w[0], "documents must be sorted by time_index (non-decreasing)");
+    }
+    let num_time = time_index.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    assert!(num_time >= num_states, "num_time ({num_time}) must be >= num_states ({num_states})");
+
+    // Document index ranges for each time segment.
+    let mut time_doc_start = vec![0usize; num_time];
+    let mut time_doc_end = vec![0usize; num_time];
+    {
+        let mut prev: i64 = -1;
+        for (d, &t) in time_index.iter().enumerate() {
+            if t as i64 != prev {
+                time_doc_start[t] = d;
+                prev = t as i64;
+            }
+        }
+        for t in 0..num_time - 1 {
+            time_doc_end[t] = time_doc_start[t + 1] - 1;
+        }
+        time_doc_end[num_time - 1] = docs.len() - 1;
+    }
+
+    let doc_len: Vec<f64> = docs.iter().map(|d| d.len() as f64).collect();
+    let min_v = shrinkp(1e-9);
+    let max_v = shrinkp(100.0);
+
+    // α is replaced by the per-state HMM prior; pass a nominal 1.0 for the struct.
+    let (mut model, mut assignments, ki) = init_state(
+        docs, num_types, num_topics, keywords, 1.0, beta, beta_key, gamma1, gamma2, rng,
+    );
+    let num_keyword_topics = model.num_keyword_topics;
+
+    // --- Initialise HMM state ---
+    // Per-state α, keyATM's 50/K start.
+    let mut alphas = vec![vec![50.0 / num_topics as f64; num_topics]; num_states];
+
+    // State path: contiguous near-even split, so every state holds >= 1 segment.
+    let mut r_est = vec![0usize; num_time];
+    {
+        let base = num_time / num_states;
+        let rem = num_time % num_states;
+        let mut idx = 0;
+        for r in 0..num_states {
+            let cnt = base + usize::from(r < rem);
+            for _ in 0..cnt {
+                r_est[idx] = r;
+                idx += 1;
+            }
+        }
+    }
+
+    // Left-to-right transition matrix: diagonal Beta(1,1), super-diagonal the
+    // complement, last state absorbing.
+    let mut p_est = vec![vec![0.0f64; num_states]; num_states];
+    for r in 0..num_states - 1 {
+        let pii = sample_beta(1.0, 1.0, rng);
+        p_est[r][r] = pii;
+        p_est[r][r + 1] = 1.0 - pii;
+    }
+    p_est[num_states - 1][num_states - 1] = 1.0;
+
+    let mut r_count = vec![0usize; num_states];
+    for &r in &r_est {
+        r_count[r] += 1;
+    }
+
+    let mut prk = vec![vec![0.0f64; num_states]; num_time];
+
+    for _ in 0..iters {
+        // 1. Token (z, s) sweep with each doc's α tied to its segment's state.
+        let doc_alpha: Vec<Vec<f64>> = time_index
+            .iter()
+            .map(|&t| alphas[r_est[t]].clone())
+            .collect();
+        sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, rng);
+
+        // 2. Slice-sample each state's α over the documents it currently owns.
+        // States are contiguous in time, so walk the segment ranges in order.
+        let mut seg = 0usize;
+        for r in 0..num_states {
+            let seg_start = seg;
+            let seg_end = seg + r_count[r] - 1;
+            seg = seg_end + 1;
+            let d_start = time_doc_start[seg_start];
+            let d_end = time_doc_end[seg_end];
+            dyn_sample_alpha_state(
+                &mut alphas[r], num_keyword_topics, d_start, d_end, &model.ndk, &doc_len,
+                eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, rng,
+            );
+        }
+
+        // 3. Forward filter: Prk[t][r] = p(state_t = r | y_{1..t}).
+        for v in prk[0].iter_mut() {
+            *v = 0.0;
+        }
+        prk[0][0] = 1.0; // first segment is always state 0
+        for t in 1..num_time {
+            let logfy: Vec<f64> = (0..num_states)
+                .map(|r| dyn_polyapdfln(&alphas[r], time_doc_start[t], time_doc_end[t], &model.ndk, &doc_len))
+                .collect();
+            // rt_k[r] = Σ_j Prk[t-1][j] · P[j][r]
+            let rt_k: Vec<f64> = (0..num_states)
+                .map(|r| (0..num_states).map(|j| prk[t - 1][j] * p_est[j][r]).sum())
+                .collect();
+            // Normalise log(rt_k[r]) + logfy[r] over the non-zero entries.
+            let mut log_unnorm = vec![f64::NEG_INFINITY; num_states];
+            for r in 0..num_states {
+                if rt_k[r] > 0.0 {
+                    log_unnorm[r] = rt_k[r].ln() + logfy[r];
+                }
+            }
+            let m = log_unnorm.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let logsum = m + log_unnorm.iter().map(|&v| (v - m).exp()).sum::<f64>().ln();
+            for r in 0..num_states {
+                prk[t][r] = if rt_k[r] > 0.0 {
+                    (log_unnorm[r] - logsum).exp()
+                } else {
+                    0.0
+                };
+            }
+        }
+
+        // 4. Backward sample the state path; last segment is the final state.
+        for c in r_count.iter_mut() {
+            *c = 0;
+        }
+        r_est[num_time - 1] = num_states - 1;
+        r_count[num_states - 1] += 1;
+        for t in (0..num_time - 1).rev() {
+            let next = r_est[t + 1];
+            let probs: Vec<f64> = (0..num_states).map(|r| prk[t][r] * p_est[r][next]).collect();
+            let s = sample_index(&probs, rng);
+            r_est[t] = s;
+            r_count[s] += 1;
+        }
+
+        // 5. Resample the transition matrix from the new path.
+        for r in 0..num_states - 1 {
+            let pii = sample_beta(r_count[r] as f64, 2.0, rng);
+            p_est[r][r] = pii;
+            p_est[r][r + 1] = 1.0 - pii;
+        }
+    }
+
+    model.dynamic = Some(DynamicState {
+        num_states,
+        num_time,
+        time_index: time_index.to_vec(),
+        alphas,
+        r_est,
+        p_est,
+    });
     model
 }
 
@@ -747,6 +1207,80 @@ mod tests {
                 "doc_topic() row {dd} sums to {s:.12}, expected 1.0"
             );
         }
+    }
+
+    /// Dynamic model: a corpus whose topic mix changes halfway through time
+    /// should produce a monotone state path that flips at the change point, and
+    /// the per-state α should reflect the shift in prevalence.
+    #[test]
+    fn dynamic_recovers_change_point() {
+        // Vocab: block A = 0..6 (economic), block B = 6..12 (social).
+        // Keyword topic 0 -> A, topic 1 -> B.
+        let keywords: Vec<Vec<usize>> = vec![vec![0, 1, 2], vec![6, 7, 8]];
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        let mut time_index: Vec<usize> = Vec::new();
+        let num_time = 10usize;
+        for t in 0..num_time {
+            // First half mostly block A; second half mostly block B.
+            let b_heavy = t >= 5;
+            for d in 0..30usize {
+                let (heavy_off, light_off) = if b_heavy { (6, 0) } else { (0, 6) };
+                let mut doc: Vec<u32> = (0..6)
+                    .map(|i| (heavy_off + (i + d) % 6) as u32)
+                    .collect();
+                doc.push((light_off + d % 6) as u32);
+                docs.push(doc);
+                time_index.push(t);
+            }
+        }
+
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let model = fit_keyatm_dynamic(
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0,
+            2.0, 1.0, 300, &mut rng,
+        );
+
+        let dyn_ = model.dynamic.as_ref().expect("dynamic state present");
+        // State path is non-decreasing and visits both states.
+        for w in dyn_.r_est.windows(2) {
+            assert!(w[1] >= w[0], "state path must be non-decreasing");
+        }
+        assert_eq!(dyn_.r_est[0], 0);
+        assert_eq!(dyn_.r_est[num_time - 1], 1);
+
+        // Smoothed prevalence: social topic (1) should rise in the later state.
+        let tp = model.time_prevalence().unwrap();
+        let early = tp[0][1];
+        let late = tp[num_time - 1][1];
+        assert!(late - early > 0.3, "social prevalence should rise: {early} -> {late}");
+    }
+
+    /// Dynamic fits with the same seed must be identical.
+    #[test]
+    fn dynamic_deterministic_for_fixed_seed() {
+        let keywords: Vec<Vec<usize>> = vec![vec![0, 1], vec![6, 7]];
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        let mut time_index: Vec<usize> = Vec::new();
+        for t in 0..6usize {
+            for d in 0..15usize {
+                let off = if t >= 3 { 6 } else { 0 };
+                docs.push((0..5).map(|i| (off + (i + d) % 6) as u32).collect());
+                time_index.push(t);
+            }
+        }
+        let mut r1 = ChaCha8Rng::seed_from_u64(9);
+        let mut r2 = ChaCha8Rng::seed_from_u64(9);
+        let m1 = fit_keyatm_dynamic(
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, &mut r1,
+        );
+        let m2 = fit_keyatm_dynamic(
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, &mut r2,
+        );
+        assert_eq!(
+            m1.dynamic.as_ref().unwrap().r_est,
+            m2.dynamic.as_ref().unwrap().r_est
+        );
+        assert_eq!(m1.doc_topic(), m2.doc_topic());
     }
 
     /// Two fits with the same seed must be bit-for-bit identical.
