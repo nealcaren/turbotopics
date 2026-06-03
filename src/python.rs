@@ -132,7 +132,9 @@ struct SageState {
 struct CtmState {
     num_topics: usize, sigma_shrink: f64, seed: u64, init_spectral: bool, fitted: bool,
     beta: Option<Arr2>, theta: Option<Arr2>, corr: Option<Arr2>,
-    eta_mean: Option<Arr2>, eta_cov: Option<Arr3>, corpus: Option<corpus::Corpus>,
+    eta_mean: Option<Arr2>, eta_cov: Option<Arr3>,
+    #[serde(default)] mu: Vec<f64>, #[serde(default)] sigma: Vec<f64>,
+    corpus: Option<corpus::Corpus>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StmState {
@@ -140,6 +142,7 @@ struct StmState {
     beta: Option<Arr2>, theta: Option<Arr2>, corr: Option<Arr2>,
     eta_mean: Option<Arr2>, eta_cov: Option<Arr3>, gamma: Option<Arr2>,
     feature_names: Vec<String>, content_beta: Option<Vec<Vec<Vec<f64>>>>,
+    #[serde(default)] mu: Vec<f64>, #[serde(default)] sigma: Vec<f64>,
     group_names: Vec<String>, corpus: Option<corpus::Corpus>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1658,6 +1661,129 @@ fn infer_doc<R: Rng>(
     theta
 }
 
+/// Collapsed-Gibbs inference of a held-out document's topic proportions θ
+/// against a *fixed* normalized topic-word matrix `phi` (K rows, each a
+/// distribution over the vocabulary) and a Dirichlet prior `alpha` (length K).
+/// This is the model-agnostic counterpart to [`infer_doc`]: any Gibbs model
+/// that exposes a normalized topic-word matrix can reuse it for `transform`.
+fn infer_theta_gibbs<R: Rng>(
+    phi: &[Vec<f64>],
+    alpha: &[f64],
+    doc: &[usize],
+    iterations: usize,
+    burn_in: usize,
+    num_samples: usize,
+    sample_interval: usize,
+    rng: &mut R,
+) -> Vec<f64> {
+    let k = phi.len();
+    let alpha_sum: f64 = alpha.iter().sum();
+    let n = doc.len();
+    let mut theta = vec![0.0f64; k];
+    if n == 0 {
+        for t in 0..k {
+            theta[t] = alpha[t] / alpha_sum;
+        }
+        return theta;
+    }
+
+    // Per-token phi column (probability of this word under each topic).
+    let cols: Vec<Vec<f64>> = doc.iter().map(|&w| (0..k).map(|t| phi[t][w]).collect()).collect();
+
+    let mut local = vec![0u32; k];
+    let mut z = vec![0usize; n];
+    for i in 0..n {
+        let t = rng.gen_range(0..k);
+        z[i] = t;
+        local[t] += 1;
+    }
+
+    let mut weights = vec![0.0f64; k];
+    let mut samples_taken = 0usize;
+    for iter in 1..=iterations {
+        for i in 0..n {
+            let col = &cols[i];
+            local[z[i]] -= 1;
+            let mut total = 0.0;
+            for t in 0..k {
+                let v = (alpha[t] + local[t] as f64) * col[t];
+                weights[t] = v;
+                total += v;
+            }
+            let t_new = sample_categorical(&weights, total, rng);
+            z[i] = t_new;
+            local[t_new] += 1;
+        }
+        if iter > burn_in
+            && samples_taken < num_samples
+            && (iter - burn_in) % sample_interval.max(1) == 0
+        {
+            let denom = n as f64 + alpha_sum;
+            for t in 0..k {
+                theta[t] += (local[t] as f64 + alpha[t]) / denom;
+            }
+            samples_taken += 1;
+        }
+    }
+
+    if samples_taken == 0 {
+        let denom = n as f64 + alpha_sum;
+        for t in 0..k {
+            theta[t] = (local[t] as f64 + alpha[t]) / denom;
+        }
+    } else {
+        for t in theta.iter_mut() {
+            *t /= samples_taken as f64;
+        }
+    }
+    theta
+}
+
+/// Batch wrapper for [`infer_theta_gibbs`]: maps new docs to ids, runs the
+/// sampler per document (parallel, seeded deterministically per doc), and
+/// returns a ``(num_docs, K)`` array. `alpha` is the length-K prior.
+fn transform_gibbs<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    id_to_word: &[String],
+    phi: &Array2<f64>,
+    alpha: &[f64],
+    iterations: usize,
+    burn_in: usize,
+    num_samples: usize,
+    sample_interval: usize,
+    base_seed: u64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let docs = docs_to_ids(data, id_to_word)?;
+    let docs_usize: Vec<Vec<usize>> =
+        docs.iter().map(|d| d.iter().map(|&w| w as usize).collect()).collect();
+    let phi_rows: Vec<Vec<f64>> = phi.outer_iter().map(|r| r.to_vec()).collect();
+    let alpha_v = alpha.to_vec();
+    let k = phi_rows.len();
+
+    let rows: Vec<Vec<f64>> = py.allow_threads(|| {
+        docs_usize
+            .par_iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let mut rng = ChaCha8Rng::seed_from_u64(base_seed.wrapping_add(i as u64));
+                infer_theta_gibbs(
+                    &phi_rows, &alpha_v, d, iterations, burn_in, num_samples, sample_interval,
+                    &mut rng,
+                )
+            })
+            .collect()
+    });
+
+    let mut arr = Array2::<f64>::zeros((rows.len(), k));
+    for (i, row) in rows.iter().enumerate() {
+        for (t, &v) in row.iter().enumerate() {
+            arr[[i, t]] = v;
+        }
+    }
+    Ok(arr.to_pyarray_bound(py))
+}
+
 /// Jensen-Shannon divergence (base 2, in [0, 1]) between two distributions.
 fn js_divergence(p: &[f64], q: &[f64]) -> f64 {
     let mut d = 0.0;
@@ -2136,6 +2262,97 @@ impl DMR {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Infer topic proportions θ for *new* documents by collapsed Gibbs against
+    /// the fitted topic-word matrix. `data` is a :class:`Corpus` or
+    /// `list[list[str]]`; OOV tokens are dropped. `features` (optional, a
+    /// ``(num_docs, F)`` covariate array matching training, no intercept) sets
+    /// each document's Dirichlet prior `α_d = exp(Xγ)`; if omitted the
+    /// intercept-only baseline prior is used. Returns ``(num_docs, num_topics)``.
+    #[pyo3(signature = (data, features=None, *, iterations=100, burn_in=10,
+                        num_samples=10, sample_interval=5, seed=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        features: Option<PyReadonlyArray2<f64>>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let k = self.num_topics;
+        let eff = self.feature_effects.as_ref().unwrap(); // (K, F) incl. intercept at col 0
+        let nf = eff.shape()[1];
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let docs = docs_to_ids(data, id_to_word)?;
+        let docs_usize: Vec<Vec<usize>> =
+            docs.iter().map(|d| d.iter().map(|&w| w as usize).collect()).collect();
+        let phi_rows: Vec<Vec<f64>> =
+            self.phi.as_ref().unwrap().outer_iter().map(|r| r.to_vec()).collect();
+
+        // Per-document Dirichlet prior α_d = exp(Xγ); intercept is column 0.
+        let alphas: Vec<Vec<f64>> = match &features {
+            Some(x) => {
+                let x = x.as_array();
+                if x.shape()[0] != docs_usize.len() {
+                    return Err(PyValueError::new_err(
+                        "features rows must match number of documents",
+                    ));
+                }
+                if x.shape()[1] + 1 != nf {
+                    return Err(PyValueError::new_err(format!(
+                        "features must have {} columns (the {} training covariates, no intercept)",
+                        nf - 1,
+                        nf - 1
+                    )));
+                }
+                (0..docs_usize.len())
+                    .map(|d| {
+                        (0..k)
+                            .map(|t| {
+                                let mut s = eff[[t, 0]];
+                                for f in 1..nf {
+                                    s += eff[[t, f]] * x[[d, f - 1]];
+                                }
+                                s.exp()
+                            })
+                            .collect()
+                    })
+                    .collect()
+            }
+            None => {
+                let base: Vec<f64> = (0..k).map(|t| eff[[t, 0]].exp()).collect();
+                vec![base; docs_usize.len()]
+            }
+        };
+
+        let base_seed = seed.unwrap_or(self.seed);
+        let rows: Vec<Vec<f64>> = py.allow_threads(|| {
+            docs_usize
+                .par_iter()
+                .zip(alphas.par_iter())
+                .enumerate()
+                .map(|(i, (d, alpha))| {
+                    let mut rng = ChaCha8Rng::seed_from_u64(base_seed.wrapping_add(i as u64));
+                    infer_theta_gibbs(
+                        &phi_rows, alpha, d, iterations, burn_in, num_samples, sample_interval,
+                        &mut rng,
+                    )
+                })
+                .collect()
+        });
+        let mut arr = Array2::<f64>::zeros((rows.len(), k));
+        for (i, row) in rows.iter().enumerate() {
+            for (t, &v) in row.iter().enumerate() {
+                arr[[i, t]] = v;
+            }
+        }
+        Ok(arr.to_pyarray_bound(py))
+    }
+
     /// Save the fitted model to `path` (compact binary). Reload with `DMR.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -2468,6 +2685,32 @@ impl LabeledLDA {
         let tops = top_word_ids_phi(self.phi.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Infer label (topic) proportions θ for *new* documents by collapsed Gibbs
+    /// against the fitted topic-word matrix, treating every label as available
+    /// (unsupervised inference). `data` is a :class:`Corpus` or
+    /// `list[list[str]]`; OOV tokens are dropped. Returns ``(num_docs,
+    /// num_topics)``; columns align with :attr:`labels`.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let alpha = vec![self.alpha; self.num_topics];
+        transform_gibbs(
+            py, data, &self.corpus.as_ref().unwrap().id_to_word, self.phi.as_ref().unwrap(),
+            &alpha, iterations, burn_in, num_samples, sample_interval,
+            seed.unwrap_or(self.seed),
+        )
     }
 
     /// Save the fitted model to `path`. Reload with `LabeledLDA.load`.
@@ -2956,6 +3199,73 @@ impl SAGE {
 /// the means λ (D × K-1) and covariances ν (D × K-1 × K-1). These define the
 /// logistic-normal posterior `η_d ~ N(λ_d, ν_d)` used for sampling θ draws
 /// (method-of-composition uncertainty).
+/// Map new documents (a `Corpus` or `list[list[str]]`) onto the training
+/// vocabulary, dropping out-of-vocabulary tokens. Tokens are lowercased to
+/// match the corpus loader. Returns one `Vec<u32>` of word-ids per document.
+fn docs_to_ids(
+    data: &Bound<'_, PyAny>,
+    id_to_word: &[String],
+) -> PyResult<Vec<Vec<u32>>> {
+    let word_to_id: HashMap<&str, u32> = id_to_word
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.as_str(), i as u32))
+        .collect();
+    let str_docs: Vec<Vec<String>> = if let Ok(c) = data.extract::<Corpus>() {
+        c.inner
+            .docs
+            .iter()
+            .map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect())
+            .collect()
+    } else {
+        data.extract().map_err(|_| {
+            PyValueError::new_err("transform() expects a Corpus or a list of token lists")
+        })?
+    };
+    Ok(str_docs
+        .into_iter()
+        .map(|doc| {
+            doc.iter()
+                .filter_map(|t| word_to_id.get(t.to_lowercase().as_str()).copied())
+                .collect()
+        })
+        .collect())
+}
+
+/// Run the CTM/STM variational E-step inference for a batch of documents,
+/// returning their topic proportions θ as a ``(num_docs, K)`` array. Parallel
+/// over documents; the per-doc result is independent so order is preserved.
+fn infer_theta_batch(
+    py: Python<'_>,
+    beta: &[Vec<f64>],
+    mu: &[f64],
+    sigma: &[f64],
+    docs: &[Vec<u32>],
+) -> Array2<f64> {
+    let k = mu.len() + 1;
+    let km1 = mu.len();
+    let siginv = crate::linalg::spd_inverse(sigma, km1).unwrap_or_else(|| {
+        let mut s = sigma.to_vec();
+        crate::linalg::make_diagonally_dominant(&mut s, km1);
+        crate::linalg::spd_inverse(&s, km1).unwrap()
+    });
+    let rows: Vec<Vec<f64>> = py.allow_threads(|| {
+        docs.par_iter()
+            .map(|doc| {
+                let (words, counts) = ctm::doc_sparse(doc);
+                ctm::infer_theta(beta, mu, &siginv, &words, &counts)
+            })
+            .collect()
+    });
+    let mut out = Array2::<f64>::zeros((rows.len(), k));
+    for (d, row) in rows.iter().enumerate() {
+        for (t, &v) in row.iter().enumerate() {
+            out[[d, t]] = v;
+        }
+    }
+    out
+}
+
 fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
     let d = model.lambda.len();
     let km1 = model.num_topics.saturating_sub(1);
@@ -2990,6 +3300,8 @@ pub struct CTM {
     corr: Option<Array2<f64>>,  // (num_topics, num_topics)
     eta_mean: Option<Array2<f64>>, // (num_docs, num_topics-1) variational means λ
     eta_cov: Option<Array3<f64>>,  // (num_docs, K-1, K-1) variational covariances ν
+    mu: Vec<f64>,                  // K-1 logistic-normal prior mean (for inference)
+    sigma: Vec<f64>,               // (K-1)² logistic-normal prior covariance
     corpus: Option<corpus::Corpus>,
 }
 
@@ -3034,6 +3346,8 @@ impl CTM {
             corr: None,
             eta_mean: None,
             eta_cov: None,
+            mu: Vec::new(),
+            sigma: Vec::new(),
             corpus: None,
         })
     }
@@ -3095,6 +3409,8 @@ impl CTM {
         self.corr = Some(corr);
         self.eta_mean = Some(eta_mean);
         self.eta_cov = Some(eta_cov);
+        self.mu = model.mu.clone();
+        self.sigma = model.sigma.clone();
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -3200,6 +3516,23 @@ impl CTM {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Infer topic proportions θ for *new* documents by the variational E-step
+    /// against the fitted globals (β, logistic-normal prior μ, Σ). `data` is a
+    /// :class:`Corpus` or `list[list[str]]`; tokens outside the training
+    /// vocabulary are dropped. Returns a ``(num_docs, num_topics)`` array.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let docs = docs_to_ids(data, &self.corpus.as_ref().unwrap().id_to_word)?;
+        let beta = self.beta.as_ref().unwrap();
+        let beta_v: Vec<Vec<f64>> = beta.outer_iter().map(|r| r.to_vec()).collect();
+        let theta = infer_theta_batch(py, &beta_v, &self.mu, &self.sigma, &docs);
+        Ok(theta.to_pyarray_bound(py))
+    }
+
     /// Save the fitted model to `path`. Reload with `CTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -3208,6 +3541,7 @@ impl CTM {
             init_spectral: self.init_spectral, fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
             eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            mu: self.mu.clone(), sigma: self.sigma.clone(),
             corpus: self.corpus.clone(),
         })
     }
@@ -3220,7 +3554,8 @@ impl CTM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
             init_spectral: s.init_spectral, fitted: s.fitted,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
-            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov), corpus: s.corpus,
+            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            mu: s.mu, sigma: s.sigma, corpus: s.corpus,
         })
     }
 
@@ -3255,6 +3590,8 @@ pub struct STM {
     feature_names: Vec<String>,
     content_beta: Option<Vec<Vec<Vec<f64>>>>, // G×K×V; None if no content
     group_names: Vec<String>,
+    mu: Vec<f64>,    // K-1 logistic-normal prior mean (covariate-free baseline)
+    sigma: Vec<f64>, // (K-1)² logistic-normal prior covariance
     corpus: Option<corpus::Corpus>,
 }
 
@@ -3321,6 +3658,8 @@ impl STM {
             feature_names: Vec::new(),
             content_beta: None,
             group_names: Vec::new(),
+            mu: Vec::new(),
+            sigma: Vec::new(),
             corpus: None,
         })
     }
@@ -3497,6 +3836,8 @@ impl STM {
         self.feature_names = feat_names;
         self.content_beta = model.content_beta;
         self.group_names = group_vocab;
+        self.mu = model.mu.clone();
+        self.sigma = model.sigma.clone();
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -3693,6 +4034,29 @@ impl STM {
         Ok(Array1::from(scores).to_pyarray_bound(py))
     }
 
+    /// Infer topic proportions θ for *new* documents by the variational E-step
+    /// against the fitted globals (β and the logistic-normal prior). `data` is a
+    /// :class:`Corpus` or `list[list[str]]`; out-of-vocabulary tokens are
+    /// dropped. Returns a ``(num_docs, num_topics)`` array.
+    ///
+    /// Note: the prior mean used is the covariate-free baseline μ learned at fit
+    /// time (prevalence covariates for held-out docs are not applied here), and
+    /// for a content model the marginal topic-word β is used. This is the same
+    /// held-out inference stm's `fitNewDocuments` performs when no new covariate
+    /// design is supplied.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let docs = docs_to_ids(data, &self.corpus.as_ref().unwrap().id_to_word)?;
+        let beta = self.beta.as_ref().unwrap();
+        let beta_v: Vec<Vec<f64>> = beta.outer_iter().map(|r| r.to_vec()).collect();
+        let theta = infer_theta_batch(py, &beta_v, &self.mu, &self.sigma, &docs);
+        Ok(theta.to_pyarray_bound(py))
+    }
+
     /// Save the fitted model to `path`. Reload with `STM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -3702,7 +4066,9 @@ impl STM {
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
             eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
             gamma: arr2_opt(&self.gamma), feature_names: self.feature_names.clone(),
-            content_beta: self.content_beta.clone(), group_names: self.group_names.clone(),
+            content_beta: self.content_beta.clone(),
+            mu: self.mu.clone(), sigma: self.sigma.clone(),
+            group_names: self.group_names.clone(),
             corpus: self.corpus.clone(),
         })
     }
@@ -3717,7 +4083,9 @@ impl STM {
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
             gamma: arr2_back(s.gamma), feature_names: s.feature_names,
-            content_beta: s.content_beta, group_names: s.group_names, corpus: s.corpus,
+            content_beta: s.content_beta,
+            mu: s.mu, sigma: s.sigma,
+            group_names: s.group_names, corpus: s.corpus,
         })
     }
 
@@ -3973,6 +4341,33 @@ impl HDP {
         let tops = top_word_ids_phi(self.beta.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Infer topic proportions θ for *new* documents over the discovered topics,
+    /// by collapsed Gibbs against the fixed topic-word matrix. `data` is a
+    /// :class:`Corpus` or `list[list[str]]`; OOV tokens are dropped. The
+    /// document-level prior is symmetric with total mass equal to the learned
+    /// concentration α. Returns a ``(num_docs, num_topics)`` array.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let k = self.num_topics;
+        let alpha = vec![self.learned_alpha / k as f64; k];
+        transform_gibbs(
+            py, data, &self.corpus.as_ref().unwrap().id_to_word, self.beta.as_ref().unwrap(),
+            &alpha, iterations, burn_in, num_samples, sample_interval,
+            seed.unwrap_or(self.seed),
+        )
     }
 
     /// Save the fitted model to `path`. Reload with `HDP.load`.
@@ -4532,6 +4927,32 @@ impl SupervisedLDA {
         let tops = top_word_ids_phi(self.beta.as_ref().unwrap(), self.num_topics, n);
         let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
         Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// Infer topic proportions θ for *new* documents by collapsed Gibbs against
+    /// the fitted topic-word matrix (the response is not used — this is the
+    /// unsupervised E-step). `data` is a :class:`Corpus` or `list[list[str]]`;
+    /// OOV tokens are dropped. Returns ``(num_docs, num_topics)``. To predict the
+    /// response for new documents, take ``transform(data) @ eta``.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let alpha = vec![self.alpha; self.num_topics];
+        transform_gibbs(
+            py, data, &self.corpus.as_ref().unwrap().id_to_word, self.beta.as_ref().unwrap(),
+            &alpha, iterations, burn_in, num_samples, sample_interval,
+            seed.unwrap_or(self.seed),
+        )
     }
 
     /// Save the fitted model to `path`. Reload with `SupervisedLDA.load`.

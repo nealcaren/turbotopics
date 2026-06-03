@@ -79,6 +79,10 @@ Topic 0: cat(0.396)  dog(0.396)  fish(0.199)  planet(0.002)  star(0.002)
 Topic 1: planet(0.396)  star(0.199)  moon(0.199)  rocket(0.199)  cat(0.002)
 ```
 
+### A full worked example
+
+[**`examples/dubois_tutorial.ipynb`**](examples/dubois_tutorial.ipynb) is an end-to-end notebook that runs the whole library — preprocessing, phrase detection, LDA, STM (topic prevalence over time via the method of composition), DTM, HDP, and held-out `transform` — over a real corpus of 706 W.E.B. Du Bois articles from *The Crisis* (1910–1951), bundled as [`examples/dubois_crisis.csv`](examples/dubois_crisis.csv). It renders with outputs on GitHub; a script version is in [`examples/dubois_tutorial.py`](examples/dubois_tutorial.py).
+
 ---
 
 ## STM: Structural Topic Model (covariate-aware correlated topics)
@@ -933,7 +937,18 @@ dominant_topics = theta.argmax(axis=1)
 print(dominant_topics)       # e.g. [3, 7, 3, 12, ...]
 ```
 
-`transform()` accepts the same `data` types as `fit()`: a `list[list[str]]` or a `Corpus`. Out-of-vocabulary tokens are dropped silently; a document whose tokens are all OOV receives the prior θ (uniform-ish, sums to 1). Results are deterministic for a fixed `seed`.
+`transform()` accepts the same `data` types as `fit()`: a `list[list[str]]` or a `Corpus`. Out-of-vocabulary tokens are dropped silently; a document whose tokens are all OOV receives the prior θ (which, for models with a learned asymmetric prior such as DMR, need not be uniform). Results are deterministic for a fixed `seed`.
+
+**Held-out inference is available across the model families**, each using the same inference procedure it uses at fit time:
+
+| Model | Inference | Notes |
+|-------|-----------|-------|
+| `LDA`, `LabeledLDA`, `SupervisedLDA` | collapsed Gibbs against fixed φ | `LabeledLDA`/`SupervisedLDA` infer over all topics (labels/response unused) |
+| `HDP` | collapsed Gibbs over the discovered topics | symmetric prior with the learned concentration |
+| `DMR` | collapsed Gibbs with `α_d = exp(Xγ)` | pass held-out `features` to set the prior, else the intercept-only baseline is used |
+| `CTM`, `STM` | Laplace **variational** E-step against fixed β and the logistic-normal prior | reproduces the model's own training θ to ~1e-3; `STM` uses the covariate-free baseline μ |
+
+For `CTM`/`STM` the variational `transform` is the *same* inference R's `stm` runs in `fitNewDocuments`, so held-out θ is consistent with the fitted document-topic matrix rather than an approximation.
 
 ---
 

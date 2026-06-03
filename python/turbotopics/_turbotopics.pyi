@@ -177,6 +177,23 @@ class DMR:
         """UMass topic coherence per topic, shape (num_topics,)."""
         ...
 
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        features: numpy.typing.NDArray[numpy.float64] | None = None,
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs
+        against the fitted topic-word matrix. `features` (optional, no intercept)
+        sets each document's Dirichlet prior alpha_d = exp(Xgamma); if omitted
+        the intercept-only baseline is used. Shape (num_new_docs, num_topics)."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -233,6 +250,12 @@ class CTM:
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by the variational
+        E-step against the fitted globals. Shape (num_new_docs, num_topics)."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -325,6 +348,13 @@ class STM:
         ...
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by the variational
+        E-step against the fitted globals (covariate-free baseline prior).
+        Shape (num_new_docs, num_topics)."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -387,6 +417,20 @@ class HDP:
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer theta over the discovered topics for new documents by collapsed
+        Gibbs against the fixed topic-word matrix. Shape (num_new_docs,
+        num_topics)."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -509,6 +553,20 @@ class SupervisedLDA:
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs
+        against the fitted topic-word matrix (the response is not used). Shape
+        (num_new_docs, num_topics). Predict the response with transform @ eta."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -652,6 +710,21 @@ class LabeledLDA:
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]:
         """UMass topic coherence per topic, shape (num_topics,)."""
+        ...
+
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer label (topic) proportions theta for new documents by collapsed
+        Gibbs against the fitted topic-word matrix, treating every label as
+        available. Shape (num_new_docs, num_topics); columns align with labels."""
         ...
 
     def __repr__(self) -> str: ...

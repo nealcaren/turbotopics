@@ -423,7 +423,7 @@ impl CtmModel {
 /// Convert a token sequence to (unique word ids, counts). A BTreeMap keeps the
 /// word order deterministic (sorted), so float summation order — and thus the
 /// fitted model — is fully reproducible for a given seed.
-fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
+pub(crate) fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
     use std::collections::BTreeMap;
     let mut m: BTreeMap<usize, f64> = BTreeMap::new();
     for &w in doc {
@@ -432,6 +432,41 @@ fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
     let words: Vec<usize> = m.keys().copied().collect();
     let counts: Vec<f64> = words.iter().map(|w| m[w]).collect();
     (words, counts)
+}
+
+/// Infer the topic proportions θ (length K) for a *new* document by the
+/// variational E-step against fixed global parameters: the topic-word matrix
+/// `beta` (K×V), the prior mean `mu` (K-1), and the inverse prior covariance
+/// `siginv` ((K-1)²). This is the inference `transform` uses for held-out docs.
+pub fn infer_theta(
+    beta: &[Vec<f64>],
+    mu: &[f64],
+    siginv: &[f64],
+    words: &[usize],
+    counts: &[f64],
+) -> Vec<f64> {
+    let km1 = mu.len();
+    let k = km1 + 1;
+    if words.is_empty() {
+        return vec![1.0 / k as f64; k];
+    }
+    let opt = lbfgs_minimize(
+        vec![0.0; km1],
+        |eta| {
+            (
+                ctm_lhood(eta, beta, words, counts, mu, siginv),
+                ctm_grad(eta, beta, words, counts, mu, siginv),
+            )
+        },
+        40,
+        7,
+        1e-5,
+    );
+    // θ = softmax([η, 0]) (the last topic is the reference category).
+    let mut e: Vec<f64> = opt.iter().map(|&x| x.exp()).collect();
+    e.push(1.0);
+    let s: f64 = e.iter().sum();
+    e.iter().map(|&x| x / s).collect()
 }
 
 /// Ridge regression of the variational means Λ (D×(K-1)) on prevalence design
