@@ -141,6 +141,20 @@ class TestBootstrapStability:
         with pytest.raises(TypeError):
             tt.bootstrap_stability(corpus, k=2, n_boot=2)
 
+    def test_stable_across_changing_vocabulary(self):
+        # Each document carries its block's shared words plus a unique filler
+        # token, so every bootstrap resample produces a *different* vocabulary.
+        # Matching topics by word-index (the original bug) collapses to ~0 here;
+        # matching by word string keeps clearly-separated blocks stable.
+        rng = np.random.default_rng(0)
+        blocks = [["alpha", "bravo", "charlie"], ["xray", "yankee", "zulu"]]
+        docs = []
+        for i in range(120):
+            blk = blocks[i % 2]
+            docs.append(blk + [blk[int(rng.integers(3))], f"uniq_{i}"])
+        res = tt.bootstrap_stability(docs, k=2, n_boot=6, iterations=200, topn=3)
+        assert res["mean"] > 0.4          # two clean blocks must stay reproducible
+
 
 # ---------------------------------------------------------------------------
 # estimate_effect: clustered SEs and GLM links

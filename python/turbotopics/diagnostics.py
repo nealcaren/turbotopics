@@ -659,7 +659,6 @@ def bootstrap_stability(
     topn=10,
     seed=0,
     model_factory=None,
-    metric="cosine",
     **fit_kwargs,
 ):
     """Flag fragile topics by refitting on bootstrap resamples of the corpus.
@@ -667,9 +666,12 @@ def bootstrap_stability(
     The standard defense against "topic modeling is a fishing expedition": fit a
     reference model on the full corpus, then refit on `n_boot` resamples of the
     documents (drawn with replacement). Each bootstrap model's topics are matched
-    to the reference's, and a reference topic's **stability** is the mean Jaccard
-    overlap of its top-`topn` words with its matched bootstrap topic. Topics that
-    dissolve under resampling score low.
+    to the reference's by top-word overlap, and a reference topic's **stability**
+    is the mean Jaccard overlap of its top-`topn` words with its matched bootstrap
+    topic. Topics that dissolve under resampling score low.
+
+    Matching is on the top words as *strings*, so it is correct even though each
+    resample is fit as a fresh corpus with its own vocabulary indexing.
 
     Parameters
     ----------
@@ -695,11 +697,16 @@ def bootstrap_stability(
         raise ValueError("need at least two documents to resample")
     factory = model_factory or (lambda s: LDA(num_topics=k, seed=s))
 
+    def top_word_sets(model):
+        phi = _as_topic_word(model)
+        vocab = list(model.vocabulary)
+        return [set(vocab[i] for i in np.argsort(phi[t])[::-1][:topn])
+                for t in range(phi.shape[0])]
+
     ref = factory(seed)
     ref.fit(docs, **fit_kwargs)
-    ref_phi = _as_topic_word(ref)
-    K = ref_phi.shape[0]
-    ref_top = [set(np.argsort(ref_phi[t])[::-1][:topn]) for t in range(K)]
+    ref_sets = top_word_sets(ref)
+    K = len(ref_sets)
 
     rng = np.random.RandomState(seed)
     per_topic = [[] for _ in range(K)]
@@ -708,11 +715,17 @@ def bootstrap_stability(
         sample = [docs[i] for i in pick]
         m = factory(seed + b + 1)
         m.fit(sample, **fit_kwargs)
-        phi = _as_topic_word(m)
-        for i, j, _ in align_topics(ref_phi, phi, metric=metric):
-            other = set(np.argsort(phi[j])[::-1][:topn])
-            union = ref_top[i] | other
-            per_topic[i].append(len(ref_top[i] & other) / len(union) if union else 0.0)
+        boot_sets = top_word_sets(m)
+        # Match bootstrap topics to reference topics by top-word Jaccard, then
+        # record each reference topic's overlap with its match.
+        cost = np.empty((K, len(boot_sets)))
+        for i, rs in enumerate(ref_sets):
+            for j, bs in enumerate(boot_sets):
+                union = rs | bs
+                cost[i, j] = 1.0 - (len(rs & bs) / len(union) if union else 0.0)
+        for i, j in _hungarian(cost):
+            union = ref_sets[i] | boot_sets[j]
+            per_topic[i].append(len(ref_sets[i] & boot_sets[j]) / len(union) if union else 0.0)
 
     stability = np.array([float(np.mean(s)) if s else float("nan") for s in per_topic])
     return {
