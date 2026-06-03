@@ -245,12 +245,45 @@ def estimate_effect(
     dof = max(n - p, 1)
     z_crit = _normal_ppf(0.5 + ci / 2.0)  # normal-approx critical value (no scipy)
 
-    topic_list = range(num_topics) if topics is None else list(topics)
-    out: list[TopicEffect] = []
+    topic_list = list(range(num_topics)) if topics is None else list(topics)
     for t in topic_list:
         if t < 0 or t >= num_topics:
             raise ValueError(f"topic {t} out of range (num_topics={num_topics})")
-        if pooled:
+
+    # Fast path: plain OLS (identity link, no clustering) is just shared-hat
+    # matrix algebra, so solve for every requested topic — and every posterior
+    # draw — with a few batched matmuls instead of a Python loop per (topic, sim).
+    fast = link == "identity" and groups is None
+    if fast and pooled:
+        Yt = theta[:, :, topic_list]                          # (M, n, T)
+        B = np.einsum("pn,snt->spt", hat, Yt)                 # (M, p, T)
+        R = Yt - np.einsum("np,spt->snt", X, B)
+        ss = np.einsum("snt,snt->st", R, R)                   # (M, T)
+        within_scale = (ss / dof).mean(axis=0)                # (T,)
+        beta_mean = B.mean(axis=0)                            # (p, T)
+        tss = ((Yt - Yt.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)  # (M, T)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0).mean(axis=0)  # (T,)
+    elif fast:
+        Y = theta[:, topic_list]                              # (n, T)
+        B = hat @ Y                                           # (p, T)
+        R = Y - X @ B
+        ss = np.einsum("nt,nt->t", R, R)                      # (T,)
+        SE = np.sqrt(np.clip(np.diag(XtX_inv)[:, None] * (ss / dof)[None, :], 0.0, None))
+        tss = ((Y - Y.mean(axis=0)) ** 2).sum(axis=0)         # (T,)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0)
+
+    out: list[TopicEffect] = []
+    for i, t in enumerate(topic_list):
+        if fast and pooled:
+            # Rubin's rules: total var = within + (1 + 1/M) * between.
+            between = np.cov(B[:, :, i], rowvar=False) if nsims > 1 else np.zeros((p, p))
+            total = within_scale[i] * XtX_inv + (1.0 + 1.0 / nsims) * np.atleast_2d(between)
+            beta, se, r2 = beta_mean[:, i], np.sqrt(np.clip(np.diag(total), 0.0, None)), float(r2_all[i])
+        elif fast:
+            beta, se, r2 = B[:, i], SE[:, i], float(r2_all[i])
+        elif pooled:
             betas = np.empty((nsims, p))
             within = np.zeros((p, p))
             r2s = np.empty(nsims)
@@ -262,10 +295,8 @@ def estimate_effect(
                 r2s[m] = r2_m
             within /= nsims
             beta = betas.mean(axis=0)
-            # Rubin's rules: total var = within + (1 + 1/M) * between.
             between = np.cov(betas, rowvar=False) if nsims > 1 else np.zeros((p, p))
-            between = np.atleast_2d(between)
-            total = within + (1.0 + 1.0 / nsims) * between
+            total = within + (1.0 + 1.0 / nsims) * np.atleast_2d(between)
             se = np.sqrt(np.clip(np.diag(total), 0.0, None))
             r2 = float(r2s.mean())
         else:
@@ -305,22 +336,32 @@ def posterior_theta_samples(model, nsims=25, seed=0):
     d, km1 = lam.shape
     k = km1 + 1
     rng = np.random.default_rng(seed)
-    out = np.empty((nsims, d, k))
     eye = np.eye(km1)
-    for di in range(d):
-        c = 0.5 * (cov[di] + cov[di].T)  # symmetrize
-        try:
-            chol = np.linalg.cholesky(c + 1e-10 * eye)
-        except np.linalg.LinAlgError:
-            w, v = np.linalg.eigh(c)
-            chol = v @ np.diag(np.sqrt(np.clip(w, 1e-12, None)))
-        z = rng.standard_normal((nsims, km1))
-        eta = lam[di] + z @ chol.T                       # (nsims, K-1)
-        full = np.hstack([eta, np.zeros((nsims, 1))])    # reference category = 0
-        full -= full.max(axis=1, keepdims=True)
-        e = np.exp(full)
-        out[:, di, :] = e / e.sum(axis=1, keepdims=True)
-    return out
+
+    # Cholesky factors for every document at once. Cholesky is all-or-nothing on
+    # a batch, so only fall back to per-doc eigh for the docs that aren't PD —
+    # the common (all-PD) case stays a single batched LAPACK call.
+    csym = 0.5 * (cov + cov.transpose(0, 2, 1)) + 1e-10 * eye
+    try:
+        chol = np.linalg.cholesky(csym)                  # (D, K-1, K-1)
+    except np.linalg.LinAlgError:
+        chol = np.empty_like(csym)
+        for di in range(d):
+            try:
+                chol[di] = np.linalg.cholesky(csym[di])
+            except np.linalg.LinAlgError:
+                w, v = np.linalg.eigh(csym[di])
+                chol[di] = v @ np.diag(np.sqrt(np.clip(w, 1e-12, None)))
+
+    # Draw in document order (matches the old per-doc loop's RNG stream), then
+    # η = λ + Z·Lᵀ for all docs/sims via one batched matmul.
+    z = rng.standard_normal((d, nsims, km1))
+    eta = lam[:, None, :] + z @ chol.transpose(0, 2, 1)  # (D, nsims, K-1)
+    full = np.concatenate([eta, np.zeros((d, nsims, 1))], axis=2)  # ref cat = 0
+    full -= full.max(axis=2, keepdims=True)
+    e = np.exp(full)
+    theta = e / e.sum(axis=2, keepdims=True)             # (D, nsims, K)
+    return theta.transpose(1, 0, 2).copy()               # (nsims, D, K)
 
 
 def spline(x, df=4, knots=None):
