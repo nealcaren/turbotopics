@@ -1,3 +1,4 @@
+pub mod coherence;
 pub mod corpus;
 pub mod ctm;
 pub mod dmr;

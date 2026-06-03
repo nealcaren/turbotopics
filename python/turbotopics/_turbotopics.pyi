@@ -21,6 +21,21 @@ def tokenize(
     ...
 
 
+def window_cooccurrence(
+    docs: list[list[int]],
+    num_relevant: int,
+    pairs: list[tuple[int, int]],
+    window: int,
+) -> tuple[list[float], list[float], float]:
+    """Window/document co-occurrence counts for coherence scoring (internal).
+
+    docs holds relevant-word ids per token, 4294967295 marks a non-relevant
+    token; pairs are (a, b) with a < b; window=0 requests document-level
+    co-occurrence. Returns (occ, co, n_windows). Used by turbotopics.coherence.
+    """
+    ...
+
+
 class Corpus:
     """A preprocessed token corpus for LDA training."""
 

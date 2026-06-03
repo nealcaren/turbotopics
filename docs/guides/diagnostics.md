@@ -20,6 +20,17 @@ qf = tt.quality_frontier(model, n=10)                 # coherence, exclusivity, 
 # qf["coherence"], qf["exclusivity"] -> the canonical STM quality scatter
 ```
 
+!!! tip "Coherence is fast, even at large K"
+    `tt.coherence` runs its co-occurrence counting in the Rust core, scoring only
+    the word pairs that actually occur within a topic's top-N rather than a full
+    vocabulary×vocabulary matrix. `c_v` on a 500-topic model that took minutes in
+    a pure-Python loop now takes a fraction of a second. Two habits still help on
+    very large corpora: compute coherence **once** on the final model (never
+    inside a fit loop), and pass a **document sample** as `texts` — coherence is
+    an estimate, and a few thousand documents give the same ranking. `u_mass`
+    (document-level, no sliding window) remains the cheapest option for quick
+    `K`-selection sweeps.
+
 ## Labeling and interpretation
 
 ```python

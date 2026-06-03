@@ -40,7 +40,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{ctm, lightlda, optimize, output, sampler};
+use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -4207,6 +4207,24 @@ impl STM {
 // Module-level helpers
 // ---------------------------------------------------------------------------
 
+/// Window/document co-occurrence counts for coherence scoring.
+///
+/// `docs` holds relevant-word ids per token (`4294967295` marks a non-relevant
+/// token). `pairs` are `(a, b)` with `a < b`. `window == 0` requests
+/// document-level co-occurrence (one window per document, for UMass); a positive
+/// width slides a window one token at a time. Returns
+/// `(occ[num_relevant], co[len(pairs)], n_windows)`.
+#[pyfunction]
+fn window_cooccurrence(
+    py: Python<'_>,
+    docs: Vec<Vec<u32>>,
+    num_relevant: usize,
+    pairs: Vec<(u32, u32)>,
+    window: u32,
+) -> (Vec<f64>, Vec<f64>, f64) {
+    py.allow_threads(move || coh::cooccurrence(&docs, num_relevant, &pairs, window))
+}
+
 /// Tokenize a string the way the corpus loader does: find regex tokens,
 /// optionally lowercase, drop short tokens and stopwords. Handy for building
 /// `list[list[str]]` input outside of `Corpus.from_text_file`.
@@ -6245,6 +6263,7 @@ fn _turbotopics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;
     m.add_function(wrap_pyfunction!(tokenize, m)?)?;
+    m.add_function(wrap_pyfunction!(window_cooccurrence, m)?)?;
     m.add("DEFAULT_TOKEN_REGEX", corpus::DEFAULT_TOKEN_REGEX)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

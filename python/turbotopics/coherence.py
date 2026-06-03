@@ -219,6 +219,65 @@ def _score_cv(topic, vocab, p, co, nw, eps):
 
 
 # ---------------------------------------------------------------------------
+# Fast co-occurrence (Rust core) with a pure-Python fallback
+# ---------------------------------------------------------------------------
+
+_SENTINEL = (1 << 32) - 1  # marks a non-relevant token for the Rust core
+
+
+class _CoLookup:
+    """Pairwise co-occurrence backed by the Rust core's flat, pair-indexed
+    counts. Supports ``co[a, b]`` for any (a, b), returning 0 for pairs that
+    were never requested (the scorers only ask for within-topic pairs)."""
+
+    __slots__ = ("_d",)
+
+    def __init__(self, pairs, counts):
+        self._d = {pair: counts[i] for i, pair in enumerate(pairs)}
+
+    def __getitem__(self, key):
+        a, b = key
+        if a > b:
+            a, b = b, a
+        return self._d.get((a, b), 0.0)
+
+
+def _needed_pairs(tops, vocab):
+    """The set of within-topic word-id pairs (a < b) that any scorer will read."""
+    pairs = set()
+    for t in tops:
+        ids = [vocab[w] for w in t if w in vocab]
+        for x in range(len(ids)):
+            for y in range(x + 1, len(ids)):
+                a, b = ids[x], ids[y]
+                pairs.add((a, b) if a < b else (b, a))
+    return sorted(pairs)
+
+
+def _occurrences(texts, vocab, tops, window):
+    """Return (occ, co, n_windows) for the relevant words, using the Rust core
+    when available and falling back to the pure-Python scan otherwise. A
+    ``window`` of 0 requests document-level co-occurrence (UMass)."""
+    try:
+        from ._turbotopics import window_cooccurrence
+    except ImportError:
+        window_cooccurrence = None
+
+    if window_cooccurrence is not None:
+        pairs = _needed_pairs(tops, vocab)
+        docs_ids = [[vocab.get(w, _SENTINEL) for w in d] for d in texts]
+        occ, counts, nw = window_cooccurrence(docs_ids, len(vocab), pairs, int(window))
+        return np.asarray(occ), _CoLookup(pairs, counts), nw
+
+    # Fallback: dense R×R matrices.
+    if window == 0:
+        occ, co = _doc_occurrence(texts, vocab)
+        return occ, co, float(len(texts))
+    occ, co, nw = _window_occurrence(texts, vocab, window)
+    return occ, co, nw
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -252,11 +311,12 @@ def coherence(topics, texts, *, coherence_type="c_v", topn=10, window_size=None,
     vocab = {w: i for i, w in enumerate(relevant)}
 
     if ct == "u_mass":
-        occ, co = _doc_occurrence(texts, vocab)
+        # window=0 → document-level co-occurrence.
+        occ, co, _ = _occurrences(texts, vocab, tops, 0)
         return np.array([_score_umass(t, vocab, occ, co, epsilon) for t in tops])
 
     win = window_size if window_size is not None else _DEFAULT_WINDOW[ct]
-    occ, co, nw = _window_occurrence(texts, vocab, win)
+    occ, co, nw = _occurrences(texts, vocab, tops, int(win) if win else 0)
     if nw == 0:
         return np.full(len(tops), float("nan"))
     p = occ / nw
