@@ -279,6 +279,42 @@ class TestSTMContentGroupWording:
 
 
 # ---------------------------------------------------------------------------
+# TOPIC SEPARATION under content (regression for the symmetry-collapse bug)
+# ---------------------------------------------------------------------------
+# Before kappa_t was seeded from the per-topic random beta, supplying a content
+# covariate started every topic identical to the background (kappa all zero), a
+# symmetric fixed point: theta stayed exactly uniform and all K topics came out
+# identical. Group wording worked (kappa_c learned), which is why the existing
+# tests above passed. These guard that the topics actually separate.
+
+class TestSTMContentTopicSeparation:
+    """A content covariate must not collapse the K topics into one."""
+
+    def test_doc_topic_not_degenerate(self, bilingual_content_model):
+        th = bilingual_content_model.doc_topic
+        # Uniform-prior collapse showed up as zero variance across documents.
+        assert th.std(axis=0).min() > 0.05, "theta collapsed to the uniform prior"
+        assert (th.max(axis=1) > 0.6).mean() > 0.5, "no documents have a dominant topic"
+
+    def test_group_marginal_topics_differ(self, bilingual_content_model):
+        tw = bilingual_content_model.topic_word
+        cos = float(tw[0] @ tw[1] / (np.linalg.norm(tw[0]) * np.linalg.norm(tw[1])))
+        assert cos < 0.8, f"topics are nearly identical (cosine {cos:.3f})"
+
+    def test_topics_split_weather_vs_food(self, bilingual_content_model):
+        m = bilingual_content_model
+        gi_en = m.groups.index("en")
+        w_idx = [i for i, w in enumerate(m.vocabulary) if w in set(_EN_WEATHER)]
+        f_idx = [i for i, w in enumerate(m.vocabulary) if w in set(_EN_FOOD)]
+        leans = []
+        for t in range(2):
+            wm = m.topic_word_by_group[t, gi_en, w_idx].sum()
+            fm = m.topic_word_by_group[t, gi_en, f_idx].sum()
+            leans.append("weather" if wm > fm else "food")
+        assert set(leans) == {"weather", "food"}, f"both topics lean the same way: {leans}"
+
+
+# ---------------------------------------------------------------------------
 # Combined prevalence + content STM
 # ---------------------------------------------------------------------------
 

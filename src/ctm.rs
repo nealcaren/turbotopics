@@ -587,6 +587,19 @@ pub fn fit_ctm<R: Rng>(
         for v in 0..num_types {
             m_bg[v] = (freq[v] / total).ln();
         }
+        // Seed the topic deviations κ_t from the per-topic random β so topics
+        // start differentiated. With κ all zero, build_content_beta makes every
+        // topic identical to the background m — a symmetric fixed point the
+        // E-step cannot escape (θ stays uniform, so the soft counts never give
+        // κ_t any across-topic signal). Setting κ_t[k] = ln β_k − m makes the
+        // initial per-group β equal β_k for every group, breaking the
+        // across-topic symmetry while leaving the groups identical until κ_c
+        // learns them.
+        for t in 0..k {
+            for v in 0..num_types {
+                kappa_t[t][v] = beta[t][v].max(1e-12).ln() - m_bg[v];
+            }
+        }
         content_beta = build_content_beta(&m_bg, &kappa_t, &kappa_c, &kappa_i, k, num_groups, num_types);
     }
 
