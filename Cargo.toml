@@ -34,11 +34,14 @@ regex = "1"
 # (and the CLI binaries) never pull in pyo3/numpy.
 pyo3 = { version = "0.22", features = ["abi3-py39"], optional = true }
 numpy = { version = "0.22", optional = true }
-rayon = { version = "1", optional = true }
+# rayon parallelizes the variational E-step (ctm.rs) and the LDA sweep
+# (python.rs); kept non-optional so the parallel path compiles and is exercised
+# by the default `cargo test` build, not only under the `python` feature.
+rayon = "1"
 
 [features]
 # maturin enables this (see pyproject.toml -> [tool.maturin] features).
-python = ["dep:pyo3", "dep:numpy", "dep:rayon", "pyo3/extension-module"]
+python = ["dep:pyo3", "dep:numpy", "pyo3/extension-module"]
 
 # Whole-program optimization for the shipped wheels and CLI binaries.
 # lto + a single codegen unit let the optimizer inline across the sampler's

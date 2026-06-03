@@ -21,6 +21,7 @@
 use crate::dmr::lbfgs_minimize;
 use crate::optimize::digamma;
 use rand::Rng;
+use rayon::prelude::*;
 
 const INIT_VARIANCE_CONST: f64 = 1000.0;
 const OBS_NORM_CUTOFF: f64 = 2.0;
@@ -576,11 +577,22 @@ pub fn fit_dtm<R: Rng>(
         let topic_elp: Vec<Vec<Vec<f64>>> = chains.iter().map(|c| c.e_log_prob.clone()).collect();
         let mut sstats: Vec<Vec<Vec<f64>>> = vec![vec![vec![0.0; t]; v]; k];
         let mut doc_bound = 0.0;
-        for (d, bag) in bags.iter().enumerate() {
-            let ti = times[d];
-            let (_, phi, lhood) = fit_lda_post(bag, ti, &topic_elp, alpha, lda_max_iter);
-            doc_bound += lhood;
-            for (n, &(word, count)) in bag.iter().enumerate() {
+        // Per-document inference is independent; run it in parallel and fold the
+        // suff-stats in serially (document order) so the fit is bit-for-bit
+        // identical regardless of thread count.
+        let doc_results: Vec<(usize, Vec<Vec<f64>>, f64)> = bags
+            .par_iter()
+            .enumerate()
+            .map(|(d, bag)| {
+                let ti = times[d];
+                let (_, phi, lhood) = fit_lda_post(bag, ti, &topic_elp, alpha, lda_max_iter);
+                (d, phi, lhood)
+            })
+            .collect();
+        for (d, phi, lhood) in &doc_results {
+            let ti = times[*d];
+            doc_bound += *lhood;
+            for (n, &(word, count)) in bags[*d].iter().enumerate() {
                 for kk in 0..k {
                     sstats[kk][word][ti] += count * phi[n][kk];
                 }

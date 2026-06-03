@@ -17,6 +17,7 @@ use rand::Rng;
 
 use crate::dmr::lbfgs_minimize;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
+use rayon::prelude::*;
 
 /// `exp(η)` extended with a trailing 1 (the reference category), length K.
 fn expeta(eta: &[f64]) -> Vec<f64> {
@@ -587,31 +588,43 @@ pub fn fit_ctm<R: Rng>(
         let mut sigma_ss = vec![0.0f64; km1 * km1];
         let mut lambda_sum = vec![0.0f64; km1];
 
-        for (di, (words, counts)) in sparse.iter().enumerate() {
-            if words.is_empty() {
-                continue;
-            }
-            let mu_d = doc_mu(di, &gamma, &mu_shared);
-            // The E-step β is the document's group β (content) or the shared β.
-            let beta_doc: &[Vec<f64>] = match groups {
-                Some(g) => &content_beta[g[di]],
-                None => &beta,
-            };
-            let opt = lbfgs_minimize(
-                lambda[di].clone(),
-                |eta| {
-                    (
-                        ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
-                        ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
-                    )
-                },
-                40,
-                7,
-                1e-5,
-            );
-            let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
-            lambda[di] = opt.clone();
+        // E-step: per-document variational inference is independent across
+        // documents, so run it in parallel. Results are collected in document
+        // order and then accumulated serially, so the sufficient statistics are
+        // summed in the exact same order as the serial loop — the fit stays
+        // bit-for-bit deterministic regardless of thread count.
+        let doc_results: Vec<(usize, Vec<f64>, HpbResult)> = sparse
+            .par_iter()
+            .enumerate()
+            .filter(|(_, (words, _))| !words.is_empty())
+            .map(|(di, (words, counts))| {
+                let mu_d = doc_mu(di, &gamma, &mu_shared);
+                // The E-step β is the document's group β (content) or the shared β.
+                let beta_doc: &[Vec<f64>] = match groups {
+                    Some(g) => &content_beta[g[di]],
+                    None => &beta,
+                };
+                let opt = lbfgs_minimize(
+                    lambda[di].clone(),
+                    |eta| {
+                        (
+                            ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
+                            ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
+                        )
+                    },
+                    40,
+                    7,
+                    1e-5,
+                );
+                let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
+                (di, opt, res)
+            })
+            .collect();
 
+        for (di, opt, res) in &doc_results {
+            let di = *di;
+            let words = &sparse[di].0;
+            lambda[di] = opt.clone();
             match groups {
                 Some(g) => {
                     let grp = g[di];

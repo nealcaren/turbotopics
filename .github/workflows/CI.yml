@@ -49,16 +49,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Python build/test dependencies
-        run: pip install maturin numpy pytest
-
-      # Build the extension into the active virtualenv / site-packages.
-      # --features python gates the pyo3/numpy deps in Cargo.toml.
-      - name: Build extension (maturin develop)
-        run: maturin develop --features python
-
-      - name: Run tests
-        run: pytest -q
+      # `maturin develop` requires an active virtualenv, so create one and use
+      # it for the build + test. A single bash step keeps the venv activated
+      # across the build and test commands (activation does not persist between
+      # steps). `shell: bash` selects Git bash on Windows, so the same
+      # activation path logic works on all three platforms.
+      - name: Build extension and run tests
+        shell: bash
+        run: |
+          python -m venv .venv
+          if [ -f .venv/bin/activate ]; then source .venv/bin/activate; else source .venv/Scripts/activate; fi
+          python -m pip install --upgrade pip
+          pip install maturin numpy pytest
+          maturin develop --features python
+          pytest -q
 
   # ---------------------------------------------------------------------------
   # Job: build-wheels

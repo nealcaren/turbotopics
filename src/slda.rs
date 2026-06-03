@@ -19,6 +19,7 @@
 use crate::linalg::spd_inverse;
 use crate::optimize::digamma;
 use rand::Rng;
+use rayon::prelude::*;
 
 /// A fitted supervised-LDA model.
 pub struct SldaModel {
@@ -194,13 +195,24 @@ pub fn fit_slda<R: Rng>(
         let mut m_mat = vec![0.0f64; k * k]; // Σ_d E[z̄ z̄ᵀ]
         let mut b_vec = vec![0.0f64; k]; // Σ_d y_d E[z̄]
 
-        for (di, bag) in bags.iter().enumerate() {
-            if bag.is_empty() {
-                continue;
-            }
-            let (g, phi, sum_phi) =
-                infer_doc(bag, &log_beta, &eta, sigma2, alpha, Some(y[di]), var_iters);
-            gamma[di] = g;
+        // E-step: per-document inference is independent, so run it in parallel
+        // and accumulate the sufficient statistics serially in document order so
+        // the fit stays bit-for-bit identical regardless of thread count.
+        let doc_results: Vec<(usize, Vec<f64>, Vec<Vec<f64>>, Vec<f64>)> = bags
+            .par_iter()
+            .enumerate()
+            .filter(|(_, bag)| !bag.is_empty())
+            .map(|(di, bag)| {
+                let (g, phi, sum_phi) =
+                    infer_doc(bag, &log_beta, &eta, sigma2, alpha, Some(y[di]), var_iters);
+                (di, g, phi, sum_phi)
+            })
+            .collect();
+
+        for (di, g, phi, sum_phi) in &doc_results {
+            let di = *di;
+            let bag = &bags[di];
+            gamma[di] = g.clone();
 
             let n: f64 = bag.iter().map(|&(_, c)| c).sum();
             // β sufficient statistics.

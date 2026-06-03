@@ -12,7 +12,24 @@
 //! The dense V×V co-occurrence makes this best for moderate vocabularies (after
 //! pruning); callers fall back to random init when it is unavailable.
 
+use rand::Rng;
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
+
+/// Above this vocabulary size the dense V×V co-occurrence is replaced by a
+/// random projection to `PROJ_DIM` columns (Johnson-Lindenstrauss), turning the
+/// O(V²) anchor search into O(V·PROJ_DIM) — the same trick R's `stm` uses for
+/// large vocabularies. At or below it, the exact path runs (cheap and exact).
+/// The threshold sits well above `PROJ_DIM`: projecting only pays off once V is
+/// several times the target dimension (otherwise the projection overhead exceeds
+/// the savings), and it keeps the small/moderate-vocab behavior unchanged.
+const PROJ_THRESHOLD: usize = 3000;
+const PROJ_DIM: usize = 1024;
+/// Fixed seed for the projection so `spectral_init` stays a deterministic,
+/// seed-independent function of the corpus (the projection is an internal
+/// implementation detail, not a modeling choice).
+const PROJ_SEED: u64 = 0x5EED_C0FFEE;
 
 /// Build the row-normalized co-occurrence matrix `Q̄` (V×V) and the word
 /// marginals `p`. Returns `None` if the corpus is too small/degenerate.
@@ -187,14 +204,99 @@ fn recover(qbar: &[Vec<f64>], p: &[f64], anchors: &[usize], k: usize, v: usize) 
     beta
 }
 
+/// Build a random-projected row-normalized co-occurrence `Q̄·R` (V×M) and the
+/// word marginals `p`, without ever materializing the dense V×V matrix.
+///
+/// Because the per-document co-occurrence contribution to row `w` is
+/// `norm·c_w·(S_d − R[w])` where `S_d = Σ_{w'∈d} c_{w'} R[w']`, the projection
+/// `Q[w]·R` can be accumulated directly from each document's sparse word counts
+/// in O(unique_words·M) time. Projecting preserves inner products
+/// (Johnson-Lindenstrauss), so the anchor search and recovery — which use only
+/// dot products of `Q̄` rows — give an accurate approximation in M dimensions.
+fn cooccurrence_projected(
+    docs: &[Vec<u32>],
+    v: usize,
+    m: usize,
+) -> Option<(Vec<Vec<f64>>, Vec<f64>)> {
+    // Rademacher (±1/√M) projection matrix R (V×M), fixed-seed for determinism.
+    let mut rng = ChaCha8Rng::seed_from_u64(PROJ_SEED);
+    let scale = 1.0 / (m as f64).sqrt();
+    let r: Vec<Vec<f64>> = (0..v)
+        .map(|_| (0..m).map(|_| if rng.gen::<bool>() { scale } else { -scale }).collect())
+        .collect();
+
+    let mut qp = vec![vec![0.0f64; m]; v];
+    let mut p = vec![0.0f64; v];
+    let mut used_docs = 0usize;
+    for doc in docs {
+        let n = doc.len();
+        if n < 2 {
+            continue;
+        }
+        used_docs += 1;
+        let mut wc: HashMap<usize, f64> = HashMap::new();
+        for &w in doc {
+            *wc.entry(w as usize).or_insert(0.0) += 1.0;
+        }
+        let nf = n as f64;
+        let norm = 1.0 / (nf * (nf - 1.0));
+        // S_d = Σ_{w'∈doc} c_{w'} R[w'].
+        let mut s = vec![0.0f64; m];
+        for (&w, &c) in &wc {
+            for j in 0..m {
+                s[j] += c * r[w][j];
+            }
+        }
+        for (&w, &c) in &wc {
+            let coef = norm * c;
+            for j in 0..m {
+                qp[w][j] += coef * (s[j] - r[w][j]);
+            }
+            p[w] += c / nf; // row marginal (matches the exact path's p)
+        }
+    }
+    if used_docs == 0 {
+        return None;
+    }
+    let inv = 1.0 / used_docs as f64;
+    for row in &mut qp {
+        for x in row.iter_mut() {
+            *x *= inv;
+        }
+    }
+    for x in &mut p {
+        *x *= inv;
+    }
+    // Q̄·R = (Q·R) row-normalized by the marginal p (projection is linear, so
+    // proj(q[w]/p[w]) = (q[w]·R)/p[w]).
+    let mut qbar = qp;
+    for (w, row) in qbar.iter_mut().enumerate() {
+        if p[w] > 0.0 {
+            let pw = p[w];
+            for x in row.iter_mut() {
+                *x /= pw;
+            }
+        }
+    }
+    Some((qbar, p))
+}
+
 /// Deterministic anchor-word initialization of the K×V topic-word matrix.
 /// Returns `None` when it is not applicable (corpus too small, fewer candidate
 /// words than topics, or degenerate co-occurrence) so the caller can fall back.
+///
+/// For large vocabularies the dense V×V co-occurrence is replaced by a
+/// random-projected V×M one (see [`cooccurrence_projected`]); the downstream
+/// anchor search and recovery are dimension-agnostic and run unchanged.
 pub fn spectral_init(docs: &[Vec<u32>], k: usize, v: usize) -> Option<Vec<Vec<f64>>> {
     if v < k {
         return None;
     }
-    let (qbar, p) = cooccurrence(docs, v)?;
+    let (qbar, p) = if v > PROJ_THRESHOLD {
+        cooccurrence_projected(docs, v, PROJ_DIM)?
+    } else {
+        cooccurrence(docs, v)?
+    };
     // Require anchors to have at least a small marginal mass.
     let min_p = 0.0;
     let anchors = fast_anchor_words(&qbar, &p, k, min_p)?;
@@ -204,6 +306,43 @@ pub fn spectral_init(docs: &[Vec<u32>], k: usize, v: usize) -> Option<Vec<Vec<f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projected_recovers_planted_topics_large_vocab() {
+        // Vocabulary above PROJ_THRESHOLD so the random-projection path runs.
+        // Ten disjoint blocks of 400 words each (V = 4000 > 3000); each doc
+        // draws from one block. Spectral init should still put each topic's
+        // top words on a single block via the projected co-occurrence.
+        let nb = 10usize;
+        let bs = 400usize;
+        let v = nb * bs; // 4000
+        let blocks: Vec<Vec<u32>> = (0..nb).map(|b| (b * bs..b * bs + bs).map(|w| w as u32).collect()).collect();
+        let mut docs = Vec::new();
+        for i in 0..(nb * 200) {
+            let blk = &blocks[i % nb];
+            // 10-token docs from one block (spread across the block).
+            let doc: Vec<u32> = (0..10).map(|j| blk[(i * 7 + j * 37) % bs]).collect();
+            docs.push(doc);
+        }
+        let beta = spectral_init(&docs, nb, v).expect("projected spectral init");
+        // Each topic's top words should fall predominantly in one block.
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..nb {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| beta[t][b].partial_cmp(&beta[t][a]).unwrap());
+            let block_of = |w: usize| w / bs;
+            let top_block = block_of(idx[0]);
+            let same = idx[..10].iter().filter(|&&w| block_of(w) == top_block).count();
+            assert!(same >= 8, "topic {} top words not concentrated in one block ({}/10)", t, same);
+            covered.insert(top_block);
+        }
+        // Every topic is cleanly block-localized (asserted above); a strong
+        // majority of the blocks are distinctly recovered. (Perfect 1-topic-per-
+        // block separation isn't guaranteed at K=10 — greedy anchor selection can
+        // pick two anchors from one block — and that's true of the exact path too,
+        // so we don't demand it of the approximate projected path.)
+        assert!(covered.len() >= 7, "too few blocks separated: {:?}", covered);
+    }
 
     #[test]
     fn recovers_planted_topics() {

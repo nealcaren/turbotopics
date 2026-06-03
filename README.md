@@ -981,6 +981,14 @@ model.fit(documents, iterations=1000)
 
 **Tradeoff summary:** not bit-identical to the single-threaded / CLI path, but deterministic for a fixed `num_threads`+`seed`, and produces coherent topics suitable for downstream analysis.
 
+### Variational models parallelize automatically (and exactly)
+
+The variational-EM models — `CTM`, `STM`, `SupervisedLDA`, and `DTM` — parallelize their per-document E-step across all available cores with no configuration. Because each document's variational update is independent, the work fans out across a thread pool and the resulting sufficient statistics are then summed back in document order. Unlike the approximate LDA parallel sampler above, **this is exact: the fit is bit-for-bit identical regardless of how many threads run it.** Determinism for a fixed `seed` holds across machines and core counts.
+
+Control the thread count with the standard `RAYON_NUM_THREADS` environment variable (e.g. `RAYON_NUM_THREADS=1` to force single-threaded). The E-step is the dominant per-iteration cost, so on a multicore machine this is roughly a several-fold speedup; the exact factor is hardware- and corpus-dependent.
+
+For large vocabularies, the STM/CTM spectral (anchor-word) initialization also switches from the exact dense V×V co-occurrence to a random-projected approximation (Johnson-Lindenstrauss, the same approach R `stm` uses), which keeps the one-time init cost from growing quadratically in the vocabulary size. Small and moderate vocabularies use the exact path unchanged. Spectral init remains deterministic and seed-independent in both regimes.
+
 ---
 
 ## Model Evaluation & Diagnostics
