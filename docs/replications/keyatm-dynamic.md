@@ -77,6 +77,30 @@ Single-label classification accuracy is 0.43, about six times the 0.07 chance
 rate over 14 topics. (Private action has only three labeled opinions and carries
 no signal, so its AUROC is not meaningful.)
 
+## Direct comparison with R keyATM
+
+Matching the published tables is one bar. A stronger one is matching the
+reference software's own output. We fit R's `keyATM` and topica's `KeyATM` on the
+same documents with the same settings (14 topics, 5 states, 300 sweeps, seed
+2020, information-theory weighting), topica single-threaded so both run the exact
+sequential sampler, and compare directly. Because keywords pin each topic to a
+fixed label in both engines, topic *k* is the same topic in both, so we compare
+them position by position.
+
+The two are different samplers in different languages with different random
+number streams, so they cannot agree bit for bit. They agree to the level that
+matters:
+
+- **Topic word distributions.** Mean cosine 0.93 across the 14 topics (median
+  0.93, minimum 0.86). The estimated topics are the same.
+- **Classification.** Mean AUROC 0.82 in R and 0.82 in topica, with a mean
+  absolute per-topic difference of 0.017. The largest gap, 0.055, is on
+  Interstate relations, which has only 119 labeled opinions.
+
+This is what "topica reproduces keyATM" means in practice: hand both engines the
+same corpus and they return the same topics and the same classification
+performance.
+
 ## Time trend
 
 The HMM partitions 1946–2012 into regimes and recovers the expected movements in
@@ -96,7 +120,17 @@ than the fully smooth path some readers may expect.
 
 ## Speed
 
-On this corpus (22.4M weighted tokens, 14 topics, 5 states), per-sweep cost is
-8.4s single-threaded and 3.6s at 8 threads. R's `keyATM` runs the same fit at
-5.2s per sweep and has no multi-threading, so topica's threaded fit is the faster
-option on a multi-core machine. The full 1,000-sweep fit above took 38 minutes.
+Per-sweep cost on this corpus (22.4M weighted tokens, 14 topics, 5 states),
+measured at steady state:
+
+| Engine | s/sweep |
+|---|---:|
+| R `keyATM` (single-thread) | 1.8 |
+| topica (8 threads) | 2.3 |
+| topica (single-thread) | 5.0 |
+
+R is faster here. Its single-threaded C++ sampler is well-optimized, and topica's
+threading narrows the gap without closing it on the dynamic model. The cost
+center in topica is the per-state α slice-sampler, which is where the remaining
+single-thread gap lives. topica's contribution on this corpus is matching output,
+not faster fitting.
