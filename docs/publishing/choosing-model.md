@@ -14,11 +14,37 @@ data structure.
     - You need to track theme prevalence over time or across groups.
 
 !!! warning "Poor fit"
-    - **Confirmatory** questions with known categories → use a dictionary or a
-      supervised classifier.
+    - Purely **confirmatory** counting against a fixed code list, where you do not
+      need topics at all: a dictionary or supervised classifier is simpler. If you
+      want to *measure* pre-theorized concepts as topics, a guided model fits, and
+      the framing below explains where.
     - Very short documents (< ~50 words) → use a [short-text model](../guides/short-text.md),
       not standard LDA.
     - Highly technical or formulaic text, or a need for crisp category boundaries.
+
+## Start here: do you already know your topics?
+
+One question settles most of the choice. Do you know, from theory, the topics you
+are looking for, or are you trying to find out what is in the corpus?
+
+- **No. You want to discover what is there.** Impose as little structure as
+  possible and read what emerges. Use [`LDA`](../guides/models.md#lda), or
+  [`HDP`](../guides/models.md#hdp) if you would rather not fix the number of
+  topics in advance.
+- **Yes. You have concepts and want to measure them.** Name each topic with a few
+  seed words and let the model anchor a topic to them. This is the guided path,
+  [`KeyATM`](../guides/guided.md) or [`SeededLDA`](../guides/guided.md), and it
+  buys measurement validity and reproducibility a post-hoc reading of LDA topics
+  cannot. From there you can regress prevalence on covariates or model it over
+  time within the same family.
+- **Yes, and you also care how the same concept is worded differently across
+  groups.** Use [`STM`](../guides/models.md#stm) with a content covariate. Modeling
+  the topic-word distribution as a function of a group is the one thing the guided
+  models cannot do.
+
+Discovery and measurement are not a ranking. They answer different questions, and
+strong papers often run a guided model for the concepts they theorized and an
+unsupervised model as a robustness check on what they might have missed.
 
 ## Match the model to your question
 
@@ -31,8 +57,18 @@ data structure.
 | "How many themes are there?" | **`HDP`** | Infers `K` nonparametrically (a check on your `K`) |
 | "How does theme *vocabulary* drift over time?" | **`DTM`** | Topics evolve across ordered time slices |
 | "Do themes predict an outcome?" | **`SupervisedLDA`** / `DMR` | Response- or covariate-conditioned topics |
-| "I already know the themes I expect" | **`KeyATM`**, **`SeededLDA`** | Seed words steer named topics — better validity and reproducibility ([guided topics](../guides/guided.md)) |
+| "I already know the themes I expect" | **`KeyATM`**, **`SeededLDA`** | Seed words steer named topics for better validity and reproducibility ([guided topics](../guides/guided.md)) |
 | Tweets / survey answers / headlines | **`GSDMM`**, **`PT`** | Built for short, sparse documents |
+
+!!! tip "How far keyATM reaches, and where it stops"
+    Within measurement, [`KeyATM`](../guides/guided.md) is close to a complete
+    toolkit on its own: keyword-anchored topics, prevalence regression on
+    covariates, and a change-point model for time trends, all in one family
+    (validated against the R package in the [replication](../replications/keyatm-dynamic.md)).
+    Its boundary is its premise. Because it needs keywords, it does not discover
+    unknown topics, so reach for `LDA` or `HDP` there. And it models how *much*
+    each group discusses a topic, not *how* they word it, so reach for `STM` or
+    `SAGE` when content is the question.
 
 ## Why STM is the social-science default
 
