@@ -52,8 +52,6 @@
 //!            × (γ₁ + nk1[k]) / (γ₁+γ₂ + nk0[k]+nk1[k])
 //! ```
 
-use std::collections::HashMap;
-
 use rand::Rng;
 
 // ---------------------------------------------------------------------------
@@ -440,30 +438,35 @@ fn sample_beta<R: Rng>(a: f64, b: f64, rng: &mut R) -> f64 {
     }
 }
 
-/// Per-topic precomputed keyword lookup structures.
+/// Inverted keyword index: for each word, the keyword topics that claim it.
+///
+/// The hot path needs, per token, the s=1 candidates (the keyword topics for
+/// which the token's word is a keyword). Almost every word is a keyword of zero
+/// topics, so `by_word[w]` is usually empty and the inner loop does no work,
+/// instead of probing a per-topic hash map K times per token.
 struct KeywordIndex {
-    /// `is_keyword[k]` maps word-id → index in keywords[k] (None if not a keyword).
-    lookup: Vec<HashMap<usize, usize>>,
+    /// `by_word[w]` = `(topic, keyword_position)` for every keyword topic that
+    /// lists word `w`. Empty for non-keyword words.
+    by_word: Vec<Vec<(usize, usize)>>,
 }
 
 impl KeywordIndex {
-    fn build(keywords: &[Vec<usize>]) -> Self {
-        let lookup = keywords
-            .iter()
-            .map(|kws| {
-                kws.iter()
-                    .enumerate()
-                    .map(|(j, &w)| (w, j))
-                    .collect::<HashMap<usize, usize>>()
-            })
-            .collect();
-        KeywordIndex { lookup }
+    fn build(keywords: &[Vec<usize>], num_types: usize) -> Self {
+        let mut by_word = vec![Vec::new(); num_types];
+        for (k, kws) in keywords.iter().enumerate() {
+            for (j, &w) in kws.iter().enumerate() {
+                by_word[w].push((k, j));
+            }
+        }
+        KeywordIndex { by_word }
     }
 
-    /// Returns `Some(j)` if word `w` is the j-th keyword of topic `k`.
+    /// Returns `Some(j)` if word `w` is the j-th keyword of topic `k`. Used only
+    /// on the remove/re-add steps (once per token), so the short linear scan is
+    /// cheaper than the hash map it replaces.
     #[inline]
     fn keyword_index(&self, k: usize, w: usize) -> Option<usize> {
-        self.lookup[k].get(&w).copied()
+        self.by_word[w].iter().find(|&&(t, _)| t == k).map(|&(_, j)| j)
     }
 }
 
@@ -526,31 +529,31 @@ fn resample_token_inner<R: Rng>(
     let weights = &mut scratch[..2 * k];
     weights.fill(0.0);
 
+    // s=0 candidate for every topic (always allowed). No keyword lookup here.
     for kk in 0..k {
         let ndk_val = ndk_row[kk] + alpha_row[kk];
         let nkw_val = nkw[kk][w] + beta;
         let nk0_val = nk0[kk];
-        let nk1_val = nk1[kk];
-
-        // s=0 state (always allowed for every topic).
         let reg_likelihood = nkw_val / (v_beta + nk0_val);
         let switch_factor_s0 = if kk < num_kw {
+            let nk1_val = nk1[kk];
             (gamma2 + nk0_val) / (gamma1 + gamma2 + nk0_val + nk1_val)
         } else {
             1.0
         };
         weights[2 * kk] = ndk_val * reg_likelihood * switch_factor_s0;
+    }
 
-        // s=1 state: only if kk is a keyword topic AND w is in keywords[kk].
-        if kk < num_kw {
-            if let Some(j) = ki.keyword_index(kk, w) {
-                let lk = l[kk] as f64;
-                let key_likelihood = (nkx[kk][j] + beta_key) / (lk * beta_key + nk1_val);
-                let switch_factor_s1 =
-                    (gamma1 + nk1_val) / (gamma1 + gamma2 + nk0_val + nk1_val);
-                weights[2 * kk + 1] = ndk_val * key_likelihood * switch_factor_s1;
-            }
-        }
+    // s=1 candidates only for the keyword topics that actually list `w`
+    // (usually none, so this loop is empty for most tokens).
+    for &(kk, j) in &ki.by_word[w] {
+        let ndk_val = ndk_row[kk] + alpha_row[kk];
+        let nk0_val = nk0[kk];
+        let nk1_val = nk1[kk];
+        let lk = l[kk] as f64;
+        let key_likelihood = (nkx[kk][j] + beta_key) / (lk * beta_key + nk1_val);
+        let switch_factor_s1 = (gamma1 + nk1_val) / (gamma1 + gamma2 + nk0_val + nk1_val);
+        weights[2 * kk + 1] = ndk_val * key_likelihood * switch_factor_s1;
     }
 
     // --- Categorical sample ---
@@ -826,7 +829,7 @@ fn init_state<R: Rng>(
     let k = num_topics;
     let l: Vec<usize> = keywords.iter().map(|kws| kws.len()).collect();
     let num_keyword_topics = keywords.iter().filter(|kws| !kws.is_empty()).count();
-    let ki = KeywordIndex::build(keywords);
+    let ki = KeywordIndex::build(keywords, num_types);
     let vocab_weights = compute_vocab_weights(docs, v, weights);
 
     let mut word_keyword_topics: Vec<Vec<usize>> = vec![Vec::new(); v];
