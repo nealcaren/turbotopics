@@ -123,14 +123,15 @@ than the fully smooth path some readers may expect.
 Per-sweep cost on this corpus (22.4M weighted tokens, 14 topics, 5 states),
 measured at steady state:
 
-| Engine | s/sweep |
-|---|---:|
-| R `keyATM` (single-thread) | 1.8 |
-| topica (8 threads) | 2.3 |
-| topica (single-thread) | 5.0 |
+| Engine | s/sweep | vs R |
+|---|---:|---:|
+| R `keyATM` (single-thread) | 1.8 | 1.0× |
+| topica (single-thread) | 1.7 | 1.05× faster |
+| topica (8 threads) | 0.47 | **3.8× faster** |
 
-R is faster here. Its single-threaded C++ sampler is well-optimized, and topica's
-threading narrows the gap without closing it on the dynamic model. The cost
-center in topica is the per-state α slice-sampler, which is where the remaining
-single-thread gap lives. topica's contribution on this corpus is matching output,
-not faster fitting.
+topica matches R single-threaded and pulls ahead with threads. The single-thread
+parity came from one change: the sampler had been probing a per-topic hash map
+for every keyword topic on every token, hundreds of millions of lookups per
+sweep, which an inverted word-to-topic index removes without changing the sampled
+distribution. R's `keyATM` has no multi-threading, so the 8-thread column is the
+margin available on a multi-core machine.
