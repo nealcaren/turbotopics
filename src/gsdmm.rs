@@ -56,12 +56,40 @@ pub struct GsdmmModel {
     pub nw: Vec<Vec<u32>>,
     /// `z[d]` — final cluster assignment for each document.
     pub z: Vec<usize>,
+    /// Discovery/convergence trace, one entry per recorded sweep:
+    /// `(iteration, num_non_empty_clusters, per-token log-likelihood)`. The
+    /// cluster count collapsing to a stable value is the Movie Group Process's
+    /// headline convergence check.
+    pub trace: Vec<(usize, usize, f64)>,
 }
 
 impl GsdmmModel {
     /// Number of non-empty clusters after fitting (the "effective K").
     pub fn num_clusters(&self) -> usize {
         self.m.iter().filter(|&&c| c > 0).count()
+    }
+
+    /// Per-token log-likelihood of each document under its assigned cluster:
+    /// `(1/N) Σ_d Σ_{w∈d} log φ_{z_d, w}`, with
+    /// `φ_{k,w} = (nw[k][w]+β)/(n[k]+Vβ)`. Returns `NaN` for an empty corpus.
+    pub fn cluster_log_likelihood(&self, docs: &[Vec<u32>]) -> f64 {
+        let vbeta = self.num_types as f64 * self.beta;
+        let mut ll = 0.0f64;
+        let mut ntok = 0usize;
+        for (d, doc) in docs.iter().enumerate() {
+            let k = self.z[d];
+            let denom = self.n[k] as f64 + vbeta;
+            for &w in doc {
+                let p = (self.nw[k][w as usize] as f64 + self.beta) / denom;
+                ll += p.max(1e-300).ln();
+                ntok += 1;
+            }
+        }
+        if ntok == 0 {
+            f64::NAN
+        } else {
+            ll / ntok as f64
+        }
     }
 
     /// Indices of the non-empty clusters, in ascending order.
@@ -263,6 +291,7 @@ fn sweep<R: Rng>(model: &mut GsdmmModel, docs: &[Vec<u32>], rng: &mut R) {
 /// * `iters`     — number of full Gibbs sweeps
 /// * `rng`       — random-number source; determines all randomness (deterministic
 ///                 for a fixed seed)
+#[allow(clippy::too_many_arguments)]
 pub fn fit_gsdmm<R: Rng>(
     docs: &[Vec<u32>],
     num_types: usize,
@@ -270,6 +299,7 @@ pub fn fit_gsdmm<R: Rng>(
     alpha: f64,
     beta: f64,
     iters: usize,
+    report_interval: usize,
     rng: &mut R,
 ) -> GsdmmModel {
     let d_count = docs.len();
@@ -303,10 +333,15 @@ pub fn fit_gsdmm<R: Rng>(
         n,
         nw,
         z,
+        trace: Vec::new(),
     };
 
-    for _ in 0..iters {
+    for it in 0..iters {
         sweep(&mut model, docs, rng);
+        if report_interval > 0 && ((it + 1) % report_interval == 0 || it + 1 == iters) {
+            let ll = model.cluster_log_likelihood(docs);
+            model.trace.push((it + 1, model.num_clusters(), ll));
+        }
     }
 
     model
@@ -346,7 +381,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         // k_max=10, expect it to collapse toward 3 non-empty clusters.
-        let model = fit_gsdmm(&docs, v, 10, 0.1, 0.1, 200, &mut rng);
+        let model = fit_gsdmm(&docs, v, 10, 0.1, 0.1, 200, 0, &mut rng);
 
         let nc = model.num_clusters();
         // MGP may over- or under-cluster a bit; just assert it is in a sane range.
@@ -400,8 +435,8 @@ mod tests {
 
         let mut r1 = ChaCha8Rng::seed_from_u64(99);
         let mut r2 = ChaCha8Rng::seed_from_u64(99);
-        let m1 = fit_gsdmm(&docs, v, 8, 0.1, 0.1, 50, &mut r1);
-        let m2 = fit_gsdmm(&docs, v, 8, 0.1, 0.1, 50, &mut r2);
+        let m1 = fit_gsdmm(&docs, v, 8, 0.1, 0.1, 50, 0, &mut r1);
+        let m2 = fit_gsdmm(&docs, v, 8, 0.1, 0.1, 50, 0, &mut r2);
 
         assert_eq!(
             m1.doc_cluster(),
@@ -427,7 +462,7 @@ mod tests {
             .collect();
 
         let mut rng = ChaCha8Rng::seed_from_u64(1);
-        let model = fit_gsdmm(&docs, v, 6, 0.1, 0.1, 30, &mut rng);
+        let model = fit_gsdmm(&docs, v, 6, 0.1, 0.1, 30, 0, &mut rng);
 
         // doc_cluster() has length D.
         assert_eq!(

@@ -1096,9 +1096,28 @@ class GSDMM:
         beta: float = 0.1,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 30) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 30,
+        report_interval: int = 0,
+    ) -> None:
+        """Fit by the Movie Group Process. report_interval controls the
+        cluster-discovery trace (0 = auto ~50 points)."""
+        ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def cluster_count_history(self) -> list[tuple[int, int]]:
+        """Cluster-discovery trajectory: (iteration, num_clusters) pairs.
+        Watching the count collapse to a stable value is GSDMM's headline
+        convergence check."""
+        ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float]]:
+        """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property

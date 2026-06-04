@@ -189,6 +189,7 @@ struct GsdmmState {
     k_max: usize, alpha: f64, beta: f64, seed: u64, fitted: bool, num_used: usize,
     phi: Option<Arr2>, theta: Option<Arr2>, doc_cluster: Vec<usize>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] trace: Vec<(usize, usize, f64)>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SeededState {
@@ -5836,6 +5837,8 @@ pub struct GSDMM {
     theta: Option<Array2<f64>>,      // num_docs × num_used (soft assignment)
     doc_cluster: Vec<usize>,         // hard assignment per doc, remapped to 0..num_used
     corpus: Option<corpus::Corpus>,
+    // Discovery/convergence trace: (iteration, num_clusters, log-likelihood).
+    trace: Vec<(usize, usize, f64)>,
 }
 
 impl GSDMM {
@@ -5866,13 +5869,22 @@ impl GSDMM {
         Ok(GSDMM {
             k_max: num_topics, alpha, beta, seed,
             fitted: false, num_used: 0, phi: None, theta: None,
-            doc_cluster: Vec::new(), corpus: None,
+            doc_cluster: Vec::new(), corpus: None, trace: Vec::new(),
         })
     }
 
     /// Fit by the Movie Group Process (collapsed Gibbs) for `iters` sweeps.
-    #[pyo3(signature = (data, *, iters=30))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+    /// `report_interval` controls the cluster-discovery trace
+    /// (`cluster_count_history` / `log_likelihood_history`): 0 = auto (~50
+    /// points), a positive value records every that-many sweeps.
+    #[pyo3(signature = (data, *, iters=30, report_interval=0))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        iters: usize,
+        report_interval: usize,
+    ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -5887,8 +5899,9 @@ impl GSDMM {
         let num_types = corpus.num_types();
         let (k, a, b) = (self.k_max, self.alpha, self.beta);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
         let (model, corpus) = py.allow_threads(move || {
-            let m = gsdmm::fit_gsdmm(&corpus.docs, num_types, k, a, b, iters, &mut rng);
+            let m = gsdmm::fit_gsdmm(&corpus.docs, num_types, k, a, b, iters, ll_interval, &mut rng);
             (m, corpus)
         });
 
@@ -5921,6 +5934,7 @@ impl GSDMM {
         self.doc_cluster = model.doc_cluster().iter().map(|&c| remap[c]).collect();
         self.num_used = num_used;
         self.corpus = Some(corpus);
+        self.trace = model.trace.clone();
         self.fitted = true;
         Ok(())
     }
@@ -5930,6 +5944,25 @@ impl GSDMM {
     fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.phi.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// The cluster-discovery trajectory: ``(iteration, num_clusters)`` pairs over
+    /// the fit. The Movie Group Process starts from `num_topics` clusters and
+    /// empties most of them; watching the count collapse to a stable value is
+    /// its headline convergence check. Sampled every ``report_interval`` sweeps
+    /// (auto ≈ 50 points); empty if disabled.
+    #[getter]
+    fn cluster_count_history(&self) -> PyResult<Vec<(usize, usize)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, k, _)| (it, k)).collect())
+    }
+
+    /// The convergence trace: ``(iteration, per-token log-likelihood)`` pairs
+    /// (each document scored under its assigned cluster). Empty if disabled.
+    #[getter]
+    fn log_likelihood_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, _, ll)| (it, ll)).collect())
     }
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
     #[getter]
@@ -5981,6 +6014,7 @@ impl GSDMM {
             fitted: self.fitted, num_used: self.num_used,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             doc_cluster: self.doc_cluster.clone(), corpus: self.corpus.clone(),
+            trace: self.trace.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -5990,7 +6024,7 @@ impl GSDMM {
         Ok(GSDMM {
             k_max: s.k_max, alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
             num_used: s.num_used, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
-            doc_cluster: s.doc_cluster, corpus: s.corpus,
+            doc_cluster: s.doc_cluster, corpus: s.corpus, trace: s.trace,
         })
     }
 
