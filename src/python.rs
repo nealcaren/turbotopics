@@ -1088,6 +1088,51 @@ impl LDA {
         output::write_doc_topic_matrix(&theta_dt, corpus, Path::new(path)).map_err(io_err)
     }
 
+    /// Write the token-level Gibbs state to a gzipped file in MALLET's
+    /// ``--output-state`` format: a header, the ``#alpha``/``#beta`` hyperparameter
+    /// lines, then one row per token — ``doc source pos typeindex type topic`` —
+    /// giving the final topic assignment of every token in the training corpus.
+    /// Researchers pipe this into custom visualizations (e.g. pyLDAvis) or
+    /// corpus metrics. The file is gzip-compressed, as MALLET writes it.
+    fn save_state(&self, path: &str) -> PyResult<()> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        self.require_fitted()?;
+        let model = self.model.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("no token-level state available; refit the model")
+        })?;
+        let corpus = self.corpus.as_ref().unwrap();
+
+        let mut buf = String::new();
+        buf.push_str("#doc source pos typeindex type topic\n");
+        buf.push_str("#alpha : ");
+        buf.push_str(
+            &model.alpha.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(" "),
+        );
+        buf.push('\n');
+        buf.push_str(&format!("#beta : {}\n", model.beta));
+
+        for (d, doc) in corpus.docs.iter().enumerate() {
+            let source = match corpus.doc_names.get(d) {
+                Some(s) if !s.is_empty() => s.as_str(),
+                _ => "NA",
+            };
+            let z = &model.doc_topics[d];
+            for (pos, &w) in doc.iter().enumerate() {
+                let word = &corpus.id_to_word[w as usize];
+                buf.push_str(&format!("{} {} {} {} {} {}\n", d, source, pos, w, word, z[pos]));
+            }
+        }
+
+        let file = std::fs::File::create(path).map_err(io_err)?;
+        let mut enc = GzEncoder::new(file, Compression::default());
+        enc.write_all(buf.as_bytes()).map_err(io_err)?;
+        enc.finish().map_err(io_err)?;
+        Ok(())
+    }
+
     /// Held-out evaluation via the Wallach et al. (2009) left-to-right
     /// estimator (the method MALLET's ``evaluate-topics`` uses).
     ///

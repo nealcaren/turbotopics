@@ -982,6 +982,26 @@ class LDA:
         """Write doc-topic matrix to a TSV file (doc[, label], topic_0, ...)."""
         ...
 
+    def save_state(self, path: str) -> None:
+        """Write the token-level Gibbs state to a gzipped file in MALLET's
+        --output-state format: a header, #alpha/#beta lines, then one row per
+        token (doc source pos typeindex type topic) giving the final topic
+        assignment of every token in the training corpus. Use it to feed custom
+        visualizations (e.g. pyLDAvis) or corpus metrics."""
+        ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model (topic-word state, hyperparameters, and the
+        training corpus) to `path`. Reload with `LDA.load` to run `transform`
+        inference later without retraining (MALLET --output-model)."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "LDA":
+        """Load a model written by `save`, ready for `transform` inference on new
+        documents (MALLET --input-model / --inferencer-filename)."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
