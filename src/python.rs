@@ -131,6 +131,11 @@ struct SageState {
     beta: Vec<Vec<f64>>, theta: Option<Arr2>, group_names: Vec<String>,
     corpus: Option<corpus::Corpus>,
 }
+/// serde default for the bound of a model saved before convergence tracking
+/// existed: NaN signals "unknown", distinct from a real bound of 0.
+fn nan() -> f64 {
+    f64::NAN
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CtmState {
     num_topics: usize, sigma_shrink: f64, seed: u64, init_spectral: bool, fitted: bool,
@@ -138,6 +143,9 @@ struct CtmState {
     eta_mean: Option<Arr2>, eta_cov: Option<Arr3>,
     #[serde(default)] mu: Vec<f64>, #[serde(default)] sigma: Vec<f64>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default = "nan")] bound: f64,
+    #[serde(default)] bound_history: Vec<f64>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StmState {
@@ -147,6 +155,9 @@ struct StmState {
     feature_names: Vec<String>, content_beta: Option<Vec<Vec<Vec<f64>>>>,
     #[serde(default)] mu: Vec<f64>, #[serde(default)] sigma: Vec<f64>,
     group_names: Vec<String>, corpus: Option<corpus::Corpus>,
+    #[serde(default = "nan")] bound: f64,
+    #[serde(default)] bound_history: Vec<f64>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct HdpState {
@@ -188,6 +199,9 @@ struct KeyAtmState {
     num_topics: usize, alpha: f64, beta: f64, beta_keyword: f64, gamma1: f64, gamma2: f64,
     seed: u64, fitted: bool, topic_names: Vec<String>, keyword_rate: Vec<f64>,
     phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64, f64)>,
+    #[serde(default)] alpha_history: Vec<(usize, Vec<f64>)>,
+    #[serde(default)] pi_history: Vec<(usize, Vec<f64>)>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PaState {
@@ -3520,6 +3534,9 @@ pub struct CTM {
     mu: Vec<f64>,                  // K-1 logistic-normal prior mean (for inference)
     sigma: Vec<f64>,               // (K-1)² logistic-normal prior covariance
     corpus: Option<corpus::Corpus>,
+    bound: f64,                    // final variational bound (ELBO)
+    bound_history: Vec<f64>,       // bound after each EM iteration
+    converged: bool,               // hit em_tol (true) or em_iters cap (false)
 }
 
 impl CTM {
@@ -3566,13 +3583,25 @@ impl CTM {
             mu: Vec::new(),
             sigma: Vec::new(),
             corpus: None,
+            bound: f64::NAN,
+            bound_history: Vec::new(),
+            converged: false,
         })
     }
 
-    /// Fit by variational EM for `em_iters` iterations. `data` is a
-    /// :class:`Corpus` or `list[list[str]]`.
-    #[pyo3(signature = (data, *, em_iters=50))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, em_iters: usize) -> PyResult<()> {
+    /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`.
+    /// EM runs until the relative change in the variational bound drops below
+    /// `em_tol` (R `stm`'s `emtol`) or `em_iters` iterations are reached,
+    /// whichever comes first. Pass ``em_tol=0`` to always run `em_iters` steps.
+    /// Check :attr:`converged` and :attr:`bound` afterward.
+    #[pyo3(signature = (data, *, em_iters=500, em_tol=1e-5))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        em_iters: usize,
+        em_tol: f64,
+    ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -3593,7 +3622,8 @@ impl CTM {
 
         let (model, corpus) = py.allow_threads(move || {
             let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, em_iters, shrink, None, None, spectral, &mut rng,
+                &corpus.docs, k, num_types, em_iters, em_tol, shrink, None, None, spectral,
+                &mut rng,
             );
             (m, corpus)
         });
@@ -3629,6 +3659,9 @@ impl CTM {
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
         self.corpus = Some(corpus);
+        self.bound = model.bound;
+        self.bound_history = model.bound_history.clone();
+        self.converged = model.converged;
         self.fitted = true;
         Ok(())
     }
@@ -3638,6 +3671,30 @@ impl CTM {
     fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.beta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Final variational bound (approximate ELBO) at convergence — the quantity
+    /// R `stm` reports as `convergence$bound`.
+    #[getter]
+    fn bound(&self) -> PyResult<f64> {
+        self.require_fitted()?;
+        Ok(self.bound)
+    }
+
+    /// The variational bound after each EM iteration (the convergence
+    /// trajectory). Its length is the number of iterations actually run.
+    #[getter]
+    fn bound_history(&self) -> PyResult<Vec<f64>> {
+        self.require_fitted()?;
+        Ok(self.bound_history.clone())
+    }
+
+    /// ``True`` if EM stopped on the `em_tol` criterion; ``False`` if it hit the
+    /// `em_iters` cap first (the fit may not have converged).
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(self.converged)
     }
 
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
@@ -3760,6 +3817,8 @@ impl CTM {
             eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
             mu: self.mu.clone(), sigma: self.sigma.clone(),
             corpus: self.corpus.clone(),
+            bound: self.bound, bound_history: self.bound_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -3773,6 +3832,7 @@ impl CTM {
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
             mu: s.mu, sigma: s.sigma, corpus: s.corpus,
+            bound: s.bound, bound_history: s.bound_history, converged: s.converged,
         })
     }
 
@@ -3810,6 +3870,9 @@ pub struct STM {
     mu: Vec<f64>,    // K-1 logistic-normal prior mean (covariate-free baseline)
     sigma: Vec<f64>, // (K-1)² logistic-normal prior covariance
     corpus: Option<corpus::Corpus>,
+    bound: f64,                // final variational bound (ELBO)
+    bound_history: Vec<f64>,   // bound after each EM iteration
+    converged: bool,           // hit em_tol (true) or em_iters cap (false)
 }
 
 impl STM {
@@ -3878,6 +3941,9 @@ impl STM {
             mu: Vec::new(),
             sigma: Vec::new(),
             corpus: None,
+            bound: f64::NAN,
+            bound_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -3887,8 +3953,14 @@ impl STM {
     /// (optional, one group label per document) makes the topic-word
     /// distributions vary by group (the SAGE content model). At least one of
     /// `prevalence`/`content` should be given (else use :class:`CTM`).
+    ///
+    /// EM runs until the relative change in the variational bound drops below
+    /// `em_tol` (R `stm`'s `emtol`) or `em_iters` iterations are reached,
+    /// whichever comes first — matching `stm`'s convergence behavior rather than
+    /// a fixed iteration count. Pass ``em_tol=0`` to always run `em_iters`
+    /// steps. Inspect :attr:`converged` and :attr:`bound` after fitting.
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
-                        content=None, content_names=None, em_iters=50))]
+                        content=None, content_names=None, em_iters=500, em_tol=1e-5))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -3899,6 +3971,7 @@ impl STM {
         content: Option<&Bound<'_, PyAny>>,
         content_names: Option<Vec<String>>,
         em_iters: usize,
+        em_tol: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -4006,8 +4079,8 @@ impl STM {
             let prev_ref = prevalence_x.as_deref();
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
             let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, em_iters, shrink, prev_ref, cont_ref, spectral,
-                &mut rng,
+                &corpus.docs, k, num_types, em_iters, em_tol, shrink, prev_ref, cont_ref,
+                spectral, &mut rng,
             );
             (m, corpus)
         });
@@ -4056,6 +4129,9 @@ impl STM {
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
         self.corpus = Some(corpus);
+        self.bound = model.bound;
+        self.bound_history = model.bound_history.clone();
+        self.converged = model.converged;
         self.fitted = true;
         Ok(())
     }
@@ -4065,6 +4141,30 @@ impl STM {
     fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.beta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Final variational bound (approximate ELBO) at convergence — the quantity
+    /// R `stm` reports as `convergence$bound`.
+    #[getter]
+    fn bound(&self) -> PyResult<f64> {
+        self.require_fitted()?;
+        Ok(self.bound)
+    }
+
+    /// The variational bound after each EM iteration (the convergence
+    /// trajectory). Its length is the number of iterations actually run.
+    #[getter]
+    fn bound_history(&self) -> PyResult<Vec<f64>> {
+        self.require_fitted()?;
+        Ok(self.bound_history.clone())
+    }
+
+    /// ``True`` if EM stopped on the `em_tol` criterion; ``False`` if it hit the
+    /// `em_iters` cap first (the fit may not have converged).
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(self.converged)
     }
 
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
@@ -4287,6 +4387,8 @@ impl STM {
             mu: self.mu.clone(), sigma: self.sigma.clone(),
             group_names: self.group_names.clone(),
             corpus: self.corpus.clone(),
+            bound: self.bound, bound_history: self.bound_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -4303,6 +4405,7 @@ impl STM {
             content_beta: s.content_beta,
             mu: s.mu, sigma: s.sigma,
             group_names: s.group_names, corpus: s.corpus,
+            bound: s.bound, bound_history: s.bound_history, converged: s.converged,
         })
     }
 
@@ -5844,6 +5947,11 @@ pub struct KeyATM {
     time_prevalence: Option<Array2<f64>>,
     time_labels: Vec<String>,
     transition_matrix: Option<Array2<f64>>,
+    // Convergence trace: (iteration, log-likelihood, perplexity) — keyATM's model_fit.
+    log_likelihood_history: Vec<(usize, f64, f64)>,
+    // (iteration, alpha vector) and (iteration, pi vector) — plot_alpha / plot_pi.
+    alpha_history: Vec<(usize, Vec<f64>)>,
+    pi_history: Vec<(usize, Vec<f64>)>,
 }
 
 impl KeyATM {
@@ -5896,7 +6004,34 @@ impl KeyATM {
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
-            transition_matrix: None,
+            transition_matrix: None, log_likelihood_history: Vec::new(),
+            alpha_history: Vec::new(), pi_history: Vec::new(),
+        })
+    }
+
+    /// Weighted LDA — keyATM's ``weightedLDA``: a keyword-free model with no
+    /// keyword topics, so it is plain LDA fit with keyATM's token weighting and
+    /// estimated asymmetric α (collapsed Gibbs). Use it as the unsupervised
+    /// baseline next to a keyword-assisted :class:`KeyATM`. `fit` it the same
+    /// way (the `weights` argument controls the token weighting); the
+    /// keyword-specific outputs (``keyword_rate``, ``pi_history``) are empty.
+    #[staticmethod]
+    #[pyo3(signature = (num_topics, *, alpha=0.1, beta=0.01, seed=42))]
+    fn weighted_lda(num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics"));
+        }
+        if alpha <= 0.0 || beta <= 0.0 {
+            return Err(PyValueError::new_err("alpha and beta must be > 0"));
+        }
+        Ok(KeyATM {
+            key_names: Vec::new(), keywords: Vec::new(), num_topics, alpha, beta,
+            beta_keyword: 0.1, gamma1: 1.0, gamma2: 1.0, seed, fitted: false,
+            topic_names: Vec::new(), keyword_rate: Vec::new(), phi: None, theta: None,
+            corpus: None, feature_effects: None, feature_names: Vec::new(),
+            time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
+            transition_matrix: None, log_likelihood_history: Vec::new(),
+            alpha_history: Vec::new(), pi_history: Vec::new(),
         })
     }
 
@@ -5919,7 +6054,7 @@ impl KeyATM {
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
                         timestamps=None, num_states=5, weights="information-theory",
                         num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
-                        lbfgs_iters=20))]
+                        lbfgs_iters=20, report_interval=0))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5936,6 +6071,7 @@ impl KeyATM {
         burn_in: usize,
         prior_variance: f64,
         lbfgs_iters: usize,
+        report_interval: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -5964,6 +6100,13 @@ impl KeyATM {
                     "unknown weights={other:?}; expected 'information-theory', 'inv-freq', or 'none'"
                 )))
             }
+        };
+        // Convergence trace cadence (keyATM's model_fit). 0 = auto: ~50 evenly
+        // spaced points across the run.
+        let ll_interval = if report_interval == 0 {
+            (iters / 50).max(1)
+        } else {
+            report_interval
         };
 
         // --- Dynamic model: timestamps drive a change-point HMM on prevalence. ---
@@ -5994,7 +6137,7 @@ impl KeyATM {
                     &sorted_docs, num_types, num_topics, &keys, &sorted_time, num_states,
                     beta, beta_key, g1, g2,
                     1.0, 1.0, 2.0, 1.0, // keyATM α-prior defaults: eta_1, eta_2, eta_1_reg, eta_2_reg
-                    iters, weight_scheme, nthreads, &mut rng,
+                    iters, ll_interval, weight_scheme, nthreads, &mut rng,
                 )
             });
 
@@ -6012,6 +6155,9 @@ impl KeyATM {
                 self.time_state = d.r_est.clone();
                 self.transition_matrix = Some(vecs_to_arr2(&d.p_est));
             }
+            self.log_likelihood_history = model.log_likelihood_history.clone();
+            self.alpha_history = model.alpha_history.clone();
+            self.pi_history = model.pi_history.clone();
             self.time_labels = labels;
 
             let mut names = self.key_names.clone();
@@ -6070,11 +6216,11 @@ impl KeyATM {
                 Some(f) => keyatm::fit_keyatm_cov(
                     &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
-                    prior_variance, lbfgs_iters, weight_scheme, nthreads, &mut rng,
+                    prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads, &mut rng,
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, weight_scheme, nthreads, &mut rng,
+                    iters, ll_interval, weight_scheme, nthreads, &mut rng,
                 ),
             };
             (m, corpus)
@@ -6082,6 +6228,9 @@ impl KeyATM {
         self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
         self.keyword_rate = model.keyword_rate();
+        self.log_likelihood_history = model.log_likelihood_history.clone();
+        self.alpha_history = model.alpha_history.clone();
+        self.pi_history = model.pi_history.clone();
         if let Some(lam) = &model.lambda {
             self.feature_effects = Some(vecs_to_arr2(lam));
             self.feature_names = cov_names;
@@ -6168,6 +6317,38 @@ impl KeyATM {
         self.require_fitted()?;
         Ok(Array1::from(self.keyword_rate.clone()).to_pyarray_bound(py))
     }
+
+    /// Convergence trace as a list of ``(iteration, log_likelihood, perplexity)``
+    /// triples — the three columns of keyATM's ``model_fit`` (``plot_modelfit``).
+    /// ``log_likelihood`` is the collapsed marginal log-likelihood and
+    /// ``perplexity`` is ``exp(-log_likelihood / total_weighted_tokens)``, both on
+    /// R keyATM's scale. Sampled every ``report_interval`` sweeps during
+    /// :meth:`fit` (auto ≈ 50 points). Empty if tracing was disabled.
+    #[getter]
+    fn log_likelihood_history(&self) -> PyResult<Vec<(usize, f64, f64)>> {
+        self.require_fitted()?;
+        Ok(self.log_likelihood_history.clone())
+    }
+
+    /// Trace of the estimated document-topic prior α as ``(iteration, alpha)``
+    /// pairs, where ``alpha`` is the length-K asymmetric prior at that sweep —
+    /// keyATM's ``plot_alpha`` / ``values_iter$alpha_iter``. Base model only;
+    /// empty for the covariate model (which traces λ) and dynamic model.
+    #[getter]
+    fn alpha_history(&self) -> PyResult<Vec<(usize, Vec<f64>)>> {
+        self.require_fitted()?;
+        Ok(self.alpha_history.clone())
+    }
+
+    /// Trace of the per-topic keyword switch rate π as ``(iteration, pi)`` pairs
+    /// (``pi`` length K, 0 for regular topics) — keyATM's ``plot_pi`` /
+    /// ``values_iter$pi_iter``. Empty for a keyword-free model.
+    #[getter]
+    fn pi_history(&self) -> PyResult<Vec<(usize, Vec<f64>)>> {
+        self.require_fitted()?;
+        Ok(self.pi_history.clone())
+    }
+
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics
@@ -6209,6 +6390,9 @@ impl KeyATM {
             seed: self.seed, fitted: self.fitted, topic_names: self.topic_names.clone(),
             keyword_rate: self.keyword_rate.clone(), phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            alpha_history: self.alpha_history.clone(),
+            pi_history: self.pi_history.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -6222,7 +6406,8 @@ impl KeyATM {
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
-            transition_matrix: None,
+            transition_matrix: None, log_likelihood_history: s.log_likelihood_history,
+            alpha_history: s.alpha_history, pi_history: s.pi_history,
         })
     }
 

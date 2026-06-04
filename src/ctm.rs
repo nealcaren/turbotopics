@@ -232,6 +232,17 @@ pub struct CtmModel {
     /// then the group-averaged topic-word.
     pub content_beta: Option<Vec<Vec<Vec<f64>>>>,
     pub num_groups: usize,
+    /// Corpus approximate evidence bound (ELBO) at the final E-step — the same
+    /// quantity R `stm` reports as its convergence bound.
+    pub bound: f64,
+    /// Approximate bound after each EM iteration (the convergence trajectory,
+    /// one entry per iteration run).
+    pub bound_history: Vec<f64>,
+    /// `true` if EM stopped on the `em_tol` relative-bound criterion, `false`
+    /// if it hit the `em_iters` cap first.
+    pub converged: bool,
+    /// Number of EM iterations actually run (≤ `em_iters`).
+    pub em_iters_run: usize,
 }
 
 /// Build per-group topic-word β (G×K×V) from the SAGE content deviations:
@@ -525,12 +536,18 @@ fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
 /// `μ_d = X_d γ` — the STM prevalence model. `content` (optional, per-document
 /// group ids + group count) makes the topic-word distribution vary by group via
 /// the SAGE log-linear content model — the STM content covariate.
+///
+/// `em_iters` caps the number of EM iterations; EM stops early once the
+/// relative change in the corpus bound falls below `em_tol` (R `stm`'s `emtol`,
+/// default 1e-5). Pass `em_tol = 0.0` to disable early stopping and always run
+/// the full `em_iters`.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_ctm<R: Rng>(
     docs: &[Vec<u32>],
     num_topics: usize,
     num_types: usize,
     em_iters: usize,
+    em_tol: f64,
     sigma_shrink: f64,
     prevalence: Option<&[Vec<f64>]>,
     content: Option<(&[usize], usize)>,
@@ -622,7 +639,12 @@ pub fn fit_ctm<R: Rng>(
         }
     };
 
-    for _em in 0..em_iters {
+    let mut bound_history: Vec<f64> = Vec::with_capacity(em_iters);
+    let mut converged = false;
+    let mut em_iters_run = 0usize;
+
+    for em in 0..em_iters {
+        em_iters_run = em + 1;
         let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
             let mut s = sigma.clone();
             make_diagonally_dominant(&mut s, km1);
@@ -676,6 +698,12 @@ pub fn fit_ctm<R: Rng>(
             })
             .collect();
 
+        // Corpus bound for this E-step (sum of the per-document evidence bounds),
+        // computed with the parameters from the previous M-step — the quantity
+        // whose relative change drives convergence.
+        let total_bound: f64 = doc_results.iter().map(|(_, _, res)| res.bound).sum();
+        bound_history.push(total_bound);
+
         for (di, opt, res) in &doc_results {
             let di = *di;
             let words = &sparse[di].0;
@@ -703,6 +731,19 @@ pub fn fit_ctm<R: Rng>(
                 for j in 0..km1 {
                     sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
                 }
+            }
+        }
+
+        // Convergence: stop once the relative change in the corpus bound falls
+        // below `em_tol`. Break before the M-step, so the returned β/Σ/γ are the
+        // converged parameters that produced this bound, with λ/ν freshly
+        // refreshed by the E-step just run. `em_tol <= 0` disables early exit.
+        if em_tol > 0.0 && bound_history.len() >= 2 {
+            let prev = bound_history[bound_history.len() - 2];
+            let rel = (total_bound - prev).abs() / (prev.abs() + 1e-12);
+            if rel < em_tol {
+                converged = true;
+                break;
             }
         }
 
@@ -786,6 +827,10 @@ pub fn fit_ctm<R: Rng>(
         gamma,
         content_beta: content_out,
         num_groups,
+        bound: bound_history.last().copied().unwrap_or(f64::NAN),
+        bound_history,
+        converged,
+        em_iters_run,
     }
 }
 
@@ -842,7 +887,7 @@ mod tests {
                 docs.push(vec![6, 7, 8, 6, 7, 8, 6, 7, 8, 6]);
             }
         }
-        let model = fit_ctm(&docs, 3, 9, 25, 0.0, None, None, true, &mut rng);
+        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, &mut rng);
         let theta = model.doc_topics();
         // Sanity: θ rows sum to 1 and are valid.
         for row in &theta {
@@ -873,7 +918,7 @@ mod tests {
             }
         }
         // K=2 (CTM needs >=2 topics); content groups = 2.
-        let model = fit_ctm(&docs, 2, 4, 30, 0.0, None, Some((&groups, 2)), false, &mut rng);
+        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, &mut rng);
         let cb = model.content_beta.expect("content_beta present");
         // cb[group][topic][word]. The dominant topic for group 0 should favour
         // {0,1}; for group 1 {2,3}. Check that for each group some topic does.
@@ -885,5 +930,38 @@ mod tests {
             .fold(0.0f64, f64::max);
         assert!(g0_best > 0.8, "group 0 top topic mass on its words = {}", g0_best);
         assert!(g1_best > 0.8, "group 1 top topic mass on its words = {}", g1_best);
+    }
+
+    #[test]
+    fn em_bound_increases_and_converges() {
+        // Variational EM must ascend the bound; with a tolerance it should stop
+        // before the iteration cap, and `em_tol = 0` must run every iteration.
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        for i in 0..150 {
+            if i % 2 == 0 {
+                docs.push(vec![0, 1, 2, 0, 1, 2, 0, 1]);
+            } else {
+                docs.push(vec![3, 4, 5, 3, 4, 5, 3, 4]);
+            }
+        }
+
+        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, &mut rng);
+        // The bound trajectory is (weakly) monotone increasing.
+        let h = &converged.bound_history;
+        assert!(h.len() >= 2);
+        for w in h.windows(2) {
+            assert!(w[1] >= w[0] - 1e-6, "bound decreased: {} -> {}", w[0], w[1]);
+        }
+        assert!(converged.converged, "should meet em_tol before the 100-iter cap");
+        assert_eq!(converged.em_iters_run, h.len());
+        assert!(converged.bound.is_finite());
+
+        // em_tol = 0 disables early stopping: run the full cap.
+        let mut rng2 = ChaCha8Rng::seed_from_u64(7);
+        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, &mut rng2);
+        assert!(!capped.converged);
+        assert_eq!(capped.em_iters_run, 8);
+        assert_eq!(capped.bound_history.len(), 8);
     }
 }

@@ -89,6 +89,7 @@ def summary(model, topn=8):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
 from . import diagnostics  # noqa: E402
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
@@ -141,6 +142,7 @@ __all__ = [
     "tokenize",
     "one_hot",
     "stm",
+    "keyatm",
     "phrases",
     "coherence",
     "topic_diversity",

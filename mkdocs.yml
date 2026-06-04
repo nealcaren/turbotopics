@@ -108,4 +108,5 @@ nav:
       - Models: api/models.md
       - Diagnostics: api/diagnostics.md
       - STM toolkit: api/stm.md
+      - keyATM toolkit: api/keyatm.md
       - Keywords & preprocessing: api/keywords.md

@@ -244,10 +244,32 @@ class CTM:
         matching STM's default — seed is then irrelevant) or "random" (seeded)."""
         ...
 
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, em_iters: int = 50) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        em_iters: int = 500,
+        em_tol: float = 1e-5,
+    ) -> None:
+        """EM stops once the relative change in the variational bound falls below
+        em_tol or after em_iters iterations, whichever comes first. Pass em_tol=0
+        to always run em_iters steps. Check converged and bound afterward."""
+        ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float:
+        """Final variational bound (approximate ELBO) at convergence."""
+        ...
+    @property
+    def bound_history(self) -> list[float]:
+        """Variational bound after each EM iteration (length = iterations run)."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """True if EM met em_tol; False if it hit the em_iters cap."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -313,16 +335,35 @@ class STM:
         prevalence_names: list[str] | None = None,
         content: Sequence[str] | Sequence[int] | None = None,
         content_names: list[str] | None = None,
-        em_iters: int = 50,
+        em_iters: int = 500,
+        em_tol: float = 1e-5,
     ) -> None:
         """Fit. prevalence is (num_docs, F) covariates driving topic proportions
         (mu_d = X_d gamma; intercept prepended). content is one group label per
         document, making topic-word distributions vary by group (SAGE). At least
-        one of prevalence/content must be given."""
+        one of prevalence/content must be given.
+
+        EM stops once the relative change in the variational bound falls below
+        em_tol (R stm's emtol) or after em_iters iterations, whichever comes
+        first. Pass em_tol=0 to always run em_iters steps. Check converged and
+        bound afterward."""
         ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float:
+        """Final variational bound (approximate ELBO) at convergence — R stm's
+        convergence$bound."""
+        ...
+    @property
+    def bound_history(self) -> list[float]:
+        """Variational bound after each EM iteration (length = iterations run)."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """True if EM met em_tol; False if it hit the em_iters cap."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1169,6 +1210,18 @@ class KeyATM:
         gamma2: float = 1.0,
         seed: int = 42,
     ) -> None: ...
+    @staticmethod
+    def weighted_lda(
+        num_topics: int,
+        *,
+        alpha: float = 0.1,
+        beta: float = 0.01,
+        seed: int = 42,
+    ) -> "KeyATM":
+        """keyATM's weightedLDA: a keyword-free model (no keyword topics) — plain
+        LDA fit with keyATM's token weighting and estimated asymmetric alpha. Fit
+        it like a KeyATM; keyword outputs (keyword_rate, pi_history) are empty."""
+        ...
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -1184,6 +1237,7 @@ class KeyATM:
         burn_in: int = 200,
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
+        report_interval: int = 0,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -1199,10 +1253,35 @@ class KeyATM:
         `weights` is keyATM's token weighting: 'information-theory' (default,
         each token counts by its word's surprisal in bits), 'inv-freq', or
         'none' (unweighted). Weighting downweights frequent words and applies to
-        every variant (base, covariate, dynamic)."""
+        every variant (base, covariate, dynamic).
+
+        `report_interval` sets how often model_fit is recorded for
+        `log_likelihood_history` (keyATM's model_fit / plot_modelfit): 0
+        (default) records ~50 evenly spaced points across the run; a positive
+        value records every that-many sweeps."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float, float]]:
+        """Convergence trace: (iteration, log_likelihood, perplexity) triples —
+        the three columns of keyATM's model_fit / plot_modelfit. The
+        log-likelihood is the collapsed marginal and perplexity is
+        exp(-loglik / total_weighted_tokens), both on R keyATM's scale. Empty if
+        tracing was disabled."""
+        ...
+    @property
+    def alpha_history(self) -> list[tuple[int, list[float]]]:
+        """Trace of the estimated document-topic prior alpha: (iteration, alpha)
+        pairs (alpha length K) — keyATM's plot_alpha / values_iter$alpha_iter.
+        Base model only; empty for covariate (traces lambda) and dynamic."""
+        ...
+    @property
+    def pi_history(self) -> list[tuple[int, list[float]]]:
+        """Trace of the per-topic keyword switch rate pi: (iteration, pi) pairs
+        (pi length K, 0 for regular topics) — keyATM's plot_pi /
+        values_iter$pi_iter. Empty for a keyword-free model."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property

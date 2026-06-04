@@ -26,6 +26,7 @@ from ._topica import (
     __version__ as __version__,
 )
 from . import stm as stm
+from . import keyatm as keyatm
 
 def one_hot(
     values: Sequence[object],
