@@ -165,6 +165,7 @@ struct HdpState {
     alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool, fitted: bool,
     num_topics: usize, learned_alpha: f64, learned_gamma: f64,
     beta: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] trace: Vec<(usize, usize, f64, f64, f64)>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DtmState {
@@ -4758,6 +4759,8 @@ pub struct HDP {
     beta: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     corpus: Option<corpus::Corpus>,
+    // Discovery/convergence trace: (iteration, num_topics, log-likelihood, alpha, gamma).
+    trace: Vec<(usize, usize, f64, f64, f64)>,
 }
 
 impl HDP {
@@ -4798,13 +4801,20 @@ impl HDP {
             beta: None,
             theta: None,
             corpus: None,
+            trace: Vec::new(),
         })
     }
 
     /// Fit by Gibbs sampling for `iters` sweeps. `data` is a :class:`Corpus` or
     /// `list[list[str]]`. The inferred topic count is available as `num_topics`.
-    #[pyo3(signature = (data, *, iters=150))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+    #[pyo3(signature = (data, *, iters=150, report_interval=0))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        iters: usize,
+        report_interval: usize,
+    ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -4820,9 +4830,13 @@ impl HDP {
         let num_types = corpus.num_types();
         let (alpha, gamma, eta, conc) = (self.alpha, self.gamma, self.eta, self.resample_conc);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        // 0 = auto: ~50 evenly spaced trace points across the run.
+        let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
 
         let (model, corpus) = py.allow_threads(move || {
-            let m = hdp::fit_hdp(&corpus.docs, num_types, alpha, gamma, eta, iters, conc, &mut rng);
+            let m = hdp::fit_hdp(
+                &corpus.docs, num_types, alpha, gamma, eta, iters, conc, ll_interval, &mut rng,
+            );
             (m, corpus)
         });
 
@@ -4848,6 +4862,7 @@ impl HDP {
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corpus = Some(corpus);
+        self.trace = model.trace.clone();
         self.fitted = true;
         Ok(())
     }
@@ -4871,6 +4886,33 @@ impl HDP {
     fn num_topics(&self) -> PyResult<usize> {
         self.require_fitted()?;
         Ok(self.num_topics)
+    }
+
+    /// The topic-discovery trajectory: ``(iteration, num_topics)`` pairs sampled
+    /// during fit. Watching K stabilize is the nonparametric model's headline
+    /// convergence check (it grows and shrinks before settling). Sampled every
+    /// ``report_interval`` sweeps (auto ≈ 50 points); empty if disabled.
+    #[getter]
+    fn topic_count_history(&self) -> PyResult<Vec<(usize, usize)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, k, _, _, _)| (it, k)).collect())
+    }
+
+    /// The convergence trace: ``(iteration, per-token log-likelihood)`` pairs
+    /// sampled during fit. Empty if tracing was disabled.
+    #[getter]
+    fn log_likelihood_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, _, ll, _, _)| (it, ll)).collect())
+    }
+
+    /// The learned-concentration trace: ``(iteration, alpha, gamma)`` triples
+    /// sampled during fit (only informative when ``resample_conc=True``). Empty
+    /// if tracing was disabled.
+    #[getter]
+    fn concentration_history(&self) -> PyResult<Vec<(usize, f64, f64)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, _, _, a, g)| (it, a, g)).collect())
     }
 
     /// The fitted document-level concentration α0 (resampled if enabled).
@@ -4975,6 +5017,7 @@ impl HDP {
             resample_conc: self.resample_conc, fitted: self.fitted, num_topics: self.num_topics,
             learned_alpha: self.learned_alpha, learned_gamma: self.learned_gamma,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+            trace: self.trace.clone(),
         })
     }
 
@@ -4987,6 +5030,7 @@ impl HDP {
             resample_conc: s.resample_conc, fitted: s.fitted, num_topics: s.num_topics,
             learned_alpha: s.learned_alpha, learned_gamma: s.learned_gamma,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corpus: s.corpus,
+            trace: s.trace,
         })
     }
 

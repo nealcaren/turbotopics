@@ -275,6 +275,57 @@ def plot_search_k(rows, *, metrics=("coherence", "exclusivity"), ax=None):
     return ax
 
 
+def plot_topic_discovery(model, *, ax=None):
+    """Plot an HDP fit's topic-discovery trajectory: the inferred number of
+    topics K against the Gibbs iteration, with the per-token log-likelihood on a
+    twin axis. Watching K rise, fall, and settle (while the log-likelihood
+    plateaus) is the nonparametric model's headline convergence check — the
+    analog of reading a `search_k` curve, but learned in a single fit.
+
+    ``model`` is a fitted :class:`~topica.HDP` (its ``topic_count_history`` and
+    ``log_likelihood_history`` are read). Returns the primary matplotlib
+    ``Axes``. Requires matplotlib.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover - exercised via message
+        raise ImportError(
+            "plot_topic_discovery needs matplotlib (pip install matplotlib)."
+        ) from e
+
+    tch = list(model.topic_count_history)
+    llh = list(model.log_likelihood_history)
+    if not tch:
+        raise ValueError(
+            "no discovery trace recorded; fit with report_interval > 0 "
+            "(or the default auto cadence)"
+        )
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 4))
+    iters = [it for it, _ in tch]
+    ks = [k for _, k in tch]
+    (line_k,) = ax.plot(iters, ks, color="C0", marker="o", ms=3, label="topics (K)")
+    ax.set_xlabel("Gibbs iteration")
+    ax.set_ylabel("number of topics (K)", color="C0")
+    ax.tick_params(axis="y", labelcolor="C0")
+
+    lines = [line_k]
+    if llh:
+        a2 = ax.twinx()
+        (line_ll,) = a2.plot(
+            [it for it, _ in llh], [ll for _, ll in llh],
+            color="C1", marker="s", ms=2, label="log-likelihood",
+        )
+        a2.set_ylabel("per-token log-likelihood", color="C1")
+        a2.tick_params(axis="y", labelcolor="C1")
+        lines.append(line_ll)
+
+    ax.legend(lines, [li.get_label() for li in lines], loc="best")
+    ax.figure.tight_layout()
+    return ax
+
+
 def _mean_exclusivity(topic_word, n: int) -> float:
     from .coherence import exclusivity
     return float(np.mean(exclusivity(topic_word, n=n)))

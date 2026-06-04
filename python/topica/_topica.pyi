@@ -448,13 +448,38 @@ class HDP:
         eta must be > 0."""
         ...
 
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 150) -> None:
-        """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`."""
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 150,
+        report_interval: int = 0,
+    ) -> None:
+        """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`.
+
+        report_interval controls the discovery/convergence trace
+        (topic_count_history / log_likelihood_history / concentration_history):
+        0 (default) records ~50 evenly spaced points; a positive value records
+        every that-many sweeps."""
         ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
         """Topic-word matrix, shape (num_topics, num_words); rows sum to 1."""
+        ...
+    @property
+    def topic_count_history(self) -> list[tuple[int, int]]:
+        """Topic-discovery trajectory: (iteration, num_topics) pairs over the
+        fit. Watching K stabilize is HDP's headline convergence check."""
+        ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float]]:
+        """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
+    @property
+    def concentration_history(self) -> list[tuple[int, float, float]]:
+        """Learned-concentration trace: (iteration, alpha, gamma) triples
+        (informative when resample_conc=True)."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
