@@ -822,8 +822,14 @@ class LDA:
         num_threads: int = 1,
         sampler: str = "sparse",
         mh_steps: int = 2,
+        use_symmetric_alpha: bool = False,
     ) -> None:
         """Create an LDA model. alpha_sum defaults to num_topics if None.
+
+        use_symmetric_alpha mirrors MALLET's --use-symmetric-alpha: when True,
+        hyperparameter optimization learns only the alpha concentration and
+        keeps every per-topic alpha equal, instead of learning an asymmetric
+        per-topic prior (the default, MALLET's Wallach optimization).
 
         num_threads > 1 enables MALLET-style approximate parallel Gibbs
         sampling in fit() (faster on multicore; results differ from the exact
@@ -940,7 +946,8 @@ class LDA:
         """Per-topic diagnostics (MALLET-style), one dict per topic.
 
         Keys: topic, tokens, coherence, exclusivity, effective_words,
-        rank1_docs, alpha, top_words. Suitable for pandas.DataFrame(...).
+        document_entropy, uniform_dist, corpus_dist, rank1_docs, alpha,
+        top_words. Suitable for pandas.DataFrame(...).
         """
         ...
 
@@ -988,6 +995,16 @@ class LDA:
         token (doc source pos typeindex type topic) giving the final topic
         assignment of every token in the training corpus. Use it to feed custom
         visualizations (e.g. pyLDAvis) or corpus metrics."""
+        ...
+
+    @staticmethod
+    def load_state(path: str) -> "LDA":
+        """Reconstruct a fitted LDA from a MALLET-format Gibbs state file (the
+        inverse of save_state; MALLET --input-state). The file may be gzipped or
+        plain text. Vocabulary, documents, per-token topic assignments, and the
+        #alpha/#beta hyperparameters are restored, so the model supports the
+        read-only surface (topic_word, doc_topic, top_words, ...) and transform
+        on new documents."""
         ...
 
     def save(self, path: str) -> None:

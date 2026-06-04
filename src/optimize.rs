@@ -123,6 +123,40 @@ pub fn optimize_alpha(model: &mut TopicModel, corpus: &Corpus) {
     model.alpha_sum = new_alpha_sum;
 }
 
+/// Optimise a *symmetric* document-topic prior: one Minka step on the shared
+/// alpha concentration, keeping every `alpha[t]` equal. This is MALLET's
+/// `--use-symmetric-alpha true` path — only the total alpha_sum is learned, not
+/// the per-topic shape (which `optimize_alpha` learns).
+pub fn optimize_alpha_symmetric(model: &mut TopicModel, corpus: &Corpus) {
+    let max_len = corpus.docs.iter().map(|d| d.len()).max().unwrap_or(0);
+    let mut doc_length_hist = vec![0u32; max_len + 1];
+    // Aggregated over all topics: number of (topic, doc) pairs with count c.
+    let mut count_hist = vec![0u32; max_len + 1];
+    let mut counts = vec![0u32; model.num_topics];
+
+    for doc_idx in 0..corpus.num_docs() {
+        doc_length_hist[corpus.docs[doc_idx].len()] += 1;
+        for &t in &model.doc_topics[doc_idx] {
+            counts[t as usize] += 1;
+        }
+        for c in counts.iter_mut() {
+            if *c > 0 {
+                count_hist[*c as usize] += 1;
+                *c = 0;
+            }
+        }
+    }
+
+    let new_sum = update_symmetric_concentration(
+        &count_hist, &doc_length_hist, model.num_topics, model.alpha_sum,
+    );
+    model.alpha_sum = new_sum;
+    let per_topic = new_sum / model.num_topics as f64;
+    for a in model.alpha.iter_mut() {
+        *a = per_topic;
+    }
+}
+
 /// Optimise the symmetric beta (topic-word prior) using one Minka step.
 ///
 /// Sufficient statistics:

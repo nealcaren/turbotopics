@@ -110,6 +110,7 @@ struct LdaState {
     burn_in: usize, seed: u64, num_threads: usize, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, model: Option<TopicModel>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] use_symmetric_alpha: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DmrState {
@@ -613,6 +614,9 @@ pub struct LDA {
     // Sampling backend: false = SparseLDA (MALLET), true = LightLDA alias-MH.
     light: bool,
     mh_steps: usize,
+    // MALLET's --use-symmetric-alpha: optimize only the alpha concentration,
+    // keeping every alpha[t] equal, instead of learning the per-topic shape.
+    use_symmetric_alpha: bool,
 
     // Populated after fit().
     fitted: bool,
@@ -740,7 +744,8 @@ impl LDA {
     #[new]
     #[pyo3(signature = (num_topics, *, alpha_sum=None, beta=0.01,
                         optimize_interval=50, burn_in=200, seed=42, num_threads=1,
-                        sampler="sparse", mh_steps=2))]
+                        sampler="sparse", mh_steps=2, use_symmetric_alpha=false))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         num_topics: usize,
         alpha_sum: Option<f64>,
@@ -751,6 +756,7 @@ impl LDA {
         num_threads: usize,
         sampler: &str,
         mh_steps: usize,
+        use_symmetric_alpha: bool,
     ) -> PyResult<Self> {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
@@ -780,6 +786,7 @@ impl LDA {
             num_threads: num_threads.max(1),
             light,
             mh_steps,
+            use_symmetric_alpha,
             fitted: false,
             phi: None,
             theta: None,
@@ -842,6 +849,7 @@ impl LDA {
         let light = self.light;
         let mh_steps = self.mh_steps;
         let beta = self.beta;
+        let use_symmetric_alpha = self.use_symmetric_alpha;
 
         // LightLDA path: alias-MH sampling on dense count tables, packed back
         // into a TopicModel at the end. Separate from the SparseLDA path below so
@@ -856,7 +864,11 @@ impl LDA {
                     ls.sweep(&corpus, &mut rng);
                     if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                         let mut m = ls.to_topic_model();
-                        optimize::optimize_alpha(&mut m, &corpus);
+                        if use_symmetric_alpha {
+                            optimize::optimize_alpha_symmetric(&mut m, &corpus);
+                        } else {
+                            optimize::optimize_alpha(&mut m, &corpus);
+                        }
                         optimize::optimize_beta(&mut m);
                         ls.set_hyper(&m.alpha, m.beta);
                     }
@@ -919,7 +931,11 @@ impl LDA {
                 do_sweep(&mut model, &mut rng);
 
                 if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
-                    optimize::optimize_alpha(&mut model, &corpus);
+                    if use_symmetric_alpha {
+                        optimize::optimize_alpha_symmetric(&mut model, &corpus);
+                    } else {
+                        optimize::optimize_alpha(&mut model, &corpus);
+                    }
                     optimize::optimize_beta(&mut model);
                 }
 
@@ -1133,6 +1149,163 @@ impl LDA {
         Ok(())
     }
 
+    /// Reconstruct a fitted model from a MALLET-format Gibbs state file (the
+    /// inverse of :meth:`save_state`; MALLET's ``--input-state``). The file may
+    /// be gzip-compressed or plain text. The vocabulary, documents, per-token
+    /// topic assignments, and the ``#alpha``/``#beta`` hyperparameters are read
+    /// back, so the loaded model supports the full read-only surface
+    /// (``topic_word``, ``doc_topic``, ``top_words``, …) and ``transform`` on new
+    /// documents, and can re-emit the state with :meth:`save_state`.
+    #[staticmethod]
+    fn load_state(path: &str) -> PyResult<Self> {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let raw = std::fs::read(path).map_err(io_err)?;
+        // Detect gzip by magic bytes; fall back to plain text otherwise.
+        let text = if raw.starts_with(&[0x1f, 0x8b]) {
+            let mut s = String::new();
+            GzDecoder::new(&raw[..]).read_to_string(&mut s).map_err(io_err)?;
+            s
+        } else {
+            String::from_utf8(raw).map_err(|e| PyValueError::new_err(e.to_string()))?
+        };
+
+        let mut alpha: Vec<f64> = Vec::new();
+        let mut beta = 0.01f64;
+        let mut id_to_word: Vec<String> = Vec::new();
+        // doc id -> (pos, word id, topic); BTreeMap keeps documents in id order.
+        let mut docs_tokens: std::collections::BTreeMap<usize, Vec<(usize, u32, u32)>> =
+            std::collections::BTreeMap::new();
+        let mut doc_source: std::collections::BTreeMap<usize, String> =
+            std::collections::BTreeMap::new();
+        let mut max_topic = 0u32;
+
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("#alpha") {
+                alpha = rest.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("#beta") {
+                if let Some(b) = rest.split_whitespace().find_map(|s| s.parse().ok()) {
+                    beta = b;
+                }
+                continue;
+            }
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            // doc source pos typeindex type topic
+            let p: Vec<&str> = line.split_whitespace().collect();
+            if p.len() < 6 {
+                return Err(PyValueError::new_err(format!("malformed state row: {line:?}")));
+            }
+            let parse_err = || PyValueError::new_err(format!("malformed state row: {line:?}"));
+            let doc: usize = p[0].parse().map_err(|_| parse_err())?;
+            let pos: usize = p[2].parse().map_err(|_| parse_err())?;
+            let typeindex: usize = p[3].parse().map_err(|_| parse_err())?;
+            let topic: u32 = p[5].parse().map_err(|_| parse_err())?;
+            if typeindex >= id_to_word.len() {
+                id_to_word.resize(typeindex + 1, String::new());
+            }
+            id_to_word[typeindex] = p[4].to_string();
+            max_topic = max_topic.max(topic);
+            docs_tokens.entry(doc).or_default().push((pos, typeindex as u32, topic));
+            doc_source.entry(doc).or_insert_with(|| p[1].to_string());
+        }
+
+        if docs_tokens.is_empty() {
+            return Err(PyValueError::new_err("state file contains no token rows"));
+        }
+        let num_topics = if alpha.is_empty() { max_topic as usize + 1 } else { alpha.len() };
+        let num_types = id_to_word.len();
+
+        let mut docs_v: Vec<Vec<u32>> = Vec::new();
+        let mut doc_topics: Vec<Vec<u32>> = Vec::new();
+        let mut doc_names: Vec<String> = Vec::new();
+        for (doc_id, mut toks) in docs_tokens {
+            toks.sort_by_key(|&(pos, _, _)| pos);
+            docs_v.push(toks.iter().map(|&(_, w, _)| w).collect());
+            doc_topics.push(toks.iter().map(|&(_, _, t)| t).collect());
+            let src = doc_source.remove(&doc_id).unwrap_or_default();
+            doc_names.push(if src.is_empty() || src == "NA" { format!("doc_{doc_id}") } else { src });
+        }
+        let num_docs = docs_v.len();
+
+        // Word frequencies for the reconstructed corpus.
+        let mut total_freqs = vec![0u32; num_types];
+        let mut doc_freqs = vec![0u32; num_types];
+        for doc in &docs_v {
+            let mut seen = vec![false; num_types];
+            for &w in doc {
+                total_freqs[w as usize] += 1;
+                if !seen[w as usize] {
+                    seen[w as usize] = true;
+                    doc_freqs[w as usize] += 1;
+                }
+            }
+        }
+
+        let corpus = corpus::Corpus {
+            id_to_word,
+            docs: docs_v,
+            doc_names,
+            doc_labels: vec![String::new(); num_docs],
+            doc_freqs,
+            total_freqs,
+        };
+
+        let alpha_sum: f64 = if alpha.is_empty() {
+            num_topics as f64
+        } else {
+            alpha.iter().sum()
+        };
+        let mut model = TopicModel::new(num_topics, alpha_sum, beta, num_types);
+        model.initialize_from_assignments(&corpus, doc_topics);
+        if !alpha.is_empty() {
+            model.alpha = alpha;
+            model.alpha_sum = alpha_sum;
+        }
+
+        // φ and θ from the restored counts (smoothed point estimates).
+        let mut phi = Array2::<f64>::zeros((num_topics, num_types));
+        let mut theta = Array2::<f64>::zeros((num_docs, num_topics));
+        for (d, (doc, topics)) in corpus.docs.iter().zip(model.doc_topics.iter()).enumerate() {
+            for (&w, &t) in doc.iter().zip(topics) {
+                phi[[t as usize, w as usize]] += 1.0;
+                theta[[d, t as usize]] += 1.0;
+            }
+            let denom = doc.len() as f64 + model.alpha_sum;
+            for t in 0..num_topics {
+                theta[[d, t]] = (theta[[d, t]] + model.alpha[t]) / denom;
+            }
+        }
+        for t in 0..num_topics {
+            let denom = model.tokens_per_topic[t] as f64 + beta * num_types as f64;
+            for w in 0..num_types {
+                phi[[t, w]] = (phi[[t, w]] + beta) / denom;
+            }
+        }
+
+        Ok(LDA {
+            num_topics,
+            alpha_sum: Some(model.alpha_sum),
+            beta,
+            optimize_interval: 50,
+            burn_in: 200,
+            seed: 42,
+            num_threads: 1,
+            light: false,
+            mh_steps: 2,
+            use_symmetric_alpha: false,
+            fitted: true,
+            phi: Some(phi),
+            theta: Some(theta),
+            model: Some(model),
+            corpus: Some(corpus),
+        })
+    }
+
     /// Held-out evaluation via the Wallach et al. (2009) left-to-right
     /// estimator (the method MALLET's ``evaluate-topics`` uses).
     ///
@@ -1211,11 +1384,14 @@ impl LDA {
     /// Per-topic diagnostics (MALLET-style), one dict per topic, suitable for
     /// `pandas.DataFrame(model.diagnostics())`.
     ///
-    /// Keys: `topic`, `tokens` (assignments to the topic), `coherence` (UMass),
-    /// `exclusivity` (mean top-word share of φ vs. other topics; higher = more
-    /// distinctive), `effective_words` (`exp(H(φ_t))`; lower = more focused),
-    /// `rank1_docs` (documents whose dominant topic is this one), `alpha`, and
-    /// `top_words`.
+    /// Keys mirror MALLET's topic diagnostics: `topic`, `tokens` (assignments to
+    /// the topic), `coherence` (UMass), `exclusivity` (mean top-word share of φ
+    /// vs. other topics; higher = more distinctive), `effective_words`
+    /// (`exp(H(φ_t))`, MALLET's `eff_num_words`; lower = more focused),
+    /// `document_entropy` (entropy of the topic's token allocation across
+    /// documents), `uniform_dist` (KL of φ_t from uniform) and `corpus_dist`
+    /// (KL of φ_t from the corpus word distribution), `rank1_docs` (documents
+    /// whose dominant topic is this one), `alpha`, and `top_words`.
     #[pyo3(signature = (n=10))]
     fn diagnostics<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyList>> {
         self.require_fitted()?;
@@ -1252,6 +1428,27 @@ impl LDA {
             rank1[best] += 1;
         }
 
+        // Document-entropy accumulator: H_t = ln(T_t) - (1/T_t) Σ_d n_dt ln n_dt,
+        // the entropy of each topic's token allocation across documents (MALLET's
+        // `document_entropy`; lower = concentrated in few documents).
+        let mut doc_ent_s = vec![0.0f64; self.num_topics];
+        let mut tc = vec![0u32; self.num_topics];
+        for topics in &model.doc_topics {
+            for &t in topics {
+                tc[t as usize] += 1;
+            }
+            for (t, c) in tc.iter_mut().enumerate() {
+                if *c > 0 {
+                    let cf = *c as f64;
+                    doc_ent_s[t] += cf * cf.ln();
+                    *c = 0;
+                }
+            }
+        }
+
+        // Corpus word distribution (for the corpus-distance diagnostic).
+        let total_tokens: f64 = corpus.total_freqs.iter().map(|&c| c as f64).sum::<f64>().max(1.0);
+
         let list = PyList::empty_bound(py);
         for t in 0..self.num_topics {
             let topn = &tops[t];
@@ -1266,17 +1463,29 @@ impl LDA {
                 excl /= topn.len() as f64;
             }
 
+            // One pass over the vocabulary for the φ-entropy and the two
+            // distribution distances (from uniform and from the corpus).
             let rowsum: f64 = (0..num_words).map(|w| phi[[t, w]]).sum();
             let mut h = 0.0;
+            let mut uniform_dist = 0.0;
+            let mut corpus_dist = 0.0;
             if rowsum > 0.0 {
                 for w in 0..num_words {
                     let p = phi[[t, w]] / rowsum;
                     if p > 0.0 {
                         h -= p * p.ln();
+                        uniform_dist += p * (p * num_words as f64).ln();
+                        let q = corpus.total_freqs[w] as f64 / total_tokens;
+                        if q > 0.0 {
+                            corpus_dist += p * (p / q).ln();
+                        }
                     }
                 }
             }
             let effective_words = h.exp();
+
+            let tt = model.tokens_per_topic[t] as f64;
+            let document_entropy = if tt > 0.0 { tt.ln() - doc_ent_s[t] / tt } else { 0.0 };
 
             let words: Vec<String> = topn.iter().map(|&w| vocab[w].clone()).collect();
 
@@ -1286,6 +1495,9 @@ impl LDA {
             d.set_item("coherence", coh[t])?;
             d.set_item("exclusivity", excl)?;
             d.set_item("effective_words", effective_words)?;
+            d.set_item("document_entropy", document_entropy)?;
+            d.set_item("uniform_dist", uniform_dist)?;
+            d.set_item("corpus_dist", corpus_dist)?;
             d.set_item("rank1_docs", rank1[t])?;
             d.set_item("alpha", model.alpha[t])?;
             d.set_item("top_words", words)?;
@@ -1450,6 +1662,7 @@ impl LDA {
             num_threads: self.num_threads, fitted: self.fitted,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             model: self.model.clone(), corpus: self.corpus.clone(),
+            use_symmetric_alpha: self.use_symmetric_alpha,
         })
     }
 
@@ -1461,6 +1674,7 @@ impl LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
             num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
+            use_symmetric_alpha: s.use_symmetric_alpha,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta), model: s.model, corpus: s.corpus,
         })
     }
