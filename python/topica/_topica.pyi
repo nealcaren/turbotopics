@@ -1325,6 +1325,56 @@ class Top2Vec:
     def __repr__(self) -> str: ...
 
 
+class BERTopic:
+    """BERTopic (Grootendorst 2022): the same reduce/cluster pipeline as Top2Vec,
+    but topics are defined by class-based TF-IDF over their documents' words, so
+    no word embeddings are needed. `nr_topics` merges the most similar topics down
+    to a target; `doc_topic` is the approximate distribution. You bring the
+    document embeddings; the topic count is discovered (before any reduction)."""
+
+    def __init__(
+        self,
+        *,
+        n_components: int = 5,
+        min_cluster_size: int = 15,
+        min_samples: int | None = None,
+        nr_topics: int | None = None,
+        window: int = 4,
+        stride: int = 1,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> None:
+        """Fit on token documents plus one `doc_embeddings` row per document."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def labels(self) -> list[int]: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def approximate_distribution(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        window: int | None = None,
+        stride: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
 class KeyATM:
     """Keyword-Assisted Topic Model (keyATM Base; Eshima, Imai & Sasaki 2024).
     Some topics carry a keyword list; a token in a keyword topic comes either from

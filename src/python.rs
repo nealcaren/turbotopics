@@ -31,6 +31,7 @@ use crate::pa;
 use crate::pt;
 use crate::slda;
 use crate::top2vec;
+use crate::bertopic;
 use crate::labeled;
 use crate::sage;
 
@@ -6500,6 +6501,198 @@ impl Top2Vec {
 }
 
 // ---------------------------------------------------------------------------
+// BERTopic: embedding-clustering topic model with c-TF-IDF (Grootendorst 2022)
+// ---------------------------------------------------------------------------
+
+/// BERTopic: the same reduce/cluster pipeline as `Top2Vec`, but topics are
+/// defined by class-based TF-IDF over their documents' words, so no word
+/// embeddings are needed. `nr_topics` merges the most similar topics down to a
+/// target count; `doc_topic` is the approximate distribution (a sliding window's
+/// c-TF-IDF compared to each topic). You bring the document embeddings.
+#[pyclass(module = "topica")]
+pub struct BERTopic {
+    n_components: usize,
+    min_cluster_size: usize,
+    min_samples: usize,
+    nr_topics: Option<usize>,
+    window: usize,
+    stride: usize,
+    seed: u64,
+    fitted: bool,
+    model: Option<bertopic::BertopicModel>,
+    id_to_word: Vec<String>,
+}
+
+impl BERTopic {
+    fn fitted_model(&self) -> PyResult<&bertopic::BertopicModel> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+    }
+    /// Map token-list documents to id documents over the fitted vocabulary,
+    /// dropping out-of-vocabulary words (used for `approximate_distribution`).
+    fn to_ids(&self, docs: &[Vec<String>]) -> Vec<Vec<u32>> {
+        let map: std::collections::HashMap<&str, u32> =
+            self.id_to_word.iter().enumerate().map(|(i, w)| (w.as_str(), i as u32)).collect();
+        docs.iter()
+            .map(|d| d.iter().filter_map(|w| map.get(w.as_str()).copied()).collect())
+            .collect()
+    }
+}
+
+#[pymethods]
+impl BERTopic {
+    /// Create an unfitted model. `nr_topics` (optional) reduces the discovered
+    /// topics to that many by merging the most c-TF-IDF-similar; `window`/`stride`
+    /// parameterize the soft `doc_topic` distribution.
+    #[new]
+    #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
+                        nr_topics=None, window=4, stride=1, seed=42))]
+    fn new(
+        n_components: usize,
+        min_cluster_size: usize,
+        min_samples: Option<usize>,
+        nr_topics: Option<usize>,
+        window: usize,
+        stride: usize,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if min_cluster_size < 2 {
+            return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
+        }
+        Ok(BERTopic {
+            n_components,
+            min_cluster_size,
+            min_samples: min_samples.unwrap_or(min_cluster_size),
+            nr_topics,
+            window: window.max(1),
+            stride: stride.max(1),
+            seed,
+            fitted: false,
+            model: None,
+            id_to_word: Vec::new(),
+        })
+    }
+
+    /// Fit on `data` (a Corpus or list of token lists) with `doc_embeddings`
+    /// (`(num_docs, E)`), one row per document. No word embeddings are needed.
+    #[pyo3(signature = (data, doc_embeddings))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        doc_embeddings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let doc_emb = parse_features(doc_embeddings)?;
+        if doc_emb.len() != corpus.num_docs() {
+            return Err(PyValueError::new_err(format!(
+                "doc_embeddings has {} rows but corpus has {} documents",
+                doc_emb.len(),
+                corpus.num_docs()
+            )));
+        }
+        let num_types = corpus.num_types();
+        self.id_to_word = corpus.id_to_word.clone();
+        let (nc, mcs, ms, nr, win, st, seed) = (
+            self.n_components, self.min_cluster_size, self.min_samples, self.nr_topics,
+            self.window, self.stride, self.seed,
+        );
+        let model = py.allow_threads(move || {
+            bertopic::fit_bertopic(
+                &corpus.docs, &doc_emb, num_types, nc, mcs, ms, nr, win, st, seed,
+            )
+        });
+        self.model = Some(model);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn num_topics(&self) -> PyResult<usize> {
+        Ok(self.fitted_model()?.num_topics)
+    }
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_word).to_pyarray_bound(py))
+    }
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+    #[getter]
+    fn labels(&self) -> PyResult<Vec<i64>> {
+        Ok(self.fitted_model()?.labels.clone())
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        let k = self.fitted_model()?.num_topics;
+        Ok((0..k).map(|i| format!("topic_{i}")).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.id_to_word.clone())
+    }
+
+    /// Top `n` words of `topic` (or every topic when None) by c-TF-IDF weight.
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        topic: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
+    }
+
+    /// The soft topic distribution for `data` (Corpus or token lists), as
+    /// `(num_docs, num_topics)`. Words outside the fitted vocabulary are dropped;
+    /// `window`/`stride` default to the values set on the model.
+    #[pyo3(signature = (data, *, window=None, stride=None))]
+    fn approximate_distribution<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'_, PyAny>,
+        window: Option<usize>,
+        stride: Option<usize>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let m = self.fitted_model()?;
+        let docs_str: Vec<Vec<String>> = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner.docs.iter().map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect()).collect()
+        } else {
+            data.extract().map_err(|_| {
+                PyValueError::new_err("approximate_distribution expects a Corpus or token lists")
+            })?
+        };
+        let ids = self.to_ids(&docs_str);
+        let dist = m.approximate_distribution(
+            &ids,
+            window.unwrap_or(self.window),
+            stride.unwrap_or(self.stride),
+        );
+        Ok(vecs_to_arr2(&dist).to_pyarray_bound(py))
+    }
+
+    fn __repr__(&self) -> String {
+        let k = self.model.as_ref().map_or(0, |m| m.num_topics);
+        format!("BERTopic(fitted={}, num_topics={})", self.fitted, k)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // KeyATM: keyword-assisted topic model (Eshima, Imai & Sasaki 2024)
 // ---------------------------------------------------------------------------
 
@@ -7409,6 +7602,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SeededLDA>()?;
     m.add_class::<KeyATM>()?;
     m.add_class::<Top2Vec>()?;
+    m.add_class::<BERTopic>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;
