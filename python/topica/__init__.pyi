@@ -39,7 +39,11 @@ from .effects import (
     posterior_theta_samples as posterior_theta_samples,
     dirichlet_theta_samples as dirichlet_theta_samples,
 )
-from .embedding import EmbeddingLDA as EmbeddingLDA, embedding_seeds as embedding_seeds
+from .embedding import (
+    EmbeddingLDA as EmbeddingLDA,
+    embedding_seeds as embedding_seeds,
+    llm_embed as llm_embed,
+)
 
 def one_hot(
     values: Sequence[object],

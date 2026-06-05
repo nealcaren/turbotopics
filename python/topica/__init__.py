@@ -146,7 +146,7 @@ from .labeling import (  # noqa: E402  LLM topic labeling as plumbing
     llm_backend,
     topic_label_prompts,
 )
-from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
+from .embedding import EmbeddingLDA, embedding_seeds, llm_embed  # noqa: E402
 from .preprocess import split_documents  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 from .frames import from_dataframe, align  # noqa: E402
@@ -220,6 +220,7 @@ __all__ = [
     "dirichlet_theta_samples",
     "EmbeddingLDA",
     "embedding_seeds",
+    "llm_embed",
     "split_documents",
     "from_dataframe",
     "align",

@@ -131,6 +131,36 @@ def embedding_seeds(
     return _seeds_from_clusters(xn, labels, centroids, vocabulary, num_topics, top_m)
 
 
+def llm_embed(texts, model="text-embedding-3-small", *, batch=True):
+    """Embed ``texts`` with the `llm` library's embedding models, as a dense
+    ``(n, dim)`` float array.
+
+    The embedding models in topica (``BERTopic``, ``Top2Vec``, ``ETM``,
+    ``FASTopic``) and :func:`embedding_seeds` all take embeddings you supply; this
+    is one way to produce them. ``model`` names any embedding model
+    `llm <https://llm.datasette.io/>`_ can reach — OpenAI's
+    ``"text-embedding-3-small"`` / ``"3-large"`` (needs an API key), or a local
+    model such as ``"sentence-transformers/all-MiniLM-L6-v2"`` via the
+    ``llm-sentence-transformers`` plugin (no API, runs offline). Pass document
+    texts for document embeddings, or the vocabulary for word embeddings.
+
+    Requires the optional ``llm`` package (``pip install "topica[llm]"``). The
+    embeddings are the only thing topica needs from a model; everything downstream
+    runs in the wheel.
+    """
+    try:
+        import llm as _llm
+    except ImportError as e:  # pragma: no cover - exercised via message
+        raise ImportError(
+            "llm_embed needs the optional `llm` package "
+            '(pip install llm, or pip install "topica[llm]").'
+        ) from e
+    em = _llm.get_embedding_model(model)
+    items = [str(t) for t in texts]
+    vecs = list(em.embed_multi(items)) if batch else [em.embed(t) for t in items]
+    return np.asarray(vecs, dtype=float)
+
+
 class EmbeddingLDA:
     """LDA whose topics are anchored by pre-trained embeddings, on both sides.
 

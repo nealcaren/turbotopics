@@ -82,3 +82,38 @@ def test_llm_backend_requires_llm():
             topica.llm_backend("gpt-4o-mini")
     else:
         assert callable(topica.llm_backend("gpt-4o-mini"))
+
+
+# --- llm_embed: embeddings via the llm library --------------------------------
+
+
+def test_llm_embed_with_a_fake_llm(monkeypatch):
+    import sys
+    import types
+
+    class _FakeEmbModel:
+        def embed_multi(self, items):
+            return ([float(len(t)), 1.0, 2.0] for t in items)
+
+        def embed(self, t):
+            return [float(len(t)), 1.0, 2.0]
+
+    fake = types.ModuleType("llm")
+    fake.get_embedding_model = lambda name: _FakeEmbModel()
+    monkeypatch.setitem(sys.modules, "llm", fake)
+
+    texts = ["aa", "bbbb", "c"]
+    arr = topica.llm_embed(texts, model="whatever")
+    assert arr.shape == (3, 3)
+    assert list(arr[:, 0]) == [2.0, 4.0, 1.0]  # encodes len(text) in our fake
+    # batch=False path takes the same shape.
+    arr2 = topica.llm_embed(texts, model="whatever", batch=False)
+    assert arr2.shape == (3, 3)
+
+
+def test_llm_embed_requires_llm():
+    if importlib.util.find_spec("llm") is None:
+        with pytest.raises(ImportError, match="llm"):
+            topica.llm_embed(["a", "b"])
+    else:
+        pytest.skip("llm is installed; cannot exercise the missing-package path")

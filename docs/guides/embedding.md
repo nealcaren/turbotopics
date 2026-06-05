@@ -13,6 +13,16 @@ document-vector matrix (and, for Top2Vec, a matching word-vector matrix) from
 wherever you like, a sentence-transformer, an API, or a local model such as
 ollama. Everything downstream is in the wheel.
 
+If you would rather not wire up an embedder yourself, `topica.llm_embed` produces
+the matrix through Simon Willison's [`llm`](https://llm.datasette.io/) library
+(the optional `topica[llm]` extra), which reaches OpenAI embeddings and local
+sentence-transformers via plugins:
+
+```python
+doc_emb = topica.llm_embed(texts, model="text-embedding-3-small")          # API
+doc_emb = topica.llm_embed(texts, model="sentence-transformers/all-MiniLM-L6-v2")  # local
+```
+
 ```python
 import numpy as np, topica
 
