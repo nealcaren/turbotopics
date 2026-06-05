@@ -29,6 +29,10 @@ lists), keeping document metadata aligned to the rows that survive pruning.
 
 ::: topica.llm_embed
 
+::: topica.save_embeddings
+
+::: topica.load_embeddings
+
 ## Phrases
 
 ::: topica.learn_phrases

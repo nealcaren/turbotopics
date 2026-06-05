@@ -28,6 +28,8 @@ and the matching vocabulary list; it does the clustering and seeding.
 
 from __future__ import annotations
 
+import hashlib
+import os
 from typing import Sequence
 
 import numpy as np
@@ -131,7 +133,64 @@ def embedding_seeds(
     return _seeds_from_clusters(xn, labels, centroids, vocabulary, num_topics, top_m)
 
 
-def llm_embed(texts, model="text-embedding-3-small", *, batch=True):
+def _npz_path(path) -> str:
+    """Normalize an embedding-cache path to its `.npz` form."""
+    p = str(path)
+    return p if p.endswith(".npz") else p + ".npz"
+
+
+def _texts_hash(texts) -> str:
+    """A stable hash of a text sequence, for cache integrity checks (no pickling)."""
+    h = hashlib.sha256()
+    for t in texts:
+        h.update(str(t).encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def save_embeddings(path, embeddings, *, texts=None, model=None) -> str:
+    """Save an embedding matrix to a ``.npz`` file so a costly corpus is embedded
+    once and reused.
+
+    ``embeddings`` is any ``(n, dim)`` array. When given, ``texts`` (one per row)
+    is stored as a hash and ``model`` as a string, so :func:`load_embeddings` and
+    :func:`llm_embed`'s ``cache=`` can confirm a cache matches the current inputs.
+    The path gets a ``.npz`` suffix if it lacks one; returns the path written.
+    Works on any embeddings, not just :func:`llm_embed`'s.
+    """
+    fields = {"embeddings": np.asarray(embeddings, dtype=float)}
+    if model is not None:
+        fields["model"] = np.array(str(model))
+    if texts is not None:
+        fields["texts_hash"] = np.array(_texts_hash([str(t) for t in texts]))
+    out = _npz_path(path)
+    np.savez(out, **fields)
+    return out
+
+
+def load_embeddings(path, *, with_meta=False):
+    """Load an embedding matrix saved by :func:`save_embeddings`.
+
+    Returns the ``(n, dim)`` array, or ``(array, meta)`` when ``with_meta=True``;
+    ``meta`` carries ``model`` and ``texts_hash`` if they were saved. The ``.npz``
+    suffix is added if the path lacks one and the bare path does not exist.
+    """
+    p = str(path)
+    if not os.path.exists(p):
+        p = _npz_path(p)
+    with np.load(p) as data:
+        emb = data["embeddings"]
+        if not with_meta:
+            return emb
+        meta = {}
+        if "model" in data:
+            meta["model"] = str(data["model"])
+        if "texts_hash" in data:
+            meta["texts_hash"] = str(data["texts_hash"])
+        return emb, meta
+
+
+def llm_embed(texts, model="text-embedding-3-small", *, batch=True, cache=None):
     """Embed ``texts`` with the `llm` library's embedding models, as a dense
     ``(n, dim)`` float array.
 
@@ -144,10 +203,23 @@ def llm_embed(texts, model="text-embedding-3-small", *, batch=True):
     ``llm-sentence-transformers`` plugin (no API, runs offline). Pass document
     texts for document embeddings, or the vocabulary for word embeddings.
 
+    Embeddings are costly, so pass ``cache=path`` to embed once and reuse: if the
+    file exists and was saved for the same ``texts``, it is loaded and no model is
+    called; otherwise the embeddings are computed and written there (see
+    :func:`save_embeddings`).
+
     Requires the optional ``llm`` package (``pip install "topica[llm]"``). The
     embeddings are the only thing topica needs from a model; everything downstream
     runs in the wheel.
     """
+    items = [str(t) for t in texts]
+    if cache is not None:
+        cp = _npz_path(cache)
+        if os.path.exists(cp):
+            arr, meta = load_embeddings(cp, with_meta=True)
+            if arr.shape[0] == len(items) and meta.get("texts_hash") == _texts_hash(items):
+                return arr
+
     try:
         import llm as _llm
     except ImportError as e:  # pragma: no cover - exercised via message
@@ -156,9 +228,11 @@ def llm_embed(texts, model="text-embedding-3-small", *, batch=True):
             '(pip install llm, or pip install "topica[llm]").'
         ) from e
     em = _llm.get_embedding_model(model)
-    items = [str(t) for t in texts]
     vecs = list(em.embed_multi(items)) if batch else [em.embed(t) for t in items]
-    return np.asarray(vecs, dtype=float)
+    arr = np.asarray(vecs, dtype=float)
+    if cache is not None:
+        save_embeddings(cache, arr, texts=items, model=model)
+    return arr
 
 
 class EmbeddingLDA:

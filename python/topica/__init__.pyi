@@ -43,6 +43,8 @@ from .embedding import (
     EmbeddingLDA as EmbeddingLDA,
     embedding_seeds as embedding_seeds,
     llm_embed as llm_embed,
+    save_embeddings as save_embeddings,
+    load_embeddings as load_embeddings,
 )
 
 def one_hot(

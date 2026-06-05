@@ -117,3 +117,58 @@ def test_llm_embed_requires_llm():
             topica.llm_embed(["a", "b"])
     else:
         pytest.skip("llm is installed; cannot exercise the missing-package path")
+
+
+# --- save/load embeddings and the llm_embed cache -----------------------------
+
+
+def test_save_load_embeddings_roundtrip(tmp_path):
+    emb = np.arange(12, dtype=float).reshape(4, 3)
+    p = topica.save_embeddings(tmp_path / "emb", emb, texts=["a", "b", "c", "d"], model="m1")
+    assert p.endswith(".npz")
+    loaded = topica.load_embeddings(tmp_path / "emb")  # suffix added automatically
+    assert np.array_equal(loaded, emb)
+    arr, meta = topica.load_embeddings(p, with_meta=True)
+    assert np.array_equal(arr, emb)
+    assert meta["model"] == "m1"
+    assert "texts_hash" in meta
+
+
+def _counting_fake_llm(monkeypatch):
+    import sys
+    import types
+
+    calls = {"n": 0}
+
+    class _Emb:
+        def embed_multi(self, items):
+            return ([float(len(t)), 0.5] for t in items)
+
+    fake = types.ModuleType("llm")
+
+    def get_embedding_model(name):
+        calls["n"] += 1
+        return _Emb()
+
+    fake.get_embedding_model = get_embedding_model
+    monkeypatch.setitem(sys.modules, "llm", fake)
+    return calls
+
+
+def test_llm_embed_cache_embeds_once(tmp_path, monkeypatch):
+    calls = _counting_fake_llm(monkeypatch)
+    texts = ["alpha", "beta", "gamma"]
+    cache = tmp_path / "cache"
+
+    a = topica.llm_embed(texts, model="x", cache=cache)
+    assert calls["n"] == 1
+    assert (tmp_path / "cache.npz").exists()
+
+    # Second call with the same texts loads from cache; no model is called.
+    b = topica.llm_embed(texts, model="x", cache=cache)
+    assert calls["n"] == 1
+    assert np.array_equal(a, b)
+
+    # Different texts miss the cache and recompute.
+    topica.llm_embed(["alpha", "beta", "delta"], model="x", cache=cache)
+    assert calls["n"] == 2

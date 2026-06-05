@@ -23,6 +23,17 @@ doc_emb = topica.llm_embed(texts, model="text-embedding-3-small")          # API
 doc_emb = topica.llm_embed(texts, model="sentence-transformers/all-MiniLM-L6-v2")  # local
 ```
 
+Embeddings are costly, so cache them. Pass `cache=path` to embed a corpus once and
+reuse it on later runs (it reloads when the file matches the same `texts`, and
+recomputes otherwise), or save and load any embedding matrix yourself:
+
+```python
+doc_emb = topica.llm_embed(texts, model="text-embedding-3-small", cache="emb.npz")
+
+topica.save_embeddings("emb.npz", doc_emb, texts=texts, model="all-MiniLM-L6-v2")
+doc_emb = topica.load_embeddings("emb.npz")
+```
+
 ```python
 import numpy as np, topica
 
