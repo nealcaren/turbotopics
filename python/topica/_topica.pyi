@@ -1391,7 +1391,7 @@ class KeyATM:
         keywords: dict[str, Sequence[str]],
         *,
         num_topics: int | None = None,
-        alpha: float = 0.1,
+        alpha: float | None = None,
         beta: float = 0.01,
         beta_keyword: float = 0.1,
         gamma1: float = 1.0,

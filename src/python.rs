@@ -6792,16 +6792,17 @@ impl KeyATM {
     /// Create an unfitted model. `keywords` is ``{topic_name: [words]}`` (the
     /// keyword topics, in order). `num_topics` (default = number of keyword
     /// topics) may be larger to add regular, no-keyword topics. `alpha` is the
-    /// per-topic Dirichlet, `beta`/`beta_keyword` the regular and keyword
-    /// topic-word smoothing, and `gamma1`/`gamma2` the Beta prior on the
-    /// keyword-vs-regular switch.
+    /// per-topic Dirichlet; it defaults to ``1 / num_topics``, matching R keyATM's
+    /// base prior (this is the starting point when `estimate_alpha` is on).
+    /// `beta`/`beta_keyword` are the regular and keyword topic-word smoothing, and
+    /// `gamma1`/`gamma2` the Beta prior on the keyword-vs-regular switch.
     #[new]
-    #[pyo3(signature = (keywords, *, num_topics=None, alpha=0.1, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true))]
+    #[pyo3(signature = (keywords, *, num_topics=None, alpha=None, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         keywords: &Bound<'_, PyDict>,
         num_topics: Option<usize>,
-        alpha: f64,
+        alpha: Option<f64>,
         beta: f64,
         beta_keyword: f64,
         gamma1: f64,
@@ -6819,6 +6820,8 @@ impl KeyATM {
         if k < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
+        // Default to R keyATM's base prior 1/K.
+        let alpha = alpha.unwrap_or(1.0 / k as f64);
         if alpha <= 0.0 || beta <= 0.0 || beta_keyword <= 0.0 || gamma1 <= 0.0 || gamma2 <= 0.0 {
             return Err(PyValueError::new_err("alpha, beta, beta_keyword, gamma1, gamma2 must be > 0"));
         }
