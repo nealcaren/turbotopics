@@ -1,11 +1,9 @@
 # Topica: fast, all-purpose topic modeling for Python
 
-📖 **[Documentation](https://nealcaren.github.io/topica/)**: guides, a full API reference, worked examples, and a [*Publishing in a social science journal*](https://nealcaren.github.io/topica/publishing/) methodology track.
-
 `topica` is a fast topic-modeling library for Python with more than a dozen models, built for social scientists who want to move from text data to publishable results in a single workflow. It brings together models and tools usually split across JVM software like MALLET and R packages like `stm`, and runs them on a parallel Rust core competitive with the standard implementations, with every fit reproducible from a fixed seed. Each model comes with the validation, covariate-effect, and reporting tools to meet the standards reviewers expect.
 
 ```bash
-pip install topica            # once published; pre-built abi3 wheels, no Rust toolchain needed
+pip install topica
 ```
 
 ```python
@@ -19,18 +17,6 @@ for i, words in enumerate(model.top_words(5)):
 ```
 
 See the [getting-started guide](https://nealcaren.github.io/topica/getting-started/) and the [worked examples](https://nealcaren.github.io/topica/examples/dubois/) for end-to-end analyses.
-
-## Performance
-
-topica runs on a parallel Rust core. With multithreading it fits the standard models 2 to 11 times faster than the reference R and Java implementations, and it matches MALLET's hand-tuned Java sampler core for core. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
-
-| Model | Reference | topica speedup |
-|-------|-----------|----------------|
-| STM | R `stm` | **11×** |
-| LDA | Java MALLET | parity single-threaded, **2.5×** multithreaded |
-| keyATM | R `keyATM` | parity single-threaded, **2×** multithreaded |
-
-Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
 
 ## Models
 
@@ -74,6 +60,18 @@ Model-agnostic: they work on any fitted model's `topic_word`/`doc_topic`:
 - **Preprocessing:** `tokenize`, `learn_phrases` / `apply_phrases`, `split_documents`, the `Corpus` class
 
 See [diagnostics](https://nealcaren.github.io/topica/guides/diagnostics/) and [covariate effects](https://nealcaren.github.io/topica/guides/covariates/).
+
+## Performance
+
+topica runs on a parallel Rust core. With multithreading it fits the standard models 2 to 11 times faster than the reference R and Java implementations, and it matches MALLET's hand-tuned Java sampler core for core. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
+
+| Model | Reference | topica speedup |
+|-------|-----------|----------------|
+| STM | R `stm` | **11×** |
+| LDA | Java MALLET | parity single-threaded, **2.5×** multithreaded |
+| keyATM | R `keyATM` | parity single-threaded, **2×** multithreaded |
+
+Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
 
 ## Install from source
 
