@@ -20,6 +20,7 @@ from ._topica import (
     HLDA as HLDA,
     SeededLDA as SeededLDA,
     KeyATM as KeyATM,
+    Top2Vec as Top2Vec,
     Corpus as Corpus,
     tokenize as tokenize,
     DEFAULT_TOKEN_REGEX as DEFAULT_TOKEN_REGEX,

@@ -1252,13 +1252,7 @@ class SeededLDA:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 2000,
-        doc_topic_prior: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
-    ) -> None:
-        """doc_topic_prior (optional, (num_docs, num_topics), all > 0) is a
-        per-document asymmetric Dirichlet prior alpha_{d,k} that replaces the
-        symmetric alpha, biasing each document's topic mixture. It is a prior, so
-        the sampler can still move a document away from it."""
-        ...
+    ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1280,6 +1274,54 @@ class SeededLDA:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "SeededLDA": ...
+    def __repr__(self) -> str: ...
+
+
+class Top2Vec:
+    """Top2Vec (Angelov 2020): topics by clustering document embeddings. The
+    embeddings are reduced (randomized PCA), density-clustered (HDBSCAN), and
+    each topic is read off its cluster: the topic vector is the mean of its
+    documents' embeddings and its words are the nearest vocabulary terms. You
+    bring the embeddings; the topic count is discovered, not set."""
+
+    def __init__(
+        self,
+        *,
+        n_components: int = 5,
+        min_cluster_size: int = 15,
+        min_samples: int | None = None,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        vocabulary: Sequence[str] | None = None,
+    ) -> None:
+        """Fit on token documents plus one `doc_embeddings` row per document.
+        Pass `word_embeddings` with the aligned `vocabulary` (same space) to
+        enable `topic_neighbors`; they are realigned to topica's vocabulary."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_vectors(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def labels(self) -> list[int]: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def topic_neighbors(self, n: int = 10, *, topic: int) -> list[tuple[str, float]]: ...
     def __repr__(self) -> str: ...
 
 

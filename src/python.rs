@@ -30,6 +30,7 @@ use crate::hlda;
 use crate::pa;
 use crate::pt;
 use crate::slda;
+use crate::top2vec;
 use crate::labeled;
 use crate::sage;
 
@@ -2544,7 +2545,7 @@ impl DMR {
 
         let (acc_phi, acc_theta, feat_eff, model, corpus) = py.allow_threads(move || {
             for iter in 1..=iterations {
-                let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats);
+                let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
                 dmr::run_sweep_dmr(
                     &mut model.type_topic_counts,
                     &mut model.tokens_per_topic,
@@ -2562,7 +2563,7 @@ impl DMR {
                 if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                     let dtc = doc_topic_counts(&model.doc_topics, k);
                     dmr::optimize_lambda(
-                        &mut lambda, &feats, &dtc, k, nf, prior_variance, lbfgs_iters,
+                        &mut lambda, &feats, &dtc, k, nf, prior_variance, lbfgs_iters, None,
                     );
                 }
 
@@ -2570,7 +2571,7 @@ impl DMR {
                     if progress_interval > 0 && iter % progress_interval == 0 {
                         let dtc = doc_topic_counts(&model.doc_topics, k);
                         let (ll, _) = dmr::dmr_objective_and_gradient(
-                            &lambda, &feats, &dtc, k, nf, prior_variance,
+                            &lambda, &feats, &dtc, k, nf, prior_variance, None,
                         );
                         let llpt = ll / total_tokens;
                         Python::with_gil(|py| {
@@ -2581,7 +2582,7 @@ impl DMR {
             }
 
             // Sampling phase: λ is now fixed, so α per doc is fixed too.
-            let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats);
+            let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
             let mut acc_phi = vec![vec![0.0f64; k]; num_types];
             let mut acc_theta = vec![vec![0.0f64; k]; num_docs];
 
@@ -6285,6 +6286,220 @@ impl SeededLDA {
 }
 
 // ---------------------------------------------------------------------------
+// Top2Vec: embedding-clustering topic model (Angelov 2020)
+// ---------------------------------------------------------------------------
+
+/// Top2Vec: topics by clustering document embeddings. We reduce the document
+/// embeddings (randomized PCA), density-cluster them (HDBSCAN), and read each
+/// topic off its cluster: the topic vector is the mean of its documents'
+/// embeddings, and its words are the vocabulary terms nearest that vector.
+///
+/// You bring the embeddings. `fit(data, doc_embeddings)` needs one embedding row
+/// per document; pass `word_embeddings` with the aligned `vocabulary` (same
+/// space) to also get `topic_neighbors`. The topic count is discovered, not set.
+#[pyclass(module = "topica")]
+pub struct Top2Vec {
+    n_components: usize,
+    min_cluster_size: usize,
+    min_samples: usize,
+    seed: u64,
+    fitted: bool,
+    has_word_vectors: bool,
+    model: Option<top2vec::Top2VecModel>,
+    id_to_word: Vec<String>,
+}
+
+impl Top2Vec {
+    fn fitted_model(&self) -> PyResult<&top2vec::Top2VecModel> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+    }
+}
+
+#[pymethods]
+impl Top2Vec {
+    /// Create an unfitted model. `n_components` is the reduced dimensionality
+    /// before clustering; `min_cluster_size`/`min_samples` are HDBSCAN's (a
+    /// larger `min_cluster_size` yields fewer, broader topics). `min_samples`
+    /// defaults to `min_cluster_size`.
+    #[new]
+    #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None, seed=42))]
+    fn new(
+        n_components: usize,
+        min_cluster_size: usize,
+        min_samples: Option<usize>,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if min_cluster_size < 2 {
+            return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
+        }
+        Ok(Top2Vec {
+            n_components,
+            min_cluster_size,
+            min_samples: min_samples.unwrap_or(min_cluster_size),
+            seed,
+            fitted: false,
+            has_word_vectors: false,
+            model: None,
+            id_to_word: Vec::new(),
+        })
+    }
+
+    /// Fit on `data` (a Corpus or list of token lists) with `doc_embeddings`
+    /// (`(num_docs, E)`), one row per document. Pass `word_embeddings`
+    /// (`(len(vocabulary), E)`) and `vocabulary` together to enable
+    /// `topic_neighbors`; the word embeddings are realigned to topica's vocabulary.
+    #[pyo3(signature = (data, doc_embeddings, *, word_embeddings=None, vocabulary=None))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        doc_embeddings: &Bound<'_, PyAny>,
+        word_embeddings: Option<&Bound<'_, PyAny>>,
+        vocabulary: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let doc_emb = parse_features(doc_embeddings)?;
+        if doc_emb.len() != corpus.num_docs() {
+            return Err(PyValueError::new_err(format!(
+                "doc_embeddings has {} rows but corpus has {} documents",
+                doc_emb.len(),
+                corpus.num_docs()
+            )));
+        }
+        let num_types = corpus.num_types();
+
+        // Realign user word embeddings to topica's vocabulary order; words topica
+        // kept but the user did not supply get a zero vector (no neighbors there).
+        let word_vecs: Vec<Vec<f64>> = match word_embeddings {
+            Some(we) => {
+                let vocab = vocabulary.ok_or_else(|| {
+                    PyValueError::new_err("word_embeddings requires `vocabulary` to align them")
+                })?;
+                let rows = parse_features(we)?;
+                if rows.len() != vocab.len() {
+                    return Err(PyValueError::new_err(format!(
+                        "word_embeddings has {} rows but vocabulary has {} words",
+                        rows.len(),
+                        vocab.len()
+                    )));
+                }
+                let e = rows.first().map(|r| r.len()).unwrap_or(0);
+                let map: std::collections::HashMap<&str, usize> =
+                    vocab.iter().enumerate().map(|(i, w)| (w.as_str(), i)).collect();
+                corpus
+                    .id_to_word
+                    .iter()
+                    .map(|w| match map.get(w.as_str()) {
+                        Some(&i) => rows[i].clone(),
+                        None => vec![0.0; e],
+                    })
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        self.has_word_vectors = !word_vecs.is_empty();
+        self.id_to_word = corpus.id_to_word.clone();
+
+        let (nc, mcs, ms, seed) =
+            (self.n_components, self.min_cluster_size, self.min_samples, self.seed);
+        let model = py.allow_threads(move || {
+            top2vec::fit_top2vec(&corpus.docs, &doc_emb, &word_vecs, num_types, nc, mcs, ms, seed)
+        });
+        self.model = Some(model);
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// Number of topics discovered (HDBSCAN clusters found).
+    #[getter]
+    fn num_topics(&self) -> PyResult<usize> {
+        Ok(self.fitted_model()?.num_topics)
+    }
+    /// Topic-word distribution from class-based TF-IDF, row-normalized
+    /// (`(num_topics, vocab)`).
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_word).to_pyarray_bound(py))
+    }
+    /// Soft document-topic membership (`(num_docs, num_topics)`), rows sum to one.
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+    /// Each topic's vector in the embedding space (`(num_topics, E)`).
+    #[getter]
+    fn topic_vectors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_vectors).to_pyarray_bound(py))
+    }
+    /// Hard cluster assignment per document; `-1` is a noise document with no topic.
+    #[getter]
+    fn labels(&self) -> PyResult<Vec<i64>> {
+        Ok(self.fitted_model()?.labels.clone())
+    }
+    /// Topic labels ``topic_0`` … (Top2Vec topics are discovered, not named).
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        let k = self.fitted_model()?.num_topics;
+        Ok((0..k).map(|i| format!("topic_{i}")).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.id_to_word.clone())
+    }
+
+    /// Top `n` words of `topic` (or every topic when `topic` is None) by
+    /// class-TF-IDF weight, as `(word, weight)` pairs.
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        topic: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
+    }
+
+    /// The `n` vocabulary words whose embeddings are nearest `topic`'s vector by
+    /// cosine, as `(word, cosine)` pairs. Requires fitting with `word_embeddings`.
+    #[pyo3(signature = (n=10, *, topic))]
+    fn topic_neighbors(&self, n: usize, topic: usize) -> PyResult<Vec<(String, f64)>> {
+        let m = self.fitted_model()?;
+        if !self.has_word_vectors {
+            return Err(PyRuntimeError::new_err(
+                "fit with word_embeddings (and vocabulary) to use topic_neighbors",
+            ));
+        }
+        if topic >= m.num_topics {
+            return Err(PyValueError::new_err("topic out of range"));
+        }
+        Ok(m.topic_neighbors(n, topic)
+            .into_iter()
+            .map(|(w, s)| (self.id_to_word[w].clone(), s))
+            .collect())
+    }
+
+    fn __repr__(&self) -> String {
+        let k = self.model.as_ref().map_or(0, |m| m.num_topics);
+        format!("Top2Vec(fitted={}, num_topics={})", self.fitted, k)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // KeyATM: keyword-assisted topic model (Eshima, Imai & Sasaki 2024)
 // ---------------------------------------------------------------------------
 
@@ -6430,7 +6645,7 @@ impl KeyATM {
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
                         timestamps=None, num_states=5, weights="information-theory",
                         num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
-                        lbfgs_iters=20, report_interval=0))]
+                        lbfgs_iters=20, report_interval=0, prior_offset=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -6448,6 +6663,7 @@ impl KeyATM {
         prior_variance: f64,
         lbfgs_iters: usize,
         report_interval: usize,
+        prior_offset: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -6491,6 +6707,11 @@ impl KeyATM {
             if covariates.is_some() {
                 return Err(PyValueError::new_err(
                     "`timestamps` (dynamic) and `covariates` are mutually exclusive",
+                ));
+            }
+            if prior_offset.is_some() {
+                return Err(PyValueError::new_err(
+                    "`prior_offset` (embedding anchor) is not supported with `timestamps`",
                 ));
             }
             if num_states < 1 {
@@ -6588,12 +6809,44 @@ impl KeyATM {
             None => (None, Vec::new()),
         };
 
+        // Embedding anchor: a fixed (num_docs, num_topics) offset added inside the
+        // DMR exponent. It needs the covariate (DMR) path, so when it is supplied
+        // without covariates we synthesize an intercept-only design (the intercept
+        // then learns each topic's baseline prevalence on top of the anchor).
+        let offset: Option<Vec<Vec<f64>>> = match prior_offset {
+            Some(o) => {
+                let off = parse_features(o)?;
+                if off.len() != corpus.num_docs() {
+                    return Err(PyValueError::new_err(format!(
+                        "prior_offset has {} rows but corpus has {} documents",
+                        off.len(),
+                        corpus.num_docs()
+                    )));
+                }
+                if off.iter().any(|r| r.len() != num_topics) {
+                    return Err(PyValueError::new_err(format!(
+                        "prior_offset must have {num_topics} columns (one per topic)"
+                    )));
+                }
+                Some(off)
+            }
+            None => None,
+        };
+        let (feats, cov_names) = match (feats, &offset) {
+            (None, Some(_)) => {
+                let intercept = vec![vec![1.0f64]; corpus.num_docs()];
+                (Some(intercept), vec!["intercept".to_string()])
+            }
+            (f, _) => (f, cov_names),
+        };
+
         let (model, corpus) = py.allow_threads(move || {
             let m = match &feats {
                 Some(f) => keyatm::fit_keyatm_cov(
                     &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
-                    prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads, &mut rng,
+                    prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads,
+                    offset.as_deref(), &mut rng,
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
@@ -7155,6 +7408,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GSDMM>()?;
     m.add_class::<SeededLDA>()?;
     m.add_class::<KeyATM>()?;
+    m.add_class::<Top2Vec>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;
