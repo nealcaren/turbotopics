@@ -30,10 +30,10 @@ model you use, and, where you rely on a feature ported from a specific package
 | `SAGE` | Eisenstein, Ahmed & Xing (2011) |
 | `HDP` | Teh, Jordan, Beal & Blei (2006) |
 | `DTM` | Blei & Lafferty (2006) |
-| `SupervisedLDA` | McAuliffe & Blei (2008) |
+| `SupervisedLDA` | Blei & McAuliffe (2008) |
 | `PT` | Zuo et al. (2016) |
 | `GSDMM` | Yin & Wang (2014) |
-| `SeededLDA` | Watanabe (2023) |
+| `SeededLDA` | method: Jagarlamudi, Daumé III & Udupa (2012); package: Watanabe (2023) |
 | `KeyATM` | Eshima, Imai & Sasaki (2024) |
 | `PA` | Li & McCallum (2006) |
 | `HLDA` | Griffiths, Jordan, Tenenbaum & Blei (2004) |
@@ -48,37 +48,38 @@ model you use, and, where you rely on a feature ported from a specific package
 ### Models
 
 - Blei, D. M., Ng, A. Y., & Jordan, M. I. (2003). Latent Dirichlet Allocation. *Journal of Machine Learning Research*, 3, 993–1022.
-- Yao, L., Mimno, D., & McCallum, A. (2009). Efficient methods for topic model inference on streaming document collections. *KDD 2009*. (SparseLDA)
+- Yao, L., Mimno, D., & McCallum, A. (2009). Efficient methods for topic model inference on streaming document collections. *KDD 2009*, 937–946. [doi:10.1145/1557019.1557121](https://doi.org/10.1145/1557019.1557121) (SparseLDA)
 - Mimno, D., & McCallum, A. (2008). Topic models conditioned on arbitrary features with Dirichlet-multinomial regression. *UAI 2008*.
-- Ramage, D., Hall, D., Nallapati, R., & Manning, C. D. (2009). Labeled LDA: A supervised topic model for credit attribution in multi-labeled corpora. *EMNLP 2009*.
-- Blei, D. M., & Lafferty, J. D. (2007). A correlated topic model of *Science*. *Annals of Applied Statistics*, 1(1), 17–35.
-- Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. *Journal of the American Statistical Association*, 111(515), 988–1003.
-- Roberts, M. E., Stewart, B. M., & Tingley, D. (2019). stm: An R package for structural topic models. *Journal of Statistical Software*, 91(2), 1–40.
-- Eisenstein, J., Ahmed, A., & Xing, E. P. (2011). Sparse additive generative models of text. *ICML 2011*.
-- Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet processes. *Journal of the American Statistical Association*, 101(476), 1566–1581.
-- Blei, D. M., & Lafferty, J. D. (2006). Dynamic topic models. *ICML 2006*.
-- McAuliffe, J. D., & Blei, D. M. (2008). Supervised topic models. *NeurIPS 2007*.
-- Zuo, Y., Wu, J., Zhang, H., Lin, H., Wang, F., Xu, K., & Xiong, H. (2016). Topic modeling of short texts: A pseudo-document view. *KDD 2016*.
-- Yin, J., & Wang, J. (2014). A Dirichlet multinomial mixture model-based approach for short text clustering. *KDD 2014*. (GSDMM)
+- Ramage, D., Hall, D., Nallapati, R., & Manning, C. D. (2009). Labeled LDA: A supervised topic model for credit attribution in multi-labeled corpora. *EMNLP 2009*, 248–256. [doi:10.3115/1699510.1699543](https://doi.org/10.3115/1699510.1699543)
+- Blei, D. M., & Lafferty, J. D. (2007). A correlated topic model of *Science*. *The Annals of Applied Statistics*, 1(1), 17–35. [doi:10.1214/07-AOAS114](https://doi.org/10.1214/07-AOAS114)
+- Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. *Journal of the American Statistical Association*, 111(515), 988–1003. [doi:10.1080/01621459.2016.1141684](https://doi.org/10.1080/01621459.2016.1141684)
+- Roberts, M. E., Stewart, B. M., & Tingley, D. (2019). stm: An R package for structural topic models. *Journal of Statistical Software*, 91(2), 1–40. [doi:10.18637/jss.v091.i02](https://doi.org/10.18637/jss.v091.i02)
+- Eisenstein, J., Ahmed, A., & Xing, E. P. (2011). Sparse additive generative models of text. *ICML 2011*, 1041–1048.
+- Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet processes. *Journal of the American Statistical Association*, 101(476), 1566–1581. [doi:10.1198/016214506000000302](https://doi.org/10.1198/016214506000000302)
+- Blei, D. M., & Lafferty, J. D. (2006). Dynamic topic models. *ICML 2006*, 113–120. [doi:10.1145/1143844.1143859](https://doi.org/10.1145/1143844.1143859)
+- Blei, D. M., & McAuliffe, J. D. (2008). Supervised topic models. *NIPS 2007 (Advances in Neural Information Processing Systems 20)*, 121–128.
+- Zuo, Y., Wu, J., Zhang, H., Lin, H., Wang, F., Xu, K., & Xiong, H. (2016). Topic modeling of short texts: A pseudo-document view. *KDD 2016*, 2105–2114. [doi:10.1145/2939672.2939880](https://doi.org/10.1145/2939672.2939880)
+- Yin, J., & Wang, J. (2014). A Dirichlet multinomial mixture model-based approach for short text clustering. *KDD 2014*, 233–242. [doi:10.1145/2623330.2623715](https://doi.org/10.1145/2623330.2623715) (GSDMM)
+- Jagarlamudi, J., Daumé III, H., & Udupa, R. (2012). Incorporating lexical priors into topic models. *EACL 2012*, 204–213. (seeded-LDA method)
 - Watanabe, K. (2023). seededlda: Seeded sequential LDA for topic modeling. R package.
 - Eshima, S., Imai, K., & Sasaki, T. (2024). Keyword-assisted topic models. *American Journal of Political Science*, 68(2), 730–750. [doi:10.1111/ajps.12779](https://doi.org/10.1111/ajps.12779)
-- Li, W., & McCallum, A. (2006). Pachinko allocation: DAG-structured mixture models of topic correlations. *ICML 2006*.
-- Griffiths, T. L., Jordan, M. I., Tenenbaum, J. B., & Blei, D. M. (2004). Hierarchical topic models and the nested Chinese restaurant process. *NeurIPS 2003*.
-- Yuan, J., Gao, F., Ho, Q., Dai, W., Wei, J., Zheng, X., Xing, E. P., Liu, T.-Y., & Ma, W.-Y. (2015). LightLDA: Big topic models on modest computer clusters. *WWW 2015*.
-- Grootendorst, M. (2022). BERTopic: Neural topic modeling with a class-based TF-IDF procedure. *arXiv:2203.05794*.
-- Angelov, D. (2020). Top2Vec: Distributed representations of topics. *arXiv:2008.09470*.
-- Dieng, A. B., Ruiz, F. J. R., & Blei, D. M. (2020). Topic modeling in embedding spaces. *Transactions of the Association for Computational Linguistics*, 8, 439–453.
+- Li, W., & McCallum, A. (2006). Pachinko allocation: DAG-structured mixture models of topic correlations. *ICML 2006*, 577–584.
+- Griffiths, T. L., Jordan, M. I., Tenenbaum, J. B., & Blei, D. M. (2004). Hierarchical topic models and the nested Chinese restaurant process. *NIPS 2003 (Advances in Neural Information Processing Systems 16)*, 17–24.
+- Yuan, J., Gao, F., Ho, Q., Dai, W., Wei, J., Zheng, X., Xing, E. P., Liu, T.-Y., & Ma, W.-Y. (2015). LightLDA: Big topic models on modest computer clusters. *WWW 2015*, 1351–1361. [doi:10.1145/2736277.2741115](https://doi.org/10.1145/2736277.2741115)
+- Grootendorst, M. (2022). BERTopic: Neural topic modeling with a class-based TF-IDF procedure. [arXiv:2203.05794](https://arxiv.org/abs/2203.05794).
+- Angelov, D. (2020). Top2Vec: Distributed representations of topics. [arXiv:2008.09470](https://arxiv.org/abs/2008.09470).
+- Dieng, A. B., Ruiz, F. J. R., & Blei, D. M. (2020). Topic modeling in embedding spaces. *Transactions of the Association for Computational Linguistics*, 8, 439–453. [doi:10.1162/tacl_a_00325](https://doi.org/10.1162/tacl_a_00325)
 - Wu, X., Nguyen, T., Zhang, D. C., Wang, W. Y., & Luu, A. T. (2024). FASTopic: A fast, adaptive, stable, and transferable topic modeling paradigm. *NeurIPS 2024*. [arXiv:2405.17978](https://arxiv.org/abs/2405.17978)
 
 ### Methods used in the diagnostics and effects tools
 
-- Chib, S. (1998). Estimation and comparison of multiple change-point models. *Journal of Econometrics*, 86(2), 221–241. (dynamic keyATM HMM)
-- Lau, J. H., Newman, D., & Baldwin, T. (2014). Machine reading tea leaves: Automatically evaluating topic coherence and topic model quality. *EACL 2014*. (coherence)
-- Sievert, C., & Shirley, K. (2014). LDAvis: A method for visualizing and interpreting topics. *ACL Workshop on Interactive Language Learning, Visualization, and Interfaces*. (relevance)
-- Chang, J., Boyd-Graber, J., Gerrish, S., Wang, C., & Blei, D. M. (2009). Reading tea leaves: How humans interpret topic models. *NeurIPS 2009*. (intrusion tests)
-- Monroe, B. L., Colaresi, M. P., & Quinn, K. M. (2008). Fightin' words: Lexical feature selection and evaluation for identifying the content of political conflict. *Political Analysis*, 16(4), 372–403. (fighting words)
-- Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). Density-based clustering based on hierarchical density estimates. *PAKDD 2013*. (HDBSCAN)
-- McInnes, L., Healy, J., & Melville, J. (2018). UMAP: Uniform manifold approximation and projection for dimension reduction. *arXiv:1802.03426*.
+- Chib, S. (1998). Estimation and comparison of multiple change-point models. *Journal of Econometrics*, 86(2), 221–241. [doi:10.1016/S0304-4076(97)00115-2](https://doi.org/10.1016/S0304-4076(97)00115-2) (dynamic keyATM HMM)
+- Lau, J. H., Newman, D., & Baldwin, T. (2014). Machine reading tea leaves: Automatically evaluating topic coherence and topic model quality. *EACL 2014*, 530–539. [doi:10.3115/v1/E14-1056](https://doi.org/10.3115/v1/E14-1056) (coherence)
+- Sievert, C., & Shirley, K. E. (2014). LDAvis: A method for visualizing and interpreting topics. *Workshop on Interactive Language Learning, Visualization, and Interfaces (ACL 2014)*, 63–70. [doi:10.3115/v1/W14-3110](https://doi.org/10.3115/v1/W14-3110) (relevance)
+- Chang, J., Gerrish, S., Wang, C., Boyd-Graber, J., & Blei, D. M. (2009). Reading tea leaves: How humans interpret topic models. *NIPS 2009 (Advances in Neural Information Processing Systems 22)*, 288–296. (intrusion tests)
+- Monroe, B. L., Colaresi, M. P., & Quinn, K. M. (2008). Fightin' words: Lexical feature selection and evaluation for identifying the content of political conflict. *Political Analysis*, 16(4), 372–403. [doi:10.1093/pan/mpn018](https://doi.org/10.1093/pan/mpn018) (fighting words)
+- Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). Density-based clustering based on hierarchical density estimates. *PAKDD 2013*, 160–172. [doi:10.1007/978-3-642-37456-2_14](https://doi.org/10.1007/978-3-642-37456-2_14) (HDBSCAN)
+- McInnes, L., Healy, J., & Melville, J. (2018). UMAP: Uniform manifold approximation and projection for dimension reduction. [arXiv:1802.03426](https://arxiv.org/abs/1802.03426).
 
 ## Reference implementations and libraries
 
