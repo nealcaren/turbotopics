@@ -128,6 +128,16 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     align_topics,
     topic_stability,
 )
+from . import report  # noqa: E402  (model-neutral fitted-model analysis surface)
+from .report import (  # noqa: E402
+    topic_info,
+    topic_sizes,
+    topic_labels,
+    set_topic_labels,
+    representative_docs,
+    topics_over_time,
+    topics_per_class,
+)
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
 from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
 from .preprocess import split_documents  # noqa: E402
@@ -181,6 +191,14 @@ __all__ = [
     "find_thoughts_html",
     "quality_frontier",
     "bootstrap_stability",
+    "report",
+    "topic_info",
+    "topic_sizes",
+    "topic_labels",
+    "set_topic_labels",
+    "representative_docs",
+    "topics_over_time",
+    "topics_per_class",
     "fighting_words",
     "top_fighting_words",
     "estimate_effect",
