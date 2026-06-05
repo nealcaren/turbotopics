@@ -32,6 +32,7 @@ use crate::pt;
 use crate::slda;
 use crate::top2vec;
 use crate::bertopic;
+use crate::etm;
 use crate::labeled;
 use crate::sage;
 
@@ -6734,6 +6735,189 @@ impl BERTopic {
 }
 
 // ---------------------------------------------------------------------------
+// ETM: Embedded Topic Model (Dieng, Ruiz & Blei 2020)
+// ---------------------------------------------------------------------------
+
+/// Embedded Topic Model: LDA with the topic-word matrix factored through
+/// embeddings, ``beta_{k,v} = softmax_v(rho_v . alpha_k)``, and a logistic-normal
+/// document prior. You bring the word embeddings ``rho``; topica fits the topic
+/// embeddings ``alpha`` and the prior by the same variational EM as ``CTM`` (no
+/// VAE, no PyTorch). Semantically related words share topic mass even when a
+/// topic never saw them.
+#[pyclass(module = "topica")]
+pub struct ETM {
+    num_topics: usize,
+    em_iters: usize,
+    em_tol: f64,
+    sigma_shrink: f64,
+    prior_variance: f64,
+    max_inner: usize,
+    seed: u64,
+    fitted: bool,
+    model: Option<etm::EtmModel>,
+    id_to_word: Vec<String>,
+}
+
+impl ETM {
+    fn fitted_model(&self) -> PyResult<&etm::EtmModel> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+    }
+}
+
+#[pymethods]
+impl ETM {
+    /// Create an unfitted model. `em_iters`/`em_tol` control the variational EM;
+    /// `prior_variance` is the Gaussian prior on the topic embeddings (large =
+    /// weak); `max_inner` caps the per-iteration L-BFGS steps for the embedding
+    /// update; `sigma_shrink` shrinks the off-diagonal topic covariance.
+    #[new]
+    #[pyo3(signature = (num_topics, *, em_iters=100, em_tol=1e-4, sigma_shrink=0.0,
+                        prior_variance=1e6, max_inner=25, seed=42))]
+    fn new(
+        num_topics: usize,
+        em_iters: usize,
+        em_tol: f64,
+        sigma_shrink: f64,
+        prior_variance: f64,
+        max_inner: usize,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics"));
+        }
+        if prior_variance <= 0.0 {
+            return Err(PyValueError::new_err("prior_variance must be > 0"));
+        }
+        Ok(ETM {
+            num_topics,
+            em_iters,
+            em_tol,
+            sigma_shrink,
+            prior_variance,
+            max_inner,
+            seed,
+            fitted: false,
+            model: None,
+            id_to_word: Vec::new(),
+        })
+    }
+
+    /// Fit on `data` (a Corpus or list of token lists) with `word_embeddings`
+    /// (`(len(vocabulary), E)`) and the aligned `vocabulary`. The vocabulary
+    /// defines the word ids; tokens outside it are dropped.
+    #[pyo3(signature = (data, word_embeddings, vocabulary))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        word_embeddings: &Bound<'_, PyAny>,
+        vocabulary: Vec<String>,
+    ) -> PyResult<()> {
+        let docs_str: Vec<Vec<String>> = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+                .docs
+                .iter()
+                .map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect())
+                .collect()
+        } else {
+            data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?
+        };
+        let rho = parse_features(word_embeddings)?;
+        if rho.len() != vocabulary.len() {
+            return Err(PyValueError::new_err(format!(
+                "word_embeddings has {} rows but vocabulary has {} words",
+                rho.len(),
+                vocabulary.len()
+            )));
+        }
+        if vocabulary.len() < self.num_topics {
+            return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
+        }
+        let map: std::collections::HashMap<&str, u32> =
+            vocabulary.iter().enumerate().map(|(i, w)| (w.as_str(), i as u32)).collect();
+        let docs_ids: Vec<Vec<u32>> = docs_str
+            .iter()
+            .map(|d| d.iter().filter_map(|w| map.get(w.as_str()).copied()).collect())
+            .collect();
+        if docs_ids.iter().all(|d| d.is_empty()) {
+            return Err(PyValueError::new_err("no in-vocabulary tokens in the documents"));
+        }
+        let num_types = vocabulary.len();
+        self.id_to_word = vocabulary;
+
+        let (k, ei, et, ss, pv, mi) = (
+            self.num_topics, self.em_iters, self.em_tol, self.sigma_shrink,
+            self.prior_variance, self.max_inner,
+        );
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let model = py.allow_threads(move || {
+            etm::fit_etm(&docs_ids, k, num_types, &rho, ei, et, ss, pv, mi, &mut rng)
+        });
+        self.model = Some(model);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+    /// Topic-word matrix beta (num_topics, vocab), each row a distribution.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.beta).to_pyarray_bound(py))
+    }
+    /// Document-topic proportions theta (num_docs, num_topics).
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topics()).to_pyarray_bound(py))
+    }
+    /// Topic embeddings alpha (num_topics, E).
+    #[getter]
+    fn topic_embeddings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.alpha).to_pyarray_bound(py))
+    }
+    /// The variational evidence bound at convergence.
+    #[getter]
+    fn bound(&self) -> PyResult<f64> {
+        Ok(self.fitted_model()?.bound)
+    }
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        Ok(self.fitted_model()?.converged)
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.id_to_word.clone())
+    }
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        topic: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.beta);
+        topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ETM(num_topics={}, fitted={})", self.num_topics, self.fitted)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // KeyATM: keyword-assisted topic model (Eshima, Imai & Sasaki 2024)
 // ---------------------------------------------------------------------------
 
@@ -7647,6 +7831,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<KeyATM>()?;
     m.add_class::<Top2Vec>()?;
     m.add_class::<BERTopic>()?;
+    m.add_class::<ETM>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;

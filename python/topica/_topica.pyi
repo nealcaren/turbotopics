@@ -1379,6 +1379,55 @@ class BERTopic:
     def __repr__(self) -> str: ...
 
 
+class ETM:
+    """Embedded Topic Model (Dieng, Ruiz & Blei 2020): LDA with the topic-word
+    matrix factored through embeddings, beta_{k,v} = softmax_v(rho_v . alpha_k),
+    and a logistic-normal document prior. You bring the word embeddings rho;
+    topica fits the topic embeddings alpha and the prior by the same variational
+    EM as CTM (no VAE)."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        em_iters: int = 100,
+        em_tol: float = 1e-4,
+        sigma_shrink: float = 0.0,
+        prior_variance: float = 1e6,
+        max_inner: int = 25,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        vocabulary: Sequence[str],
+    ) -> None:
+        """Fit on token documents plus word embeddings (len(vocabulary) x E) and
+        the aligned vocabulary, which defines the word ids."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_embeddings(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def __repr__(self) -> str: ...
+
+
 class KeyATM:
     """Keyword-Assisted Topic Model (keyATM Base; Eshima, Imai & Sasaki 2024).
     Some topics carry a keyword list; a token in a keyword topic comes either from
