@@ -2,6 +2,7 @@ pub mod coherence;
 pub mod corpus;
 pub mod ctm;
 pub mod dmr;
+pub mod etm;
 pub mod dtm;
 pub mod gsdmm;
 pub mod hdp;
