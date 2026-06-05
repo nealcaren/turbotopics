@@ -92,7 +92,15 @@ def summary(model, topn=8):
 
 from . import stm  # noqa: E402  (stm imports names defined above)
 from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
+from . import effects  # noqa: E402  (model-neutral prevalence analysis)
 from . import diagnostics  # noqa: E402
+from .effects import (  # noqa: E402  general, work on any model's theta
+    estimate_effect,
+    by_strata,
+    top_topics,
+    posterior_theta_samples,
+    dirichlet_theta_samples,
+)
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
     coherence,
@@ -173,6 +181,11 @@ __all__ = [
     "bootstrap_stability",
     "fighting_words",
     "top_fighting_words",
+    "estimate_effect",
+    "by_strata",
+    "top_topics",
+    "posterior_theta_samples",
+    "dirichlet_theta_samples",
     "EmbeddingLDA",
     "embedding_seeds",
     "split_documents",

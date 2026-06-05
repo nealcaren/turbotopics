@@ -29,6 +29,14 @@ from ._topica import (
 )
 from . import stm as stm
 from . import keyatm as keyatm
+from . import effects as effects
+from .effects import (
+    estimate_effect as estimate_effect,
+    by_strata as by_strata,
+    top_topics as top_topics,
+    posterior_theta_samples as posterior_theta_samples,
+    dirichlet_theta_samples as dirichlet_theta_samples,
+)
 from .embedding import EmbeddingLDA as EmbeddingLDA, embedding_seeds as embedding_seeds
 
 def one_hot(

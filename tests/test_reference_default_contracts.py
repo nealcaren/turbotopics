@@ -152,7 +152,7 @@ def test_keyatm_base_defaults_match_r_keyatm_for_shared_controls() -> None:
 
 def test_keyatm_alpha_default_matches_r_keyatm() -> None:
     # topica's KeyATM `alpha` defaults to None, which resolves to 1/num_topics,
-    # matching R keyATM's base prior (topica previously used a fixed 0.1).
+    # matching R keyATM's base prior.
     r = _r_key_values(
         r"""
         if (!requireNamespace("keyATM", quietly=TRUE) ||
@@ -172,7 +172,7 @@ def test_keyatm_alpha_default_matches_r_keyatm() -> None:
     )
     init_defaults = _topica_defaults("KeyATM", "__init__")
 
-    # R keyATM's base alpha is 1/K, and topica now defaults to None -> 1/K.
+    # R keyATM's base alpha is 1/K; topica defaults to None -> 1/K.
     assert float(r["alpha"]) == 1.0 / int(r["num_topics"])
     assert init_defaults["alpha"] is None
 
