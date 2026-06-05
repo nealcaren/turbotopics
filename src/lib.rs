@@ -35,6 +35,7 @@ pub mod represent;
 pub mod top2vec;
 #[cfg(feature = "embeddings")]
 pub mod bertopic;
+pub mod fastopic;
 
 #[cfg(feature = "python")]
 mod python;

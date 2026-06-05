@@ -100,6 +100,7 @@ Topica stands on a generation of open topic-modeling research and code. The `LDA
 - **GSDMM** (Yin & Wang 2014): the movie-group-process mixture for short text
 - [**BERTopic**](https://github.com/MaartenGr/BERTopic) (Grootendoorn) and [**Top2Vec**](https://github.com/ddangelov/Top2Vec) (Angelov): the embedding-clustering pipeline, class-based TF-IDF, and the `reduce → cluster → represent` design
 - [**ETM**](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei): the Embedded Topic Model, fit here by the variational EM shared with the CTM rather than a VAE
+- [**FASTopic**](https://github.com/BobXWu/FASTopic) (Wu et al.): the optimal-transport topic model, with a hand-coded reverse-mode Sinkhorn in place of the reference's autodiff
 
 The embedding-native models build on two pure-Rust crates: [**petal-clustering**](https://github.com/petabi/petal-clustering) for HDBSCAN and [**umap-rs**](https://github.com/wilsonzlin/umap-rs) for the optional UMAP reducer, both BLAS-free.
 

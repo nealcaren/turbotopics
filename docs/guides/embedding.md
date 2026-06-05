@@ -1,11 +1,12 @@
 # Embedding topics
 
 The models elsewhere in topica learn topics from word counts. The models here
-start from *embeddings*, in two flavors. **BERTopic** and **Top2Vec** *cluster*
+start from *embeddings*, in three flavors. **BERTopic** and **Top2Vec** *cluster*
 document embeddings and read one topic off each cluster; **ETM** is *generative*,
-LDA with the topic-word distribution factored through embeddings. topica fits all
-three with no PyTorch, no UMAP/numba, and no sentence-transformers in the shipped
-wheel.
+LDA with the topic-word distribution factored through embeddings; **FASTopic**
+reads topics off two *optimal-transport* plans between embedding sets. topica fits
+all four with no PyTorch, no UMAP/numba, and no sentence-transformers in the
+shipped wheel.
 
 You bring the embeddings. topica does not call an embedding model; you pass a
 document-vector matrix (and, for Top2Vec, a matching word-vector matrix) from
@@ -105,6 +106,46 @@ Because ETM is generative and mixed-membership, you get a proper `θ` and the fu
 It fits in a fraction of a second on a few thousand documents. The trade for the
 reference's VAE is scale: the per-document EM is more accurate per document but
 less suited to corpora of tens of millions of documents.
+
+## FASTopic
+
+FASTopic also drops the encoder, but it is not a clustering pipeline and not a
+generative LDA. It places topics, words, and documents in one embedding space and
+reads the topic proportions `theta` and topic-word matrix `beta` straight off two
+*optimal-transport* plans: documents are transported to topics, topics to words.
+You bring the document embeddings; topica learns the topic embeddings, the word
+embeddings (in the same space), and the transport marginals, minimizing a
+bag-of-words reconstruction plus the two transport costs.
+
+```python
+import topica
+
+model = topica.FASTopic(num_topics=20, seed=1)
+theta = model.fit_transform(docs, doc_emb)   # (num_docs, num_topics)
+
+model.topic_word                       # (num_topics, vocab) beta
+model.doc_topic                        # (num_docs, num_topics) theta
+model.topic_embeddings                 # (num_topics, E) topic points
+model.word_embeddings                  # (vocab, E) learned word points
+model.top_words(8, topic=0)
+model.loss_history                     # the objective at each epoch
+```
+
+Unlike Top2Vec and BERTopic, FASTopic is mixed-membership: each document gets a
+full `theta` over topics, so it carries the [effects](../publishing/effects.md)
+and diagnostics stack. New documents are mapped to topics by a distance-softmax
+over the fitted topic embeddings, so `transform` needs only their embeddings, no
+tokens:
+
+```python
+theta_new = model.transform(new_doc_emb)   # (n, num_topics)
+```
+
+The reference trains by autodiff through the unrolled Sinkhorn iterations; topica
+has no autodiff, so it differentiates the fixed point of a hand-coded reverse-mode
+Sinkhorn (every gradient checked against finite differences) and steps with Adam.
+`dt_alpha`/`tw_alpha` are the inverse entropic regularizations for the two
+transport problems (reference defaults 3.0 and 2.0); larger is sharper.
 
 ## Inspecting and adjusting clustering models
 

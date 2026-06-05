@@ -33,6 +33,7 @@ use crate::slda;
 use crate::top2vec;
 use crate::bertopic;
 use crate::etm;
+use crate::fastopic;
 use crate::labeled;
 use crate::sage;
 
@@ -7060,6 +7061,221 @@ impl ETM {
     }
 }
 
+/// FASTopic (Wu et al. 2024): a topic model with no encoder and no neural
+/// network. The topic proportions ``theta`` and the topic-word matrix ``beta`` are
+/// read off two entropic optimal-transport plans between embedding sets. You bring
+/// the document embeddings ``D``; topica learns the topic embeddings, the word
+/// embeddings (in the same space), and the transport marginals, minimizing a
+/// bag-of-words reconstruction plus the two transport costs. New documents are
+/// mapped to topics by a distance-softmax over the fitted topic embeddings, so
+/// ``transform`` needs only their embeddings.
+#[pyclass(module = "topica")]
+pub struct FASTopic {
+    num_topics: usize,
+    epochs: usize,
+    lr: f64,
+    dt_alpha: f64,
+    tw_alpha: f64,
+    theta_temp: f64,
+    em_tol: f64,
+    sinkhorn_iters: usize,
+    sinkhorn_tol: f64,
+    seed: u64,
+    fitted: bool,
+    model: Option<fastopic::FastopicModel>,
+    id_to_word: Vec<String>,
+}
+
+impl FASTopic {
+    fn fitted_model(&self) -> PyResult<&fastopic::FastopicModel> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+    }
+}
+
+#[pymethods]
+impl FASTopic {
+    /// Create an unfitted model. `epochs`/`lr` drive the full-batch Adam optimizer;
+    /// `dt_alpha`/`tw_alpha` are the inverse entropic regularizations for the
+    /// doc-topic and topic-word transport (reference defaults 3.0 and 2.0);
+    /// `theta_temp` is the inference temperature; `em_tol` stops on the relative
+    /// loss change. `sinkhorn_iters`/`sinkhorn_tol` cap each Sinkhorn solve.
+    #[new]
+    #[pyo3(signature = (num_topics, *, epochs=200, lr=0.002, dt_alpha=3.0, tw_alpha=2.0,
+                        theta_temp=1.0, em_tol=1e-6, sinkhorn_iters=50, sinkhorn_tol=1e-4, seed=42))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        num_topics: usize,
+        epochs: usize,
+        lr: f64,
+        dt_alpha: f64,
+        tw_alpha: f64,
+        theta_temp: f64,
+        em_tol: f64,
+        sinkhorn_iters: usize,
+        sinkhorn_tol: f64,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics"));
+        }
+        if theta_temp <= 0.0 {
+            return Err(PyValueError::new_err("theta_temp must be > 0"));
+        }
+        Ok(FASTopic {
+            num_topics,
+            epochs,
+            lr,
+            dt_alpha,
+            tw_alpha,
+            theta_temp,
+            em_tol,
+            sinkhorn_iters,
+            sinkhorn_tol,
+            seed,
+            fitted: false,
+            model: None,
+            id_to_word: Vec::new(),
+        })
+    }
+
+    /// Fit on `data` (a Corpus or list of token lists) with `doc_embeddings`
+    /// (`(num_docs, E)`), one frozen row per document. The vocabulary is taken from
+    /// the corpus; FASTopic learns the word embeddings itself, so none are passed.
+    #[pyo3(signature = (data, doc_embeddings))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        doc_embeddings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let doc_emb = parse_features(doc_embeddings)?;
+        if doc_emb.len() != corpus.num_docs() {
+            return Err(PyValueError::new_err(format!(
+                "doc_embeddings has {} rows but corpus has {} documents",
+                doc_emb.len(),
+                corpus.num_docs()
+            )));
+        }
+        let num_types = corpus.num_types();
+        if num_types < self.num_topics {
+            return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
+        }
+        self.id_to_word = corpus.id_to_word.clone();
+        let docs_ids = corpus.docs.clone();
+
+        let (k, ep, lr, dta, twa, tt, et, si, st) = (
+            self.num_topics, self.epochs, self.lr, self.dt_alpha, self.tw_alpha,
+            self.theta_temp, self.em_tol, self.sinkhorn_iters, self.sinkhorn_tol,
+        );
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let model = py.allow_threads(move || {
+            fastopic::fit_fastopic(
+                &docs_ids, &doc_emb, k, num_types, ep, lr, dta, twa, tt, et, si, st, &mut rng,
+            )
+        });
+        self.model = Some(model);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+    /// Topic-word matrix beta (num_topics, vocab), each row a distribution.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_word).to_pyarray_bound(py))
+    }
+    /// Document-topic proportions theta (num_docs, num_topics).
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+    /// Topic embeddings (num_topics, E), the learned topic points.
+    #[getter]
+    fn topic_embeddings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_embeddings).to_pyarray_bound(py))
+    }
+    /// Word embeddings (vocab, E), learned in the document-embedding space.
+    #[getter]
+    fn word_embeddings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.word_embeddings).to_pyarray_bound(py))
+    }
+    /// The training loss at each epoch.
+    #[getter]
+    fn loss_history(&self) -> PyResult<Vec<f64>> {
+        Ok(self.fitted_model()?.loss_history.clone())
+    }
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        Ok(self.fitted_model()?.converged)
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.id_to_word.clone())
+    }
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        topic: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
+    }
+
+    /// Held-out topic proportions for new documents from their embeddings
+    /// (`(n, E)`): the reference's distance-softmax over the fitted topic
+    /// embeddings, normalized by the training documents. Returns `(n, num_topics)`.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        doc_embeddings: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let m = self.fitted_model()?;
+        let doc_emb = parse_features(doc_embeddings)?;
+        Ok(vecs_to_arr2(&m.transform(&doc_emb)).to_pyarray_bound(py))
+    }
+
+    /// Fit, then return the document-topic proportions (`fit_transform`).
+    #[pyo3(signature = (data, doc_embeddings))]
+    fn fit_transform<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        doc_embeddings: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.fit(py, data, doc_embeddings)?;
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("FASTopic(num_topics={}, fitted={})", self.num_topics, self.fitted)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // KeyATM: keyword-assisted topic model (Eshima, Imai & Sasaki 2024)
 // ---------------------------------------------------------------------------
@@ -7975,6 +8191,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Top2Vec>()?;
     m.add_class::<BERTopic>()?;
     m.add_class::<ETM>()?;
+    m.add_class::<FASTopic>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;
     m.add_class::<Corpus>()?;

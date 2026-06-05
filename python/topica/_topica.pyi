@@ -1464,6 +1464,69 @@ class ETM:
     def __repr__(self) -> str: ...
 
 
+class FASTopic:
+    """FASTopic (Wu et al. 2024): a topic model with no encoder or neural network.
+    The topic proportions theta and topic-word matrix beta are read off two
+    entropic optimal-transport plans between embedding sets. You bring the document
+    embeddings; topica learns the topic embeddings, word embeddings (same space),
+    and transport marginals, minimizing a bag-of-words reconstruction plus the two
+    transport costs. Held-out documents are mapped by a distance-softmax over the
+    fitted topic embeddings, so `transform` needs only their embeddings."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        epochs: int = 200,
+        lr: float = 0.002,
+        dt_alpha: float = 3.0,
+        tw_alpha: float = 2.0,
+        theta_temp: float = 1.0,
+        em_tol: float = 1e-6,
+        sinkhorn_iters: int = 50,
+        sinkhorn_tol: float = 1e-4,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> None:
+        """Fit on token documents plus frozen document embeddings (num_docs x E).
+        The vocabulary is taken from the corpus; the word embeddings are learned."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_embeddings(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def word_embeddings(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def loss_history(self) -> list[float]: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def transform(
+        self, doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
 class KeyATM:
     """Keyword-Assisted Topic Model (keyATM Base; Eshima, Imai & Sasaki 2024).
     Some topics carry a keyword list; a token in a keyword topic comes either from
