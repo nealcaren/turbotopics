@@ -1,11 +1,11 @@
-# Embedding topics (BERTopic & Top2Vec)
+# Embedding topics
 
-The models elsewhere in topica learn topics from word counts. **BERTopic** and
-**Top2Vec** instead start from *embeddings*: they reduce a set of document
-vectors, cluster them, and read one topic off each cluster. They are the most
-widely used topic models today, and topica ports both onto one Rust pipeline,
-`reduce → cluster → represent`, with no PyTorch, no UMAP/numba, and no
-sentence-transformers in the shipped wheel.
+The models elsewhere in topica learn topics from word counts. The models here
+start from *embeddings*, in two flavors. **BERTopic** and **Top2Vec** *cluster*
+document embeddings and read one topic off each cluster; **ETM** is *generative*,
+LDA with the topic-word distribution factored through embeddings. topica fits all
+three with no PyTorch, no UMAP/numba, and no sentence-transformers in the shipped
+wheel.
 
 You bring the embeddings. topica does not call an embedding model; you pass a
 document-vector matrix (and, for Top2Vec, a matching word-vector matrix) from
@@ -73,6 +73,38 @@ model.topic_vectors                    # (num_topics, E) topic positions
 
 Without `word_embeddings` Top2Vec still fits and exposes `top_words` (c-TF-IDF);
 `topic_neighbors` is what the word vectors light up.
+
+## ETM
+
+ETM (the Embedded Topic Model) is not a clustering pipeline; it is LDA with the
+topic-word distribution factored through embeddings,
+`β_{k,v} = softmax(ρ_v · α_k)`, and a logistic-normal document prior. Each topic
+is a *point* `α_k` in the embedding space, and semantically related words share
+topic mass even when a topic never saw them. You bring the word embeddings `ρ`;
+topica fits the topic embeddings `α` and the prior by the same variational EM as
+[`CTM`](models.md), no PyTorch.
+
+```python
+import topica
+
+vocab = sorted({w for d in docs for w in d})
+word_emb = embed(vocab)                          # (len(vocab), E)
+
+model = topica.ETM(num_topics=20, seed=1)
+model.fit(docs, word_emb, vocab)
+
+model.topic_word                       # (num_topics, vocab) β
+model.doc_topic                        # (num_docs, num_topics) θ
+model.topic_embeddings                 # (num_topics, E) the α points
+model.top_words(8, topic=0)
+model.bound, model.converged           # the variational evidence bound
+```
+
+Because ETM is generative and mixed-membership, you get a proper `θ` and the full
+[effects](../publishing/effects.md) and diagnostics stack, not a hard partition.
+It fits in a fraction of a second on a few thousand documents. The trade for the
+reference's VAE is scale: the per-document EM is more accurate per document but
+less suited to corpora of tens of millions of documents.
 
 ## The shared surface
 
