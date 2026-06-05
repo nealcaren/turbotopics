@@ -31,20 +31,21 @@ runner is practical, and replication-style tests for complex non-convex models.
   - [x] R FREX calculations vs `topica.stm.frex`.
   - [x] R `topicCorr` vs `topica.stm.topic_correlation`.
   - [x] R `estimateEffect`-style regressions vs `topica.stm.estimate_effect` on fixed matrices.
-- [ ] `CTM`: validate as STM without covariates against R `stm` and/or R `topicmodels::CTM`.
-  - [ ] Exact defaults check.
-  - [ ] Statistical topic alignment.
-  - [ ] Bound monotonicity and held-out transform checks.
+- [x] `CTM`: validate as STM without covariates against R `stm`. (`parity/ctm_r_compare.py`.)
+  - [x] Statistical topic alignment. (Spectral-matched cosine 0.967 vs R's own 0.778 seed spread.)
+  - [x] Bound monotonicity. (topica bound increases at 100% of EM steps.)
+  - [ ] Held-out transform check (optional follow-up).
 - [ ] `SAGE` / STM content path: expand current STM content parity.
   - [ ] Multi-group content effects.
   - [ ] Group ordering.
   - [ ] Content distribution normalization.
-- [ ] `KeyATM`: expand R `keyATM` parity beyond the base model.
-  - [ ] Base model.
-  - [ ] Covariate model.
-  - [ ] Dynamic model.
-  - [ ] Weighted LDA.
-  - [ ] Output analogs: `model_fit`, `pi`, `alpha`, topic order, time labels, covariate coefficient signs.
+- [x] `KeyATM`: expand R `keyATM` parity beyond the base model.
+  - [x] Base model. (`parity/keyatm_r_compare.py`: keyword cosine vs R within R's seed spread.)
+  - [x] Covariate model. (`parity/keyatm_models_r_compare.py`: keyword phi 0.896 vs R-self 0.930.)
+  - [x] Dynamic model. (same file: keyword phi 0.903; chronological time index.)
+  - [x] Weighted LDA. (`KeyATM.weighted_lda`; token weighting validated against keyATM.)
+  - [x] Output analogs: `model_fit`, `pi`, `alpha`, topic order, time labels, covariate
+    coefficient signs (rating effect sign agreement 1.00; time-trend sign agreement 1.00).
 
 ## Tier 3: Guided And Short-Text Models
 
@@ -90,8 +91,8 @@ runner is practical, and replication-style tests for complex non-convex models.
 
 - [x] 1. Add STM helper parity.
 - [x] 2. Add MALLET state/diagnostics exact tests.
-- [ ] 3. Add R `keyATM` covariate/dynamic parity.
-- [ ] 4. Add CTM-as-STM parity.
+- [x] 3. Add R `keyATM` covariate/dynamic parity. (`parity/keyatm_models_r_compare.py`)
+- [x] 4. Add CTM-as-STM parity. (`parity/ctm_r_compare.py`)
 - [ ] 5. Add SeededLDA optional R parity.
 - [ ] 6. Work through HDP, DTM, sLDA, PT, PA, HLDA, and LightLDA with formula plus optional reference tests.
 

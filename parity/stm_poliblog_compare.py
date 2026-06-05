@@ -168,7 +168,7 @@ def run(verbose: bool = True) -> dict:
     feat_names = ["ratingLiberal"] + [f"day_s{j}" for j in range(spline_basis.shape[1])]
     design_with_intercept = np.column_stack([np.ones(len(docs)), X])
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as d:
+    with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "vdocs.txt"), "w") as f:
             f.write("\n".join(" ".join(doc) for doc in docs) + "\n")
         with open(os.path.join(d, "design.csv"), "w", newline="") as f:

@@ -162,7 +162,7 @@ def run(verbose: bool = True) -> dict:
 
     docs, treatment, pid, _ = load_and_prep()
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as d:
+    with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "vdocs.txt"), "w") as f:
             f.write("\n".join(" ".join(doc) for doc in docs) + "\n")
         with open(os.path.join(d, "vmeta.csv"), "w", newline="") as f:

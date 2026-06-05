@@ -167,7 +167,7 @@ def run(verbose: bool = True) -> dict:
     num_keyword = len(keywords)
     num_topics = num_keyword + NUM_REGULAR
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as d:
+    with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "vdocs.txt"), "w") as f:
             f.write("\n".join(" ".join(doc) for doc in docs) + "\n")
         with open(os.path.join(d, "keywords.json"), "w") as f:

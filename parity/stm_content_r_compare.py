@@ -89,7 +89,7 @@ def run(verbose: bool = True) -> dict:
     from topica import STM
 
     docs, groups = _make_corpus()
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as d:
+    with tempfile.TemporaryDirectory() as d:
         with open(os.path.join(d, "vdocs.txt"), "w") as f:
             f.write("\n".join(" ".join(x) for x in docs) + "\n")
         with open(os.path.join(d, "vmeta.csv"), "w", newline="") as f:
