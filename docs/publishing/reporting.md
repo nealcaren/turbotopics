@@ -62,6 +62,13 @@ fig = topica.plot_report(model, texts=texts, timestamps=year, groups=party)
 fig.savefig("model_report.png", dpi=200)   # or .pdf
 ```
 
+![A plot_report figure for an 8-topic LDA on the political-blog corpus: topic
+prevalence with top words, the coherence-vs-exclusivity quality plot, the topic
+correlation heatmap, topic shares over six time periods, and topic prevalence by
+party.](../images/model_report.png)
+
+The example above is reproducible with `python examples/plot_report_example.py`.
+
 ## Supplementary materials
 
 Put in the appendix / replication archive:

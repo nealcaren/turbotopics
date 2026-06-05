@@ -231,7 +231,8 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
     words). Added when available:
 
     - **topic quality** — coherence vs exclusivity (the stm quality frontier); a
-      windowed ``coherence_type`` is used when ``texts`` is given, else UMass;
+      windowed ``coherence_type`` is used when ``texts`` is given (raw strings or
+      token lists are both accepted), else UMass;
     - **topic correlation** — the ``doc_topic`` correlation heatmap (K in 2..40);
     - **topics over time** — mean prevalence per distinct ``timestamps`` value;
     - **topics per class** — mean prevalence within each level of ``groups``.
@@ -253,9 +254,14 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
     panels = ["prevalence"]
     quality = None
     try:
+        # Coherence wants a tokenized reference corpus; accept raw strings too by
+        # splitting them, so callers can reuse the same `texts` they pass elsewhere.
+        ref = texts
+        if ref is not None and len(ref) and isinstance(ref[0], str):
+            ref = [t.split() for t in ref]
         quality = _diagnostics.quality_frontier(
-            model, n=n, texts=texts,
-            coherence_type=coherence_type if texts is not None else "u_mass",
+            model, n=n, texts=ref,
+            coherence_type=coherence_type if ref is not None else "u_mass",
         )
         panels.append("quality")
     except Exception:
