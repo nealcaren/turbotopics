@@ -104,7 +104,7 @@ def test_trace_survives_save_load():
     docs, _ = _corpus()
     m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
     m.fit(docs, iters=100)
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as d:
+    with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "k.bin")
         m.save(path)
         reloaded = topica.KeyATM.load(path)
