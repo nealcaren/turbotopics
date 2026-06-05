@@ -47,3 +47,6 @@ parity/*.class
 
 # Claude Code local dir (agent worktrees, etc.)
 .claude/
+
+# Internal development notes (kept local, not part of the public package)
+/notes/
