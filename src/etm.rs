@@ -28,7 +28,11 @@
 //! SGD) for corpora too large for the per-document E-step; it would reproduce the
 //! reference's scaling at some cost in per-document posterior accuracy.
 
+use crate::ctm::{ctm_grad, ctm_hpb, ctm_lhood, doc_sparse, HpbResult};
 use crate::dmr::lbfgs_minimize;
+use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse};
+use rand::Rng;
+use rayon::prelude::*;
 
 /// The topic-word matrix `beta[k][v] = softmax_v(rho_v . alpha_k)`.
 ///
@@ -137,6 +141,205 @@ pub fn optimize_topic_embeddings(
     softmax_beta(rho, alpha)
 }
 
+/// A fitted ETM. `beta` (K×V) is the topic-word matrix, `alpha` (K×E) the topic
+/// embeddings; `lambda` are the per-document logistic-normal variational means
+/// (θ = softmax([η, 0])), and `mu`/`sigma` the document-topic prior.
+pub struct EtmModel {
+    pub num_topics: usize,
+    pub num_types: usize,
+    pub beta: Vec<Vec<f64>>,
+    pub alpha: Vec<Vec<f64>>,
+    pub mu: Vec<f64>,
+    pub sigma: Vec<f64>,
+    pub lambda: Vec<Vec<f64>>,
+    pub bound: f64,
+    pub bound_history: Vec<f64>,
+    pub converged: bool,
+    pub em_iters_run: usize,
+}
+
+impl EtmModel {
+    /// Per-document topic proportions θ = softmax([η, 0]) (D×K).
+    pub fn doc_topics(&self) -> Vec<Vec<f64>> {
+        self.lambda
+            .iter()
+            .map(|eta| {
+                let mut full = eta.clone();
+                full.push(0.0);
+                let max = full.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let exps: Vec<f64> = full.iter().map(|e| (e - max).exp()).collect();
+                let s: f64 = exps.iter().sum();
+                exps.iter().map(|e| e / s).collect()
+            })
+            .collect()
+    }
+}
+
+/// Fit ETM by variational EM. The E-step is CTM's logistic-normal Laplace step
+/// (`ctm_hpb`) with `beta = softmax(rho · alpha)`; the M-step updates the prior
+/// `mu`/`sigma` exactly as CTM does and the topic embeddings `alpha` via
+/// [`optimize_topic_embeddings`]. `rho` (the V×E word embeddings) is fixed.
+///
+/// `prior_variance` is the Gaussian prior on the topic embeddings (large = weak),
+/// `max_inner` caps the per-iteration L-BFGS steps for the embedding M-step, and
+/// `em_tol` stops EM on the relative change in the corpus bound.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_etm<R: Rng>(
+    docs: &[Vec<u32>],
+    num_topics: usize,
+    num_types: usize,
+    rho: &[Vec<f64>],
+    em_iters: usize,
+    em_tol: f64,
+    sigma_shrink: f64,
+    prior_variance: f64,
+    max_inner: usize,
+    rng: &mut R,
+) -> EtmModel {
+    let k = num_topics;
+    let km1 = k - 1;
+    let d = docs.len();
+    let e = if num_types > 0 { rho[0].len() } else { 0 };
+    let sparse: Vec<(Vec<usize>, Vec<f64>)> = docs.iter().map(|doc| doc_sparse(doc)).collect();
+
+    // Initialize the topic embeddings at K distinct words' embeddings (plus a
+    // little jitter), so topics start differentiated.
+    let mut idx: Vec<usize> = (0..num_types).collect();
+    for i in 0..num_types.min(k) {
+        let j = (i + (rng.gen::<f64>() * (num_types - i) as f64) as usize).min(num_types - 1);
+        idx.swap(i, j);
+    }
+    let mut alpha = vec![vec![0.0f64; e]; k];
+    for (t, ak) in alpha.iter_mut().enumerate() {
+        let src = if num_types > 0 { &rho[idx[t % num_types]] } else { &vec![0.0; e] };
+        for (ae, &r) in ak.iter_mut().zip(src) {
+            *ae = r + (rng.gen::<f64>() - 0.5) * 0.01;
+        }
+    }
+    let mut beta = softmax_beta(rho, &alpha);
+
+    let mut mu_shared = vec![0.0f64; km1];
+    let mut sigma = vec![0.0f64; km1 * km1];
+    for i in 0..km1 {
+        sigma[i * km1 + i] = 1.0;
+    }
+    let mut lambda = vec![vec![0.0f64; km1]; d];
+
+    let mut bound_history: Vec<f64> = Vec::with_capacity(em_iters);
+    let mut converged = false;
+    let mut em_iters_run = 0usize;
+
+    for em in 0..em_iters {
+        em_iters_run = em + 1;
+        let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
+            let mut s = sigma.clone();
+            make_diagonally_dominant(&mut s, km1);
+            spd_inverse(&s, km1).unwrap()
+        });
+        let entropy = match cholesky(&sigma, km1) {
+            Some(l) => half_logdet(&l, km1),
+            None => 0.0,
+        };
+
+        let mut beta_ss = vec![vec![1e-8f64; num_types]; k];
+        let mut sigma_ss = vec![0.0f64; km1 * km1];
+        let mut lambda_sum = vec![0.0f64; km1];
+
+        // E-step: per-document logistic-normal variational inference, in parallel
+        // then accumulated in document order for determinism (as in fit_ctm).
+        let doc_results: Vec<(usize, Vec<f64>, HpbResult)> = sparse
+            .par_iter()
+            .enumerate()
+            .filter(|(_, (words, _))| !words.is_empty())
+            .map(|(di, (words, counts))| {
+                let opt = lbfgs_minimize(
+                    lambda[di].clone(),
+                    |eta| {
+                        (
+                            ctm_lhood(eta, &beta, words, counts, &mu_shared, &siginv),
+                            ctm_grad(eta, &beta, words, counts, &mu_shared, &siginv),
+                        )
+                    },
+                    40,
+                    7,
+                    1e-5,
+                );
+                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+                (di, opt, res)
+            })
+            .collect();
+
+        let total_bound: f64 = doc_results.iter().map(|(_, _, r)| r.bound).sum();
+        bound_history.push(total_bound);
+
+        for (di, opt, res) in &doc_results {
+            let di = *di;
+            let words = &sparse[di].0;
+            lambda[di] = opt.clone();
+            for (wi, &w) in words.iter().enumerate() {
+                for t in 0..k {
+                    beta_ss[t][w] += res.phi[t][wi];
+                }
+            }
+            for i in 0..km1 {
+                lambda_sum[i] += opt[i];
+                for j in 0..km1 {
+                    sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
+                }
+            }
+        }
+
+        if em_tol > 0.0 && bound_history.len() >= 2 {
+            let prev = bound_history[bound_history.len() - 2];
+            let rel = (total_bound - prev).abs() / (prev.abs() + 1e-12);
+            if rel < em_tol {
+                converged = true;
+                break;
+            }
+        }
+
+        // M-step: shared prior mean μ and covariance Σ (as in CTM).
+        for i in 0..km1 {
+            mu_shared[i] = lambda_sum[i] / d as f64;
+        }
+        for i in 0..km1 {
+            for j in 0..km1 {
+                let mut cross = 0.0;
+                for li in lambda.iter() {
+                    cross += (li[i] - mu_shared[i]) * (li[j] - mu_shared[j]);
+                }
+                sigma[i * km1 + j] = (sigma_ss[i * km1 + j] + cross) / d as f64;
+            }
+        }
+        if sigma_shrink > 0.0 {
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    if i != j {
+                        sigma[i * km1 + j] *= 1.0 - sigma_shrink;
+                    }
+                }
+            }
+        }
+
+        // M-step: topic embeddings α, rebuilding β = softmax(ρ·α).
+        beta = optimize_topic_embeddings(rho, &mut alpha, &beta_ss, prior_variance, max_inner);
+    }
+
+    EtmModel {
+        num_topics: k,
+        num_types,
+        beta,
+        alpha,
+        mu: mu_shared,
+        sigma,
+        lambda,
+        bound: bound_history.last().copied().unwrap_or(f64::NAN),
+        bound_history,
+        converged,
+        em_iters_run,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +388,48 @@ mod tests {
 
         for t in 0..k {
             assert!(kl(&beta_true[t], &beta_hat[t]) < 1e-3, "topic {t} KL too large");
+        }
+    }
+
+    // Full EM on a planted corpus: K blocks of words, each word's embedding points
+    // along its block's axis, and each document draws from one block. ETM should
+    // recover topics whose top words come from a single block, covering all blocks.
+    #[test]
+    fn fit_etm_recovers_planted_blocks() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let (k, block, e) = (3usize, 8usize, 3usize);
+        let v = k * block;
+        // Word embeddings: word in block b points along axis b (plus small noise).
+        let rho: Vec<Vec<f64>> = (0..v)
+            .map(|w| {
+                let b = w / block;
+                (0..e).map(|dim| if dim == b { 3.0 } else { 0.0 } + (rng.gen::<f64>() - 0.5) * 0.2).collect()
+            })
+            .collect();
+        // Documents: doc d draws 10 words from block d % k.
+        let docs: Vec<Vec<u32>> = (0..90)
+            .map(|d| {
+                let b = d % k;
+                (0..10).map(|_| (b * block + (rng.gen::<f64>() * block as f64) as usize) as u32).collect()
+            })
+            .collect();
+
+        let m = fit_etm(&docs, k, v, &rho, 50, 1e-5, 0.0, 1e6, 25, &mut rng);
+        assert_eq!(m.beta.len(), k);
+        // Each fitted topic's top words come from one block, and all blocks appear.
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..k {
+            let mut order: Vec<usize> = (0..v).collect();
+            order.sort_by(|&a, &b| m.beta[t][b].total_cmp(&m.beta[t][a]));
+            let blocks: std::collections::HashSet<usize> =
+                order[..4].iter().map(|&w| w / block).collect();
+            assert_eq!(blocks.len(), 1, "topic {t} top words mix blocks");
+            covered.insert(*blocks.iter().next().unwrap());
+        }
+        assert_eq!(covered.len(), k, "topics did not cover all {k} blocks");
+        // doc_topic rows are valid distributions.
+        for row in m.doc_topics() {
+            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-9);
         }
     }
 }
