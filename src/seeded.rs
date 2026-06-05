@@ -55,6 +55,12 @@ pub struct SeededModel {
     pub nk: Vec<u32>,
     /// `ndk[d][k]` — count of tokens in doc d assigned to topic k.  Shape: D × K.
     pub ndk: Vec<Vec<u32>>,
+    /// Optional per-document, per-topic Dirichlet prior `α_{d,k}` (D × K). When
+    /// `Some`, it replaces the symmetric `alpha` in both sampling and `θ` — the
+    /// vehicle for a document-level prior (e.g. embedding-anchored topic
+    /// prevalence). `None` for the ordinary symmetric-α model.
+    #[serde(default)]
+    pub doc_alpha: Option<Vec<Vec<f64>>>,
 }
 
 impl SeededModel {
@@ -107,6 +113,19 @@ impl SeededModel {
     /// Shape: D × K; each row sums to 1.
     pub fn doc_topic(&self) -> Vec<Vec<f64>> {
         let k = self.num_topics;
+        if let Some(da) = &self.doc_alpha {
+            return self
+                .ndk
+                .iter()
+                .zip(da)
+                .map(|(row, a)| {
+                    let n_d: u32 = row.iter().sum();
+                    let a_sum: f64 = a.iter().sum();
+                    let denom = n_d as f64 + a_sum;
+                    row.iter().zip(a).map(|(&c, &av)| (c as f64 + av) / denom).collect()
+                })
+                .collect();
+        }
         let k_alpha = k as f64 * self.alpha;
         self.ndk
             .iter()
@@ -160,6 +179,7 @@ fn sample_index<R: Rng>(scores: &[f64], rng: &mut R) -> usize {
 ///                   Set to 0.0 for ordinary LDA with symmetric priors.
 /// * `iters`       — number of full Gibbs sweeps.
 /// * `rng`         — random-number source; deterministic for a fixed seed.
+#[allow(clippy::too_many_arguments)]
 pub fn fit_seeded_lda<R: Rng>(
     docs: &[Vec<u32>],
     num_types: usize,
@@ -168,12 +188,17 @@ pub fn fit_seeded_lda<R: Rng>(
     alpha: f64,
     beta: f64,
     seed_weight: f64,
+    doc_alpha: Option<Vec<Vec<f64>>>,
     iters: usize,
     rng: &mut R,
 ) -> SeededModel {
     let k = num_topics;
     let v = num_types;
     let d_count = docs.len();
+    if let Some(da) = &doc_alpha {
+        assert_eq!(da.len(), d_count, "doc_alpha must have one row per document");
+        assert!(da.iter().all(|r| r.len() == k), "each doc_alpha row must have num_topics entries");
+    }
 
     // Normalise seeds: sort and de-dup so `contains` scans are minimal.
     let seeds_clean: Vec<Vec<usize>> = seeds
@@ -252,6 +277,8 @@ pub fn fit_seeded_lda<R: Rng>(
     for _ in 0..iters {
         for d in 0..d_count {
             let doc = &docs[d];
+            // The document's α row: per-document when supplied, else symmetric.
+            let a_row: Option<&Vec<f64>> = doc_alpha.as_ref().map(|da| &da[d]);
             for i in 0..doc.len() {
                 let w = doc[i] as usize;
                 let old = z[d][i];
@@ -268,7 +295,8 @@ pub fn fit_seeded_lda<R: Rng>(
                     } else {
                         beta
                     };
-                    scores[t] = (alpha + ndk[d][t] as f64)
+                    let a_t = a_row.map_or(alpha, |r| r[t]);
+                    scores[t] = (a_t + ndk[d][t] as f64)
                         * (beta_tw + nkw[t][w] as f64)
                         / (beta_sum_k[t] + nk[t] as f64);
                 }
@@ -293,6 +321,7 @@ pub fn fit_seeded_lda<R: Rng>(
         nkw,
         nk,
         ndk,
+        doc_alpha,
     }
 }
 
@@ -391,7 +420,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_seeded_lda(
             &docs, v, 3, &seeds,
-            0.1, 0.01, 50.0, 300, &mut rng,
+            0.1, 0.01, 50.0, None, 300, &mut rng,
         );
 
         // For each seeded topic (0 and 1), the seed words' total φ mass should
@@ -434,7 +463,7 @@ mod tests {
         let seeds: Vec<Vec<usize>> = vec![vec![]; k];
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
-        let model = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, 50, &mut rng);
+        let model = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 50, &mut rng);
 
         // topic_word rows sum to 1.
         for t in 0..k {
@@ -472,8 +501,8 @@ mod tests {
 
         let mut r1 = ChaCha8Rng::seed_from_u64(55);
         let mut r2 = ChaCha8Rng::seed_from_u64(55);
-        let m1 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, 80, &mut r1);
-        let m2 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, 80, &mut r2);
+        let m1 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, &mut r1);
+        let m2 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),

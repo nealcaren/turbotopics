@@ -100,6 +100,37 @@ impl TopicModel {
         }
     }
 
+    /// Rebuild the count tables from explicit per-token topic assignments
+    /// instead of random initialization — used to restore a model from a saved
+    /// Gibbs state (e.g. a MALLET ``--output-state`` file). `doc_topics` must be
+    /// parallel to `corpus.docs` (one topic per token, same order).
+    pub fn initialize_from_assignments(&mut self, corpus: &Corpus, doc_topics: Vec<Vec<u32>>) {
+        let mut type_totals = vec![0usize; self.num_types];
+        for doc in &corpus.docs {
+            for &word_id in doc {
+                type_totals[word_id as usize] += 1;
+            }
+        }
+        self.type_topic_counts = type_totals
+            .iter()
+            .map(|&total| vec![0u32; self.num_topics.min(total)])
+            .collect();
+        self.doc_topics = doc_topics;
+
+        let assignments: Vec<(usize, usize)> = corpus
+            .docs
+            .iter()
+            .zip(self.doc_topics.iter())
+            .flat_map(|(doc, topics)| {
+                doc.iter().map(|&w| w as usize).zip(topics.iter().map(|&t| t as usize))
+            })
+            .collect();
+        for (word_id, topic) in assignments {
+            self.tokens_per_topic[topic] += 1;
+            self.increment_type_topic(word_id, topic);
+        }
+    }
+
     /// Increment the count for (word_id, topic) in type_topic_counts,
     /// maintaining descending sort.
     pub fn increment_type_topic(&mut self, word_id: usize, topic: usize) {

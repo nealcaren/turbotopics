@@ -68,6 +68,51 @@ def test_lda_transform_after_load(tmp):
     assert np.array_equal(before, after)
 
 
+def test_lda_save_state_mallet_format(tmp_path):
+    import gzip
+
+    m = topica.LDA(num_topics=3, seed=1)
+    m.fit(DOCS, iterations=200)
+    path = str(tmp_path / "state.gz")
+    m.save_state(path)
+
+    with gzip.open(path, "rt") as f:
+        lines = f.read().splitlines()
+    assert lines[0] == "#doc source pos typeindex type topic"
+    assert lines[1].startswith("#alpha :")
+    assert lines[2].startswith("#beta :")
+
+    rows = lines[3:]
+    # One row per token in the training corpus.
+    assert len(rows) == sum(len(doc) for doc in DOCS)
+    # Each row: doc source pos typeindex type topic; topic in [0, K).
+    for row in rows[:5]:
+        parts = row.split()
+        assert len(parts) == 6
+        assert 0 <= int(parts[5]) < 3
+    # typeindex matches the vocabulary entry named in the row.
+    vocab = list(m.vocabulary)
+    for row in rows:
+        parts = row.split()
+        assert vocab[int(parts[3])] == parts[4]
+
+
+def test_lda_save_state_after_load(tmp_path):
+    m = topica.LDA(num_topics=2, seed=1)
+    m.fit(DOCS, iterations=150)
+    model_path = str(tmp_path / "m.tt")
+    m.save(model_path)
+    loaded = topica.LDA.load(model_path)
+    state_path = str(tmp_path / "s.gz")
+    loaded.save_state(state_path)  # token-level state survives a round-trip
+    assert os.path.getsize(state_path) > 0
+
+
+def test_save_state_unfitted_raises(tmp_path):
+    with pytest.raises(RuntimeError):
+        topica.LDA(num_topics=2).save_state(str(tmp_path / "s.gz"))
+
+
 def test_stm_posterior_survives(tmp):
     m = topica.STM(num_topics=2, seed=1)
     X = np.array([[0.0]] * 30 + [[1.0]] * 30)

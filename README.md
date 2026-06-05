@@ -20,7 +20,21 @@ for i, words in enumerate(model.top_words(5)):
 
 See the [getting-started guide](https://nealcaren.github.io/topica/getting-started/) and the [worked examples](https://nealcaren.github.io/topica/examples/dubois/) for end-to-end analyses.
 
+## Performance
+
+topica runs on a parallel Rust core. With multithreading it fits the standard models 2 to 11 times faster than the reference R and Java implementations, and it matches MALLET's hand-tuned Java sampler core for core. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
+
+| Model | Reference | topica speedup |
+|-------|-----------|----------------|
+| STM | R `stm` | **11×** |
+| LDA | Java MALLET | parity single-threaded, **2.5×** multithreaded |
+| keyATM | R `keyATM` | parity single-threaded, **2×** multithreaded |
+
+Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
+
 ## Models
+
+**Count-based models** learn topics from word counts (collapsed Gibbs or variational EM):
 
 | Model | What it's for |
 |-------|---------------|
@@ -37,7 +51,15 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 | **`SeededLDA` / `KeyATM`** | Guided topics steered by seed words |
 | **`PA` / `HLDA`** | Topic hierarchies (Pachinko, nested-CRP) |
 
-Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, `transform(new_docs)`, and `save`/`load`. The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic. Full guide: [the models](https://nealcaren.github.io/topica/guides/models/).
+**Embedding-based models** cluster document embeddings you supply (no PyTorch, no UMAP/numba in the wheel):
+
+| Model | What it's for |
+|-------|---------------|
+| **`BERTopic`** | Cluster document embeddings, label topics by class-TF-IDF; topic reduction and a soft per-document distribution |
+| **`Top2Vec`** | Topics as points in the embedding space; topic words are the nearest word vectors |
+| **`ETM`** | Generative LDA with the topic-word distribution factored through embeddings (`β = softmax(ρ·α)`) |
+
+Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, and `save`/`load`. The count-based variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic; the embedding models run the `reduce → cluster → represent` pipeline in Rust over vectors from any embedder (sentence-transformers, an API, a local model such as ollama). Full guides: [the models](https://nealcaren.github.io/topica/guides/models/) and [embedding topics](https://nealcaren.github.io/topica/guides/embedding/).
 
 ## Diagnostics & analysis
 

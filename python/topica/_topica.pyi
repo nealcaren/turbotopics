@@ -244,10 +244,32 @@ class CTM:
         matching STM's default — seed is then irrelevant) or "random" (seeded)."""
         ...
 
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, em_iters: int = 50) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        em_iters: int = 500,
+        em_tol: float = 1e-5,
+    ) -> None:
+        """EM stops once the relative change in the variational bound falls below
+        em_tol or after em_iters iterations, whichever comes first. Pass em_tol=0
+        to always run em_iters steps. Check converged and bound afterward."""
+        ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float:
+        """Final variational bound (approximate ELBO) at convergence."""
+        ...
+    @property
+    def bound_history(self) -> list[float]:
+        """Variational bound after each EM iteration (length = iterations run)."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """True if EM met em_tol; False if it hit the em_iters cap."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -313,16 +335,35 @@ class STM:
         prevalence_names: list[str] | None = None,
         content: Sequence[str] | Sequence[int] | None = None,
         content_names: list[str] | None = None,
-        em_iters: int = 50,
+        em_iters: int = 500,
+        em_tol: float = 1e-5,
     ) -> None:
         """Fit. prevalence is (num_docs, F) covariates driving topic proportions
         (mu_d = X_d gamma; intercept prepended). content is one group label per
         document, making topic-word distributions vary by group (SAGE). At least
-        one of prevalence/content must be given."""
+        one of prevalence/content must be given.
+
+        EM stops once the relative change in the variational bound falls below
+        em_tol (R stm's emtol) or after em_iters iterations, whichever comes
+        first. Pass em_tol=0 to always run em_iters steps. Check converged and
+        bound afterward."""
         ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float:
+        """Final variational bound (approximate ELBO) at convergence — R stm's
+        convergence$bound."""
+        ...
+    @property
+    def bound_history(self) -> list[float]:
+        """Variational bound after each EM iteration (length = iterations run)."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """True if EM met em_tol; False if it hit the em_iters cap."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -407,13 +448,38 @@ class HDP:
         eta must be > 0."""
         ...
 
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 150) -> None:
-        """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`."""
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 150,
+        report_interval: int = 0,
+    ) -> None:
+        """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`.
+
+        report_interval controls the discovery/convergence trace
+        (topic_count_history / log_likelihood_history / concentration_history):
+        0 (default) records ~50 evenly spaced points; a positive value records
+        every that-many sweeps."""
         ...
 
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
         """Topic-word matrix, shape (num_topics, num_words); rows sum to 1."""
+        ...
+    @property
+    def topic_count_history(self) -> list[tuple[int, int]]:
+        """Topic-discovery trajectory: (iteration, num_topics) pairs over the
+        fit. Watching K stabilize is HDP's headline convergence check."""
+        ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float]]:
+        """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
+    @property
+    def concentration_history(self) -> list[tuple[int, float, float]]:
+        """Learned-concentration trace: (iteration, alpha, gamma) triples
+        (informative when resample_conc=True)."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -781,8 +847,14 @@ class LDA:
         num_threads: int = 1,
         sampler: str = "sparse",
         mh_steps: int = 2,
+        use_symmetric_alpha: bool = False,
     ) -> None:
         """Create an LDA model. alpha_sum defaults to num_topics if None.
+
+        use_symmetric_alpha mirrors MALLET's --use-symmetric-alpha: when True,
+        hyperparameter optimization learns only the alpha concentration and
+        keeps every per-topic alpha equal, instead of learning an asymmetric
+        per-topic prior (the default, MALLET's Wallach optimization).
 
         num_threads > 1 enables MALLET-style approximate parallel Gibbs
         sampling in fit() (faster on multicore; results differ from the exact
@@ -899,7 +971,8 @@ class LDA:
         """Per-topic diagnostics (MALLET-style), one dict per topic.
 
         Keys: topic, tokens, coherence, exclusivity, effective_words,
-        rank1_docs, alpha, top_words. Suitable for pandas.DataFrame(...).
+        document_entropy, uniform_dist, corpus_dist, rank1_docs, alpha,
+        top_words. Suitable for pandas.DataFrame(...).
         """
         ...
 
@@ -939,6 +1012,36 @@ class LDA:
 
     def save_doc_topic(self, path: str) -> None:
         """Write doc-topic matrix to a TSV file (doc[, label], topic_0, ...)."""
+        ...
+
+    def save_state(self, path: str) -> None:
+        """Write the token-level Gibbs state to a gzipped file in MALLET's
+        --output-state format: a header, #alpha/#beta lines, then one row per
+        token (doc source pos typeindex type topic) giving the final topic
+        assignment of every token in the training corpus. Use it to feed custom
+        visualizations (e.g. pyLDAvis) or corpus metrics."""
+        ...
+
+    @staticmethod
+    def load_state(path: str) -> "LDA":
+        """Reconstruct a fitted LDA from a MALLET-format Gibbs state file (the
+        inverse of save_state; MALLET --input-state). The file may be gzipped or
+        plain text. Vocabulary, documents, per-token topic assignments, and the
+        #alpha/#beta hyperparameters are restored, so the model supports the
+        read-only surface (topic_word, doc_topic, top_words, ...) and transform
+        on new documents."""
+        ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model (topic-word state, hyperparameters, and the
+        training corpus) to `path`. Reload with `LDA.load` to run `transform`
+        inference later without retraining (MALLET --output-model)."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "LDA":
+        """Load a model written by `save`, ready for `transform` inference on new
+        documents (MALLET --input-model / --inferencer-filename)."""
         ...
 
     def __repr__(self) -> str: ...
@@ -993,9 +1096,28 @@ class GSDMM:
         beta: float = 0.1,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 30) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 30,
+        report_interval: int = 0,
+    ) -> None:
+        """Fit by the Movie Group Process. report_interval controls the
+        cluster-discovery trace (0 = auto ~50 points)."""
+        ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def cluster_count_history(self) -> list[tuple[int, int]]:
+        """Cluster-discovery trajectory: (iteration, num_clusters) pairs.
+        Watching the count collapse to a stable value is GSDMM's headline
+        convergence check."""
+        ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float]]:
+        """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1125,7 +1247,12 @@ class SeededLDA:
         weight: float = 0.01,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 2000) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 2000,
+    ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1150,6 +1277,193 @@ class SeededLDA:
     def __repr__(self) -> str: ...
 
 
+class Top2Vec:
+    """Top2Vec (Angelov 2020): topics by clustering document embeddings. The
+    embeddings are reduced (randomized PCA), density-clustered (HDBSCAN), and
+    each topic is read off its cluster: the topic vector is the mean of its
+    documents' embeddings and its words are the nearest vocabulary terms. You
+    bring the embeddings; the topic count is discovered, not set."""
+
+    def __init__(
+        self,
+        *,
+        n_components: int = 5,
+        min_cluster_size: int = 15,
+        min_samples: int | None = None,
+        reducer: str = "pca",
+        n_neighbors: int = 15,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        vocabulary: Sequence[str] | None = None,
+    ) -> None:
+        """Fit on token documents plus one `doc_embeddings` row per document.
+        Pass `word_embeddings` with the aligned `vocabulary` (same space) to
+        enable `topic_neighbors`; they are realigned to topica's vocabulary."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_vectors(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def labels(self) -> list[int]: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def topic_neighbors(self, n: int = 10, *, topic: int) -> list[tuple[str, float]]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        vocabulary: Sequence[str] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def merge_topics(self, groups: Sequence[Sequence[int]]) -> None: ...
+    def reduce_outliers(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+
+class BERTopic:
+    """BERTopic (Grootendorst 2022): the same reduce/cluster pipeline as Top2Vec,
+    but topics are defined by class-based TF-IDF over their documents' words, so
+    no word embeddings are needed. `nr_topics` merges the most similar topics down
+    to a target; `doc_topic` is the approximate distribution. You bring the
+    document embeddings; the topic count is discovered (before any reduction)."""
+
+    def __init__(
+        self,
+        *,
+        n_components: int = 5,
+        min_cluster_size: int = 15,
+        min_samples: int | None = None,
+        nr_topics: int | None = None,
+        window: int = 4,
+        stride: int = 1,
+        reducer: str = "pca",
+        n_neighbors: int = 15,
+        bm25: bool = False,
+        reduce_frequent: bool = False,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> None:
+        """Fit on token documents plus one `doc_embeddings` row per document."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def labels(self) -> list[int]: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def approximate_distribution(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        window: int | None = None,
+        stride: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def merge_topics(self, groups: Sequence[Sequence[int]]) -> None: ...
+    def reduce_outliers(self) -> int: ...
+    def __repr__(self) -> str: ...
+
+
+class ETM:
+    """Embedded Topic Model (Dieng, Ruiz & Blei 2020): LDA with the topic-word
+    matrix factored through embeddings, beta_{k,v} = softmax_v(rho_v . alpha_k),
+    and a logistic-normal document prior. You bring the word embeddings rho;
+    topica fits the topic embeddings alpha and the prior by the same variational
+    EM as CTM (no VAE)."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        em_iters: int = 100,
+        em_tol: float = 1e-4,
+        sigma_shrink: float = 0.0,
+        prior_variance: float = 1e6,
+        max_inner: int = 25,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        vocabulary: Sequence[str],
+    ) -> None:
+        """Fit on token documents plus word embeddings (len(vocabulary) x E) and
+        the aligned vocabulary, which defines the word ids."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def topic_embeddings(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        vocabulary: Sequence[str],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
 class KeyATM:
     """Keyword-Assisted Topic Model (keyATM Base; Eshima, Imai & Sasaki 2024).
     Some topics carry a keyword list; a token in a keyword topic comes either from
@@ -1162,13 +1476,32 @@ class KeyATM:
         keywords: dict[str, Sequence[str]],
         *,
         num_topics: int | None = None,
-        alpha: float = 0.1,
+        alpha: float | None = None,
         beta: float = 0.01,
         beta_keyword: float = 0.1,
         gamma1: float = 1.0,
         gamma2: float = 1.0,
         seed: int = 42,
-    ) -> None: ...
+        estimate_alpha: bool = True,
+    ) -> None:
+        """estimate_alpha (default True, matching R keyATM) slice-samples an
+        asymmetric document-topic prior alpha each sweep. Set it False for a
+        fixed symmetric alpha: a faster fit (it skips the dominant non-sweep
+        cost) at the price of the R-matching asymmetric prior. The base model
+        only; the covariate and dynamic models always learn their priors."""
+        ...
+    @staticmethod
+    def weighted_lda(
+        num_topics: int,
+        *,
+        alpha: float = 0.1,
+        beta: float = 0.01,
+        seed: int = 42,
+    ) -> "KeyATM":
+        """keyATM's weightedLDA: a keyword-free model (no keyword topics) — plain
+        LDA fit with keyATM's token weighting and estimated asymmetric alpha. Fit
+        it like a KeyATM; keyword outputs (keyword_rate, pi_history) are empty."""
+        ...
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -1184,6 +1517,7 @@ class KeyATM:
         burn_in: int = 200,
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
+        report_interval: int = 0,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -1199,10 +1533,35 @@ class KeyATM:
         `weights` is keyATM's token weighting: 'information-theory' (default,
         each token counts by its word's surprisal in bits), 'inv-freq', or
         'none' (unweighted). Weighting downweights frequent words and applies to
-        every variant (base, covariate, dynamic)."""
+        every variant (base, covariate, dynamic).
+
+        `report_interval` sets how often model_fit is recorded for
+        `log_likelihood_history` (keyATM's model_fit / plot_modelfit): 0
+        (default) records ~50 evenly spaced points across the run; a positive
+        value records every that-many sweeps."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def log_likelihood_history(self) -> list[tuple[int, float, float]]:
+        """Convergence trace: (iteration, log_likelihood, perplexity) triples —
+        the three columns of keyATM's model_fit / plot_modelfit. The
+        log-likelihood is the collapsed marginal and perplexity is
+        exp(-loglik / total_weighted_tokens), both on R keyATM's scale. Empty if
+        tracing was disabled."""
+        ...
+    @property
+    def alpha_history(self) -> list[tuple[int, list[float]]]:
+        """Trace of the estimated document-topic prior alpha: (iteration, alpha)
+        pairs (alpha length K) — keyATM's plot_alpha / values_iter$alpha_iter.
+        Base model only; empty for covariate (traces lambda) and dynamic."""
+        ...
+    @property
+    def pi_history(self) -> list[tuple[int, list[float]]]:
+        """Trace of the per-topic keyword switch rate pi: (iteration, pi) pairs
+        (pi length K, 0 for regular topics) — keyATM's plot_pi /
+        values_iter$pi_iter. Empty for a keyword-free model."""
+        ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property

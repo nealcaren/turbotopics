@@ -158,9 +158,39 @@ pub struct KeyAtmModel {
     /// Covariate model only: the document feature matrix used at fit time
     /// (`[D][F]`), kept for held-out inference. `None` for the base model.
     pub features: Option<Vec<Vec<f64>>>,
+    /// Covariate model only: a fixed per-document, per-topic embedding offset
+    /// `s_{d,k}` added inside the DMR exponent, `α_{d,k} = exp(x_d · λ_k +
+    /// s_{d,k})`. Anchors each document toward the topics its embedding is near
+    /// while `λ` still estimates covariate effects. `None` for no embedding
+    /// anchor (the plain covariate prior).
+    #[serde(default)]
+    pub prior_offset: Option<Vec<Vec<f64>>>,
     /// Dynamic model only: the fitted Chib (1998) change-point HMM over time
     /// segments. `None` for the base and covariate models.
     pub dynamic: Option<DynamicState>,
+    /// Base model only: the estimated asymmetric document-topic Dirichlet prior
+    /// `α_k` (length K), slice-sampled each sweep as in R keyATM. `None` for the
+    /// covariate model (which uses the DMR `λ`) and the dynamic model (per-state
+    /// `α`); when `None` the base `doc_topic` falls back to the symmetric
+    /// `alpha`.
+    #[serde(default)]
+    pub alpha_vec: Option<Vec<f64>>,
+    /// Convergence trace: `(iteration, log-likelihood, perplexity)` sampled
+    /// every `ll_interval` Gibbs sweeps — the three columns of keyATM's
+    /// `model_fit` (`plot_modelfit`). Empty when tracing is disabled.
+    #[serde(default)]
+    pub log_likelihood_history: Vec<(usize, f64, f64)>,
+    /// Trace of the estimated document-topic prior `α` (length K) at each
+    /// recorded sweep — keyATM's `plot_alpha` / `values_iter$alpha_iter`. Base
+    /// model only (the covariate model traces `λ`, the dynamic model per-state
+    /// `α`); empty otherwise or when tracing is disabled.
+    #[serde(default)]
+    pub alpha_history: Vec<(usize, Vec<f64>)>,
+    /// Trace of the per-topic keyword switch rate `π` (length K) at each
+    /// recorded sweep — keyATM's `plot_pi` / `values_iter$pi_iter`. Empty for a
+    /// keyword-free model or when tracing is disabled.
+    #[serde(default)]
+    pub pi_history: Vec<(usize, Vec<f64>)>,
 }
 
 /// Fitted state of the keyATM **Dynamic** model (Eshima, Imai & Sasaki 2024,
@@ -270,9 +300,11 @@ impl KeyAtmModel {
                 .collect();
         }
 
-        // Covariate model: per-document, per-topic α from the regression.
+        // Covariate model: per-document, per-topic α from the regression
+        // (plus the fixed embedding offset, when present).
         if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
-            let doc_alpha = crate::dmr::compute_doc_alpha(lambda, features);
+            let doc_alpha =
+                crate::dmr::compute_doc_alpha(lambda, features, self.prior_offset.as_deref());
             return self
                 .ndk
                 .iter()
@@ -288,6 +320,20 @@ impl KeyAtmModel {
                 .collect();
         }
 
+        // Base model: estimated asymmetric α (R keyATM default) when present,
+        // else the symmetric `alpha`.
+        if let Some(av) = &self.alpha_vec {
+            let a_sum: f64 = av.iter().sum();
+            return self
+                .ndk
+                .iter()
+                .map(|row| {
+                    let n_d: f64 = row.iter().sum::<f64>() + a_sum;
+                    row.iter().zip(av).map(|(&c, &a)| (c + a) / n_d).collect()
+                })
+                .collect();
+        }
+
         let k = self.num_topics;
         let alpha = self.alpha;
         let k_alpha = k as f64 * alpha;
@@ -299,6 +345,99 @@ impl KeyAtmModel {
                 row.iter().map(|&c| (c + alpha) / n_d).collect()
             })
             .collect()
+    }
+
+    /// The per-document Dirichlet prior α used by `doc_topic` (D×K): the dynamic
+    /// per-state prior, the covariate DMR prior `exp(x·λ)`, the estimated
+    /// asymmetric base prior, or the symmetric fallback.
+    fn doc_alpha_matrix(&self) -> Vec<Vec<f64>> {
+        if let Some(dyn_) = &self.dynamic {
+            return self
+                .ndk
+                .iter()
+                .enumerate()
+                .map(|(d, _)| dyn_.alphas[dyn_.r_est[dyn_.time_index[d]]].clone())
+                .collect();
+        }
+        if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
+            return crate::dmr::compute_doc_alpha(lambda, features, self.prior_offset.as_deref());
+        }
+        let row = self
+            .alpha_vec
+            .clone()
+            .unwrap_or_else(|| vec![self.alpha; self.num_topics]);
+        vec![row; self.ndk.len()]
+    }
+
+    /// keyATM's collapsed marginal log-likelihood, the quantity R `keyATM`
+    /// reports as `model_fit`'s "Log Likelihood". It integrates out θ, the
+    /// topic-word distributions, and π, summing the Dirichlet-multinomial
+    /// evidence of the (weighted) count tables plus the keyword-switch
+    /// Beta-Bernoulli evidence. Computed over the weighted counts, so it is on
+    /// the same scale as R's.
+    pub fn model_loglik(&self) -> f64 {
+        let k = self.num_topics;
+        let v = self.num_types;
+        let beta = self.beta;
+        let beta_key = self.beta_key;
+        let lg_beta = lgamma(beta);
+        let lg_beta_key = lgamma(beta_key);
+        let mut ll = 0.0f64;
+
+        // Regular (s=0) topic-word evidence, over the full vocabulary, for every
+        // topic.
+        for kk in 0..k {
+            for &c in &self.nkw[kk] {
+                ll += lgamma(beta + c) - lg_beta;
+            }
+            ll += lgamma(beta * v as f64) - lgamma(beta * v as f64 + self.nk0[kk]);
+        }
+
+        // Keyword (s=1) topic-word evidence + the keyword-switch π evidence, for
+        // keyword topics only.
+        let lg_g = lgamma(self.gamma1 + self.gamma2) - lgamma(self.gamma1) - lgamma(self.gamma2);
+        for kk in 0..self.num_keyword_topics {
+            let lk = self.l[kk];
+            if lk == 0 {
+                continue;
+            }
+            for &c in &self.nkx[kk] {
+                ll += lgamma(beta_key + c) - lg_beta_key;
+            }
+            ll += lgamma(beta_key * lk as f64) - lgamma(beta_key * lk as f64 + self.nk1[kk]);
+            ll += lg_g + lgamma(self.nk1[kk] + self.gamma1) + lgamma(self.nk0[kk] + self.gamma2)
+                - lgamma(self.nk0[kk] + self.nk1[kk] + self.gamma1 + self.gamma2);
+        }
+
+        // Document-topic evidence under the per-document Dirichlet prior.
+        let doc_alpha = self.doc_alpha_matrix();
+        for (d, ndk) in self.ndk.iter().enumerate() {
+            let a = &doc_alpha[d];
+            let a_sum: f64 = a.iter().sum();
+            let n_d: f64 = ndk.iter().sum();
+            ll += lgamma(a_sum) - lgamma(a_sum + n_d);
+            for kk in 0..k {
+                ll += lgamma(ndk[kk] + a[kk]) - lgamma(a[kk]);
+            }
+        }
+        ll
+    }
+
+    /// Total weighted token count (Σ over documents of the weighted document
+    /// length) — the denominator keyATM divides the log-likelihood by to report
+    /// perplexity.
+    pub fn total_weight(&self) -> f64 {
+        self.ndk.iter().map(|r| r.iter().sum::<f64>()).sum()
+    }
+
+    /// keyATM `model_fit` perplexity: `exp(-loglik / total_weighted_tokens)`.
+    pub fn perplexity(&self) -> f64 {
+        let n = self.total_weight();
+        if n <= 0.0 {
+            f64::NAN
+        } else {
+            (-self.model_loglik() / n).exp()
+        }
     }
 
     /// Learned per-topic keyword switch rate π_k (length K).
@@ -783,6 +922,8 @@ pub fn fit_keyatm<R: Rng>(
     gamma1: f64,
     gamma2: f64,
     iters: usize,
+    ll_interval: usize,
+    estimate_alpha: bool,
     weights: WeightScheme,
     num_threads: usize,
     rng: &mut R,
@@ -797,12 +938,54 @@ pub fn fit_keyatm<R: Rng>(
         docs, num_types, num_topics, keywords, alpha, beta, beta_key, gamma1, gamma2, weights, rng,
     );
 
-    // Symmetric prior: every document-topic gets the same α.
-    let doc_alpha = vec![vec![alpha; num_topics]; docs.len()];
+    // R keyATM's base model estimates an asymmetric document-topic Dirichlet
+    // prior α_k by slice-sampling it each sweep (Gamma priors: (1,1) on keyword
+    // topics, (2,1) on regular ones — keyATM's defaults). The whole corpus is a
+    // single "state", so we reuse the dynamic model's per-state α sampler over
+    // all documents. `estimate_alpha = false` skips this (the dominant
+    // non-sweep cost) and uses a fixed symmetric `alpha` — faster, at the price
+    // of the R-matching asymmetric prior.
+    let num_keyword_topics = model.num_keyword_topics;
+    let doc_len: Vec<f64> = docs
+        .iter()
+        .map(|d| d.iter().map(|&w| model.vocab_weights[w as usize]).sum())
+        .collect();
+    let min_v = shrinkp(1e-9);
+    let max_v = shrinkp(100.0);
+    let mut alpha_vec = if estimate_alpha {
+        vec![50.0 / num_topics as f64; num_topics] // keyATM's start; then learned
+    } else {
+        vec![alpha; num_topics] // fixed symmetric
+    };
+    let mut doc_alpha: Vec<Vec<f64>> = vec![alpha_vec.clone(); docs.len()];
 
-    for _ in 0..iters {
+    for it in 0..iters {
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        if estimate_alpha {
+            dyn_sample_alpha_state(
+                &mut alpha_vec, num_keyword_topics, 0, docs.len() - 1, &model.ndk, &doc_len,
+                1.0, 1.0, 2.0, 1.0, min_v, max_v, rng,
+            );
+            for row in doc_alpha.iter_mut() {
+                row.clone_from(&alpha_vec);
+            }
+        }
+        if record_ll(it + 1, ll_interval, iters) {
+            model.alpha_vec = Some(alpha_vec.clone());
+            model
+                .log_likelihood_history
+                .push((it + 1, model.model_loglik(), model.perplexity()));
+            // The alpha trace (plot_alpha) is only meaningful when alpha is being
+            // learned; with a fixed symmetric prior it would be a flat line.
+            if estimate_alpha {
+                model.alpha_history.push((it + 1, alpha_vec.clone()));
+            }
+            if num_keyword_topics > 0 {
+                model.pi_history.push((it + 1, model.keyword_rate()));
+            }
+        }
     }
+    model.alpha_vec = Some(alpha_vec);
     model
 }
 
@@ -897,9 +1080,22 @@ fn init_state<R: Rng>(
         vocab_weights,
         lambda: None,
         features: None,
+        prior_offset: None,
         dynamic: None,
+        alpha_vec: None,
+        log_likelihood_history: Vec::new(),
+        alpha_history: Vec::new(),
+        pi_history: Vec::new(),
     };
     (model, assignments, ki)
+}
+
+/// Whether to record the predictive log-likelihood at 1-based sweep `iter`.
+/// Records every `interval` sweeps (and always the final one) so the trace
+/// ends at the model's returned state; `interval == 0` disables tracing.
+#[inline]
+fn record_ll(iter: usize, interval: usize, iters: usize) -> bool {
+    interval > 0 && (iter % interval == 0 || iter == iters)
 }
 
 /// Fit a keyATM **Covariate** model. The document-topic prior is a
@@ -925,12 +1121,21 @@ pub fn fit_keyatm_cov<R: Rng>(
     burn_in: usize,
     prior_variance: f64,
     lbfgs_iters: usize,
+    ll_interval: usize,
     weights: WeightScheme,
     num_threads: usize,
+    offset: Option<&[Vec<f64>]>,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
     assert_eq!(features.len(), docs.len(), "features rows must equal number of documents");
+    if let Some(off) = offset {
+        assert_eq!(off.len(), docs.len(), "offset rows must equal number of documents");
+        assert!(
+            off.iter().all(|r| r.len() == num_topics),
+            "offset columns must equal num_topics"
+        );
+    }
 
     // α is replaced by the covariate prior; pass a nominal 1.0 for the struct.
     let (mut model, mut assignments, ki) = init_state(
@@ -938,7 +1143,13 @@ pub fn fit_keyatm_cov<R: Rng>(
     );
 
     let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
-    let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+    let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
+    // So the log-likelihood trace uses the covariate doc-topic prior: doc_topic()
+    // takes the (lambda, features) path only when both are set on the model.
+    if ll_interval > 0 {
+        model.features = Some(features.to_vec());
+        model.prior_offset = offset.map(|o| o.to_vec());
+    }
 
     for it in 0..iters {
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
@@ -951,13 +1162,23 @@ pub fn fit_keyatm_cov<R: Rng>(
                 num_features,
                 prior_variance,
                 lbfgs_iters,
+                offset,
             );
-            doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+            doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
+        }
+        if record_ll(it + 1, ll_interval, iters) {
+            model.lambda = Some(lambda.clone());
+            model.prior_offset = offset.map(|o| o.to_vec());
+            model
+                .log_likelihood_history
+                .push((it + 1, model.model_loglik(), model.perplexity()));
+            model.pi_history.push((it + 1, model.keyword_rate()));
         }
     }
 
     model.lambda = Some(lambda);
     model.features = Some(features.to_vec());
+    model.prior_offset = offset.map(|o| o.to_vec());
     model
 }
 
@@ -1109,6 +1330,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
     eta1_reg: f64,
     eta2_reg: f64,
     iters: usize,
+    ll_interval: usize,
     weights: WeightScheme,
     num_threads: usize,
     rng: &mut R,
@@ -1193,7 +1415,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
 
     let mut prk = vec![vec![0.0f64; num_states]; num_time];
 
-    for _ in 0..iters {
+    for it in 0..iters {
         // 1. Token (z, s) sweep with each doc's α tied to its segment's state.
         let doc_alpha: Vec<Vec<f64>> = time_index
             .iter()
@@ -1316,6 +1538,23 @@ pub fn fit_keyatm_dynamic<R: Rng>(
             p_est[r][r] = pii;
             p_est[r][r + 1] = 1.0 - pii;
         }
+
+        if record_ll(it + 1, ll_interval, iters) {
+            // doc_topic()'s dynamic path needs the current HMM state; install a
+            // snapshot so the per-token log-likelihood reflects it.
+            model.dynamic = Some(DynamicState {
+                num_states,
+                num_time,
+                time_index: time_index.to_vec(),
+                alphas: alphas.clone(),
+                r_est: r_est.clone(),
+                p_est: p_est.clone(),
+            });
+            model
+                .log_likelihood_history
+                .push((it + 1, model.model_loglik(), model.perplexity()));
+            model.pi_history.push((it + 1, model.keyword_rate()));
+        }
     }
 
     model.dynamic = Some(DynamicState {
@@ -1385,7 +1624,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -1432,7 +1671,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, WeightScheme::None, 1, &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -1468,7 +1707,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         let d = docs.len();
@@ -1526,7 +1765,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         let model = fit_keyatm_dynamic(
             &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0,
-            2.0, 1.0, 300, WeightScheme::None, 1, &mut rng,
+            2.0, 1.0, 300, 0, WeightScheme::None, 1, &mut rng,
         );
 
         let dyn_ = model.dynamic.as_ref().expect("dynamic state present");
@@ -1560,10 +1799,10 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(9);
         let mut r2 = ChaCha8Rng::seed_from_u64(9);
         let m1 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, WeightScheme::None, 1, &mut r1,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, &mut r1,
         );
         let m2 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, WeightScheme::None, 1, &mut r2,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, &mut r2,
         );
         assert_eq!(
             m1.dynamic.as_ref().unwrap().r_est,
@@ -1589,8 +1828,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, WeightScheme::None, 1, &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, WeightScheme::None, 1, &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
@@ -1602,5 +1841,42 @@ mod tests {
             m2.doc_topic(),
             "doc_topic() differs between two identical-seed runs"
         );
+    }
+
+    #[test]
+    fn log_likelihood_trace_is_recorded_and_rises() {
+        // The per-token log-likelihood trace should be populated at the requested
+        // cadence (plus the final sweep) and trend upward as Gibbs converges.
+        let v = 30usize;
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        for b in 0..3usize {
+            let off = (b * 10) as u32;
+            for d in 0..80usize {
+                docs.push((0..6).map(|i| off + ((i + d) % 10) as u32).collect());
+            }
+        }
+        let keywords = vec![vec![0usize, 1], vec![10, 11], vec![]];
+
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let model = fit_keyatm(
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, &mut rng,
+        );
+        let h = &model.log_likelihood_history;
+        // iters=60, interval=10 -> sweeps 10,20,30,40,50,60.
+        assert_eq!(h.iter().map(|&(i, _, _)| i).collect::<Vec<_>>(), vec![10, 20, 30, 40, 50, 60]);
+        // (iter, collapsed log-likelihood < 0, perplexity > 1).
+        assert!(h.iter().all(|&(_, ll, ppl)| ll.is_finite() && ll < 0.0 && ppl > 1.0));
+        // The collapsed log-likelihood rises (toward 0) as Gibbs converges.
+        assert!(
+            h.last().unwrap().1 >= h.first().unwrap().1 - 1e-6,
+            "log-likelihood degraded: {h:?}"
+        );
+
+        // interval 0 disables tracing.
+        let mut rng2 = ChaCha8Rng::seed_from_u64(3);
+        let none = fit_keyatm(
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, &mut rng2,
+        );
+        assert!(none.log_likelihood_history.is_empty());
     }
 }

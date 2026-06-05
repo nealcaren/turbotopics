@@ -41,6 +41,33 @@ For non-linear time trends and interactions, build the design matrix with
 `stm.spline` and `stm.interaction`, the same `~ s(year)` and `~ a*b` you'd write
 in R.
 
+## It is not just for STM
+
+`topica.estimate_effect` regresses *any* model's θ on covariates, and
+`topica.by_strata` (mean prevalence by group, with intervals) and
+`topica.top_topics` work on any model's θ too.
+
+STM and CTM have a logistic-normal posterior, so `posterior_theta_samples` draws
+from it directly. A Gibbs model (LDA, keyATM, SeededLDA, ...) has no such
+posterior, but each document's θ still has a Dirichlet conditional given its
+length, so `dirichlet_theta_samples` gives you draws to feed the same
+method-of-composition machinery:
+
+```python
+import numpy as np, topica
+
+model = topica.LDA(num_topics=20, seed=1)
+model.fit(docs, iterations=1000)
+
+lengths = np.array([len(d) for d in docs])
+draws = topica.dirichlet_theta_samples(model.doc_topic, lengths, nsims=50, seed=0)
+effects = topica.estimate_effect(draws, X, feature_names=names)
+```
+
+Pass the point θ (`model.doc_topic`) instead of draws and you get a plain OLS fit
+with no uncertainty propagation, which is the right baseline but understates the
+standard errors.
+
 ## Cluster your standard errors
 
 Text data is almost always **nested**: multiple speeches by the same legislator,

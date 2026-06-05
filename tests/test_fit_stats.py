@@ -330,6 +330,7 @@ class TestCoherence:
 
 DIAG_KEYS = frozenset(
     {"topic", "tokens", "coherence", "exclusivity", "effective_words",
+     "document_entropy", "uniform_dist", "corpus_dist",
      "rank1_docs", "alpha", "top_words"}
 )
 

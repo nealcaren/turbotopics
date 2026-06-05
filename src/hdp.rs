@@ -36,6 +36,11 @@ pub struct HdpModel {
     pub beta_u: f64,        // leftover stick mass (the "new topic" weight)
     pub z: Vec<Vec<usize>>, // per-document token topic assignments
     pub njk: Vec<Vec<u32>>, // num_docs × K document-topic counts
+    /// Discovery + convergence trace, one entry per recorded sweep:
+    /// `(iteration, num_active_topics, per-token log-likelihood, alpha, gamma)`.
+    /// The topic count and the (resampled) concentrations show the
+    /// nonparametric model settling on K; the log-likelihood shows convergence.
+    pub trace: Vec<(usize, usize, f64, f64, f64)>,
 }
 
 impl HdpModel {
@@ -76,6 +81,33 @@ impl HdpModel {
                 row
             })
             .collect()
+    }
+
+    /// Per-token predictive log-likelihood `(1/N) Σ_d Σ_{w∈d} log Σ_k θ_{d,k}
+    /// β_{k,w}` — a convergence-trackable score over the current estimates.
+    /// Returns `NaN` for an empty corpus.
+    pub fn corpus_log_likelihood(&self, docs: &[Vec<u32>]) -> f64 {
+        let beta = self.topic_word(); // K×V
+        let theta = self.doc_topic(); // D×K
+        let k = self.num_topics();
+        let mut ll = 0.0f64;
+        let mut n = 0usize;
+        for (d, doc) in docs.iter().enumerate() {
+            for &word in doc {
+                let w = word as usize;
+                let mut p = 0.0f64;
+                for t in 0..k {
+                    p += theta[d][t] * beta[t][w];
+                }
+                ll += p.max(1e-300).ln();
+                n += 1;
+            }
+        }
+        if n == 0 {
+            f64::NAN
+        } else {
+            ll / n as f64
+        }
     }
 }
 
@@ -322,6 +354,7 @@ impl HdpModel {
 /// the concentrations α0, γ (recommended — fixed concentrations make K very
 /// sensitive to their values).
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn fit_hdp<R: Rng>(
     docs: &[Vec<u32>],
     num_types: usize,
@@ -330,6 +363,7 @@ pub fn fit_hdp<R: Rng>(
     eta: f64,
     iters: usize,
     resample_conc: bool,
+    report_interval: usize,
     rng: &mut R,
 ) -> HdpModel {
     let mut model = HdpModel {
@@ -343,6 +377,7 @@ pub fn fit_hdp<R: Rng>(
         beta_u: 1.0, // entire stick is initially "unused"
         z: docs.iter().map(|d| vec![0usize; d.len()]).collect(),
         njk: vec![Vec::new(); docs.len()],
+        trace: Vec::new(),
     };
 
     // Sequential CRF init: place each token in turn, growing topics as needed.
@@ -354,13 +389,20 @@ pub fn fit_hdp<R: Rng>(
     // Establish a proper β from the initial table counts.
     model.resample_beta(rng);
 
-    for _ in 0..iters {
+    for it in 0..iters {
         model.sweep(docs, rng);
         model.compact();
         let (m_total, t_j) = model.resample_beta(rng);
         if resample_conc {
             model.resample_gamma(m_total, rng);
             model.resample_alpha(&t_j, rng);
+        }
+        // Record the discovery/convergence trace (always the final sweep too).
+        if report_interval > 0 && ((it + 1) % report_interval == 0 || it + 1 == iters) {
+            let ll = model.corpus_log_likelihood(docs);
+            model
+                .trace
+                .push((it + 1, model.num_topics(), ll, model.alpha, model.gamma));
         }
     }
     model.compact();
@@ -387,7 +429,7 @@ mod tests {
             let doc: Vec<u32> = (0..12).map(|i| blk[(i + d) % blk.len()]).collect();
             docs.push(doc);
         }
-        let model = fit_hdp(&docs, v, 1.0, 1.0, 0.01, 100, true, &mut rng);
+        let model = fit_hdp(&docs, v, 1.0, 1.0, 0.01, 100, true, 0, &mut rng);
         let k = model.num_topics();
         // Auto-K is approximate and HDP tends to slightly over-segment; the firm
         // requirement is that it recovers a sane count, not the exact 5.
@@ -416,9 +458,31 @@ mod tests {
             .collect();
         let mut r1 = ChaCha8Rng::seed_from_u64(7);
         let mut r2 = ChaCha8Rng::seed_from_u64(7);
-        let m1 = fit_hdp(&docs, 10, 1.0, 1.0, 0.1, 20, true, &mut r1);
-        let m2 = fit_hdp(&docs, 10, 1.0, 1.0, 0.1, 20, true, &mut r2);
+        let m1 = fit_hdp(&docs, 10, 1.0, 1.0, 0.1, 20, true, 0, &mut r1);
+        let m2 = fit_hdp(&docs, 10, 1.0, 1.0, 0.1, 20, true, 0, &mut r2);
         assert_eq!(m1.num_topics(), m2.num_topics());
         assert_eq!(m1.nk, m2.nk);
+    }
+
+    #[test]
+    fn discovery_trace_records_and_converges() {
+        // Five disjoint-vocabulary topics; with a trace cadence the recorded
+        // K should land near 5 and the log-likelihood should rise.
+        let blocks: Vec<Vec<u32>> = (0..5).map(|b| (b * 6..b * 6 + 6).collect()).collect();
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let docs: Vec<Vec<u32>> = (0..250)
+            .map(|d| (0..12).map(|i| blocks[d % 5][(i + d) % 6]).collect())
+            .collect();
+        let model = fit_hdp(&docs, 30, 1.0, 1.0, 0.01, 120, true, 10, &mut rng);
+
+        let trace = &model.trace;
+        // iters=120, interval=10 -> sweeps 10,20,...,120.
+        assert_eq!(trace.iter().map(|t| t.0).collect::<Vec<_>>(),
+                   (1..=12).map(|i| i * 10).collect::<Vec<_>>());
+        // Topic count and log-likelihood are sane; the final K is recorded.
+        assert!(trace.iter().all(|t| t.1 >= 1 && t.2.is_finite() && t.2 < 0.0));
+        assert_eq!(trace.last().unwrap().1, model.num_topics());
+        // The fit improves from the first recorded sweep to the last.
+        assert!(trace.last().unwrap().2 > trace.first().unwrap().2);
     }
 }

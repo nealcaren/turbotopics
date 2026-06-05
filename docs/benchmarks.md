@@ -77,6 +77,29 @@ We report this straight: for plain LDA the two are interchangeable on speed.
 topica's advantage is the STM, covariate-effect, and diagnostics stack built
 around the sampler, not raw LDA throughput.
 
+## keyATM vs R `keyATM`
+
+topica's keyATM reproduces the R package's keyword-assisted model and is
+[validated against it](replications/keyatm-dynamic.md): the same keyword topics,
+the same per-sweep asymmetric-α estimation, the same `model_fit` log-likelihood.
+On speed it matches R's C++ sampler single-threaded and adds a
+document-partitioned parallel sweep that R has no equivalent of. Same keywords,
+same number of Gibbs sweeps, α learned each sweep on both sides; fit time only.
+
+| docs | vocab | K | sweeps | topica (1 core) | topica (4 cores) | R `keyATM` |
+|-----:|------:|---:|-------:|----------------:|-----------------:|-----------:|
+| 2,000 | 2,632 | 10 | 1,000 | 25.9s | **12.1s** | 24.5s |
+
+So topica is at parity with R single-threaded and about **2× faster on four
+cores**. If you do not need the R-matching asymmetric prior, `estimate_alpha=False`
+fixes a symmetric α and skips the per-sweep slice sampler for a further 15 to 20%
+(more at larger K). This row, with the STM and LDA comparisons above, is
+reproducible in one command:
+
+```bash
+python benchmarks/speed_vs_r.py
+```
+
 ## Large-K sampling: SparseLDA vs LightLDA
 
 [LightLDA](guides/models.md#sampler-choice-sparselda-vs-lightlda)'s

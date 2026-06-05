@@ -513,3 +513,49 @@ class TestSTMCoherence:
         assert (c <= 0).all(), (
             f"UMass coherence values must be <= 0; got {c}"
         )
+
+
+# ---------------------------------------------------------------------------
+# EM convergence (em_tol / bound / converged) — matches R stm's emtol stop
+# ---------------------------------------------------------------------------
+
+class TestSTMConvergence:
+    def test_bound_history_monotone_increasing(self, stm_corpus_and_x):
+        docs, x_2d = stm_corpus_and_x
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=200, em_tol=1e-6)
+        h = m.bound_history
+        assert len(h) >= 2
+        assert all(h[i + 1] >= h[i] - 1e-6 for i in range(len(h) - 1))
+        assert np.isfinite(m.bound)
+        assert m.bound == pytest.approx(h[-1])
+
+    def test_converges_before_cap(self, stm_corpus_and_x):
+        docs, x_2d = stm_corpus_and_x
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=500, em_tol=1e-5)
+        assert m.converged is True
+        assert len(m.bound_history) < 500
+
+    def test_em_tol_zero_runs_full_cap(self, stm_corpus_and_x):
+        docs, x_2d = stm_corpus_and_x
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=15, em_tol=0.0)
+        assert m.converged is False
+        assert len(m.bound_history) == 15
+
+    def test_convergence_state_survives_save_load(self, stm_corpus_and_x, tmp_path):
+        docs, x_2d = stm_corpus_and_x
+        m = STM(num_topics=2, seed=1)
+        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=500, em_tol=1e-5)
+        path = str(tmp_path / "stm.bin")
+        m.save(path)
+        reloaded = STM.load(path)
+        assert reloaded.converged == m.converged
+        assert reloaded.bound == pytest.approx(m.bound)
+        assert reloaded.bound_history == pytest.approx(m.bound_history)
+
+    def test_accessors_require_fit(self):
+        m = STM(num_topics=2)
+        with pytest.raises(RuntimeError):
+            _ = m.bound

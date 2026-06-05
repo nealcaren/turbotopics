@@ -43,19 +43,28 @@ fn log_gamma(mut z: f64) -> f64 {
     result
 }
 
-/// Per-document, per-topic prior `α_{d,t} = exp(λ_t · x_d)`.
+/// Per-document, per-topic prior `α_{d,t} = exp(λ_t · x_d + s_{d,t})`.
 ///
 /// `lambda` is `[num_topics][num_features]`, `features` is
-/// `[num_docs][num_features]`; returns `[num_docs][num_topics]`.
-pub fn compute_doc_alpha(lambda: &[Vec<f64>], features: &[Vec<f64>]) -> Vec<Vec<f64>> {
+/// `[num_docs][num_features]`; returns `[num_docs][num_topics]`. The optional
+/// `offset` is a fixed `[num_docs][num_topics]` term added inside the exponent
+/// (the embedding anchor `s_{d,t}`); pass `None` for the plain DMR prior.
+pub fn compute_doc_alpha(
+    lambda: &[Vec<f64>],
+    features: &[Vec<f64>],
+    offset: Option<&[Vec<f64>]>,
+) -> Vec<Vec<f64>> {
     features
         .iter()
-        .map(|x| {
+        .enumerate()
+        .map(|(d, x)| {
             lambda
                 .iter()
-                .map(|lt| {
+                .enumerate()
+                .map(|(t, lt)| {
                     let dot: f64 = lt.iter().zip(x).map(|(l, xi)| l * xi).sum();
-                    dot.exp()
+                    let off = offset.map_or(0.0, |o| o[d][t]);
+                    (dot + off).exp()
                 })
                 .collect()
         })
@@ -130,8 +139,10 @@ pub fn run_sweep_dmr<R: Rng>(
 ///             + Σ_t ( logΓ(n_{d,t} + α_{d,t}) − logΓ(α_{d,t}) ) ]
 ///       − 1/(2σ²) Σ_{t,f} λ_{t,f}²
 /// ```
-/// with `α_{d,t} = exp(λ_t · x_d)` and `α_{d,·} = Σ_t α_{d,t}`. The gradient
-/// uses `∂α_{d,t}/∂λ_{t,f} = α_{d,t} · x_{d,f}`.
+/// with `α_{d,t} = exp(λ_t · x_d + s_{d,t})` and `α_{d,·} = Σ_t α_{d,t}`. The
+/// optional `offset` `s` is a fixed `[num_docs][num_topics]` term added inside
+/// the exponent; since it is constant in `λ`, the gradient still uses
+/// `∂α_{d,t}/∂λ_{t,f} = α_{d,t} · x_{d,f}`.
 ///
 /// `doc_topic_counts` is `[num_docs][num_topics]`. Returns `(value, gradient)`
 /// where `gradient` matches the shape of `lambda` (`[num_topics][num_features]`).
@@ -142,6 +153,7 @@ pub fn dmr_objective_and_gradient(
     num_topics: usize,
     num_features: usize,
     prior_variance: f64,
+    offset: Option<&[Vec<f64>]>,
 ) -> (f64, Vec<Vec<f64>>) {
     let mut value = 0.0f64;
     let mut grad = vec![vec![0.0f64; num_features]; num_topics];
@@ -152,7 +164,8 @@ pub fn dmr_objective_and_gradient(
         let mut alpha_sum = 0.0f64;
         for t in 0..num_topics {
             let dot: f64 = lambda[t].iter().zip(x).map(|(l, xi)| l * xi).sum();
-            let a = dot.exp();
+            let off = offset.map_or(0.0, |o| o[d][t]);
+            let a = (dot + off).exp();
             alpha[t] = a;
             alpha_sum += a;
         }
@@ -306,6 +319,7 @@ pub fn optimize_lambda(
     num_features: usize,
     prior_variance: f64,
     max_iter: usize,
+    offset: Option<&[Vec<f64>]>,
 ) {
     let mut x0 = Vec::with_capacity(num_topics * num_features);
     for lt in lambda.iter() {
@@ -327,6 +341,7 @@ pub fn optimize_lambda(
                 num_topics,
                 num_features,
                 prior_variance,
+                offset,
             );
             let mut g = Vec::with_capacity(num_topics * num_features);
             for gt in &grad {
@@ -373,7 +388,7 @@ mod tests {
         let sigma2 = 10.0;
 
         let (_, grad) = dmr_objective_and_gradient(
-            &lambda, &features, &counts, num_topics, num_features, sigma2,
+            &lambda, &features, &counts, num_topics, num_features, sigma2, None,
         );
 
         let eps = 1e-6;
@@ -384,9 +399,9 @@ mod tests {
                 lp[t][f] += eps;
                 lm[t][f] -= eps;
                 let (vp, _) =
-                    dmr_objective_and_gradient(&lp, &features, &counts, num_topics, num_features, sigma2);
+                    dmr_objective_and_gradient(&lp, &features, &counts, num_topics, num_features, sigma2, None);
                 let (vm, _) =
-                    dmr_objective_and_gradient(&lm, &features, &counts, num_topics, num_features, sigma2);
+                    dmr_objective_and_gradient(&lm, &features, &counts, num_topics, num_features, sigma2, None);
                 let numeric = (vp - vm) / (2.0 * eps);
                 assert!(
                     (numeric - grad[t][f]).abs() < 1e-4,
@@ -417,7 +432,7 @@ mod tests {
             }
         }
         let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
-        optimize_lambda(&mut lambda, &features, &counts, num_topics, num_features, 100.0, 100);
+        optimize_lambda(&mut lambda, &features, &counts, num_topics, num_features, 100.0, 100, None);
 
         // The covariate weight should push topic 1 up and topic 0 down.
         let effect_topic1 = lambda[1][1] - lambda[0][1];

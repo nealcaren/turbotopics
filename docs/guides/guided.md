@@ -102,11 +102,47 @@ Documents may be passed in any order; they are sorted by timestamp internally an
 `doc_topic` is returned in the original order. Plot a column of `time_prevalence`
 against `time_labels` to see a topic's trajectory.
 
+## Embedding-guided topics (EmbeddingLDA)
+
+`SeededLDA` and `KeyATM` ask you to name the seed words. `EmbeddingLDA` instead
+discovers them from a pre-trained embedding space: it clusters the vocabulary's
+embeddings into `num_topics` semantic groups, seeds each topic with the words
+nearest its cluster centroid, and fits a `SeededLDA` underneath. The embeddings
+warm-start where topics form; the Gibbs sampler can still override any seed the
+text contradicts, so this is a prior, not a constraint.
+
+You supply the embeddings (topica does not call any model itself), aligned to
+the vocabulary:
+
+```python
+from sentence_transformers import SentenceTransformer
+import topica
+
+vocab = sorted({w for d in docs for w in d})
+emb = SentenceTransformer("all-MiniLM-L6-v2").encode(vocab)
+
+model = topica.EmbeddingLDA(num_topics=10, embeddings=emb, vocabulary=vocab,
+                            top_m=20, weight=1.0)
+model.fit(docs, iters=1000)
+for i, words in enumerate(model.top_words(8)):
+    print(f"Topic {i}:", ", ".join(w for w, _ in words))
+```
+
+`top_m` sets how many of each cluster's nearest words become seeds, and `weight`
+how hard they anchor (a seed gets `weight * 100` prior pseudocounts; raise it to
+hold topics closer to their semantic cluster, lower it to let the data lead).
+The whole fitted-model surface (`topic_word`, `doc_topic`, `top_words`,
+`coherence`, ...) is delegated to the underlying `SeededLDA`, and `model.seeds`
+holds the embedding-derived seed sets. `topica.embedding_seeds(...)` exposes just
+the clustering step if you want to inspect or edit the seeds before fitting.
+
 ## Which to use
 
 - **`KeyATM`** is the better-validated choice and the one with the political-
   science following; prefer it for new work.
 - **`SeededLDA`** is simpler and maps directly onto the `seededlda` workflow.
+- **`EmbeddingLDA`** when you have embeddings but no hand-picked seed list, and
+  want the topic structure anchored to semantic similarity.
 
 Both feed the same [diagnostics](diagnostics.md), [effects](../publishing/effects.md),
 and [validation](../publishing/validation.md) as every other model.

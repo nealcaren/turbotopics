@@ -20,12 +20,25 @@ from ._topica import (
     HLDA as HLDA,
     SeededLDA as SeededLDA,
     KeyATM as KeyATM,
+    Top2Vec as Top2Vec,
+    BERTopic as BERTopic,
+    ETM as ETM,
     Corpus as Corpus,
     tokenize as tokenize,
     DEFAULT_TOKEN_REGEX as DEFAULT_TOKEN_REGEX,
     __version__ as __version__,
 )
 from . import stm as stm
+from . import keyatm as keyatm
+from . import effects as effects
+from .effects import (
+    estimate_effect as estimate_effect,
+    by_strata as by_strata,
+    top_topics as top_topics,
+    posterior_theta_samples as posterior_theta_samples,
+    dirichlet_theta_samples as dirichlet_theta_samples,
+)
+from .embedding import EmbeddingLDA as EmbeddingLDA, embedding_seeds as embedding_seeds
 
 def one_hot(
     values: Sequence[object],
@@ -143,6 +156,53 @@ def topic_stability(runs: Any, *, topn: int = 10, metric: str = "cosine") -> flo
     ...
 
 
+# Model-neutral fitted-model analysis surface (also in topica.report).
+def topic_info(
+    model: Any,
+    texts: Sequence[str] | None = None,
+    *,
+    n: int = 8,
+    labels: Sequence[str] | None = None,
+) -> list[dict]:
+    """One summary row per topic: topic, label, size, prevalence, top_words
+    (and representative_docs when texts is given). Adds a topic=-1 outlier row
+    for clustering models with outliers."""
+    ...
+
+
+def topic_sizes(model: Any) -> dict:
+    """Per-topic hard size and expected mass: keys size, mass, outliers."""
+    ...
+
+
+def topic_labels(model: Any) -> list[str]:
+    """Effective per-topic labels (custom labels over topic_names)."""
+    ...
+
+
+def set_topic_labels(model: Any, mapping: dict[int, str]) -> None:
+    """Store custom per-topic labels, keyed by id(model)."""
+    ...
+
+
+def representative_docs(
+    model: Any, texts: Sequence[str], *, topic: int | None = None, n: int = 5
+) -> Any:
+    """Each topic's highest-loading documents. A list for one topic, else
+    {topic_id: [docs]} for every topic."""
+    ...
+
+
+def topics_over_time(model: Any, timestamps: Sequence[object], *, normalize: bool = True) -> dict:
+    """Mean topic prevalence per distinct timestamp: keys labels, prevalence."""
+    ...
+
+
+def topics_per_class(model: Any, groups: Sequence[object], *, ci: float = 0.95) -> list:
+    """Mean topic prevalence within each group (wraps by_strata)."""
+    ...
+
+
 __all__ = [
     "LDA",
     "DMR",
@@ -172,6 +232,13 @@ __all__ = [
     "check_residuals",
     "align_topics",
     "topic_stability",
+    "topic_info",
+    "topic_sizes",
+    "topic_labels",
+    "set_topic_labels",
+    "representative_docs",
+    "topics_over_time",
+    "topics_per_class",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
 ]

@@ -118,3 +118,62 @@ class TestDeterminismAndApi:
             HDP(alpha=0.0)
         with pytest.raises(ValueError):
             HDP(eta=-1.0)
+
+
+class TestDiscoveryTrace:
+    """The discovery/convergence trace — HDP's headline diagnostic."""
+
+    def test_traces_recorded_and_aligned(self):
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=120, report_interval=10)
+        tch = m.topic_count_history
+        llh = m.log_likelihood_history
+        ch = m.concentration_history
+        assert [it for it, _ in tch] == list(range(10, 121, 10))
+        # All three traces share the same iteration grid.
+        assert [it for it, _ in tch] == [it for it, _ in llh]
+        assert [it for it, _ in tch] == [it for it, _, _ in ch]
+        assert all(k >= 1 for _, k in tch)
+        assert all(np.isfinite(ll) and ll < 0 for _, ll in llh)
+
+    def test_auto_spacing(self):
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=150)  # report_interval=0 -> auto
+        assert len(m.topic_count_history) == 50
+
+    def test_final_count_matches_num_topics(self):
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=120, report_interval=20)
+        assert m.topic_count_history[-1][1] == m.num_topics
+
+    def test_log_likelihood_improves(self):
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=120, report_interval=5)
+        lls = [ll for _, ll in m.log_likelihood_history]
+        assert lls[-1] > lls[0]
+
+    def test_trace_survives_save_load(self, tmp_path):
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=80, report_interval=10)
+        path = str(tmp_path / "hdp.bin")
+        m.save(path)
+        reloaded = HDP.load(path)
+        assert reloaded.topic_count_history == m.topic_count_history
+        assert reloaded.log_likelihood_history == m.log_likelihood_history
+        assert reloaded.concentration_history == m.concentration_history
+
+    def test_plot_topic_discovery(self):
+        import topica
+
+        plt = pytest.importorskip("matplotlib.pyplot")
+        docs, _, _ = _planted_corpus()
+        m = HDP(seed=1)
+        m.fit(docs, iters=80, report_interval=10)
+        ax = topica.plot_topic_discovery(m)
+        assert ax.get_xlabel() == "Gibbs iteration"
+        plt.close("all")

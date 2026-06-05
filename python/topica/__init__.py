@@ -19,6 +19,9 @@ from ._topica import (
     GSDMM,
     SeededLDA,
     KeyATM,
+    Top2Vec,
+    BERTopic,
+    ETM,
     PA,
     HLDA,
     Corpus,
@@ -89,7 +92,16 @@ def summary(model, topn=8):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
+from . import effects  # noqa: E402  (model-neutral prevalence analysis)
 from . import diagnostics  # noqa: E402
+from .effects import (  # noqa: E402  general, work on any model's theta
+    estimate_effect,
+    by_strata,
+    top_topics,
+    posterior_theta_samples,
+    dirichlet_theta_samples,
+)
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
     coherence,
@@ -109,13 +121,25 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     bootstrap_stability,
     search_k,
     plot_search_k,
+    plot_topic_discovery,
     relevance,
     prepare_pyldavis,
     check_residuals,
     align_topics,
     topic_stability,
 )
+from . import report  # noqa: E402  (model-neutral fitted-model analysis surface)
+from .report import (  # noqa: E402
+    topic_info,
+    topic_sizes,
+    topic_labels,
+    set_topic_labels,
+    representative_docs,
+    topics_over_time,
+    topics_per_class,
+)
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
+from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
 from .preprocess import split_documents  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 from .frames import from_dataframe, align  # noqa: E402
@@ -135,12 +159,16 @@ __all__ = [
     "GSDMM",
     "SeededLDA",
     "KeyATM",
+    "Top2Vec",
+    "BERTopic",
+    "ETM",
     "PA",
     "HLDA",
     "Corpus",
     "tokenize",
     "one_hot",
     "stm",
+    "keyatm",
     "phrases",
     "coherence",
     "topic_diversity",
@@ -154,6 +182,7 @@ __all__ = [
     "find_thoughts",
     "search_k",
     "plot_search_k",
+    "plot_topic_discovery",
     "relevance",
     "prepare_pyldavis",
     "check_residuals",
@@ -162,8 +191,23 @@ __all__ = [
     "find_thoughts_html",
     "quality_frontier",
     "bootstrap_stability",
+    "report",
+    "topic_info",
+    "topic_sizes",
+    "topic_labels",
+    "set_topic_labels",
+    "representative_docs",
+    "topics_over_time",
+    "topics_per_class",
     "fighting_words",
     "top_fighting_words",
+    "estimate_effect",
+    "by_strata",
+    "top_topics",
+    "posterior_theta_samples",
+    "dirichlet_theta_samples",
+    "EmbeddingLDA",
+    "embedding_seeds",
     "split_documents",
     "from_dataframe",
     "align",
