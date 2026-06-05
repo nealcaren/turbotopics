@@ -39,6 +39,12 @@ pyo3 = { version = "0.22", features = ["abi3-py39"], optional = true }
 numpy = { version = "0.22", optional = true }
 # gzip for LDA.save_state (MALLET --output-state .gz); python-binding only.
 flate2 = { version = "1", optional = true }
+# Embedding-native model branch (Top2Vec/BERTopic/ETM/...), behind the
+# `embeddings` feature so the lean core build never pulls them in.
+# petal-clustering supplies HDBSCAN/DBSCAN (BLAS-free); ndarray 0.17 is its
+# matrix type (numpy 0.22 carries ndarray 0.16, so we bridge via raw f64 data).
+petal-clustering = { version = "0.13", optional = true }
+ndarray = { version = "0.17", optional = true }
 # rayon parallelizes the variational E-step (ctm.rs) and the LDA sweep
 # (python.rs); kept non-optional so the parallel path compiles and is exercised
 # by the default `cargo test` build, not only under the `python` feature.
@@ -46,7 +52,11 @@ rayon = "1"
 
 [features]
 # maturin enables this (see pyproject.toml -> [tool.maturin] features).
-python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module"]
+# `python` implies `embeddings` so the PyO3 bindings can expose the embedding
+# models; `embeddings` also builds/tests standalone (`cargo test --features embeddings`).
+python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings"]
+# The embedding-native model branch (clustering pipeline + numerical models).
+embeddings = ["dep:petal-clustering", "dep:ndarray"]
 
 # Whole-program optimization for the shipped wheels and CLI binaries.
 # lto + a single codegen unit let the optimizer inline across the sampler's
