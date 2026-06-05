@@ -1290,7 +1290,14 @@ class KeyATM:
         gamma1: float = 1.0,
         gamma2: float = 1.0,
         seed: int = 42,
-    ) -> None: ...
+        estimate_alpha: bool = True,
+    ) -> None:
+        """estimate_alpha (default True, matching R keyATM) slice-samples an
+        asymmetric document-topic prior alpha each sweep. Set it False for a
+        fixed symmetric alpha: a faster fit (it skips the dominant non-sweep
+        cost) at the price of the R-matching asymmetric prior. The base model
+        only; the covariate and dynamic models always learn their priors."""
+        ...
     @staticmethod
     def weighted_lda(
         num_topics: int,

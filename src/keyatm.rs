@@ -914,6 +914,7 @@ pub fn fit_keyatm<R: Rng>(
     gamma2: f64,
     iters: usize,
     ll_interval: usize,
+    estimate_alpha: bool,
     weights: WeightScheme,
     num_threads: usize,
     rng: &mut R,
@@ -932,7 +933,9 @@ pub fn fit_keyatm<R: Rng>(
     // prior α_k by slice-sampling it each sweep (Gamma priors: (1,1) on keyword
     // topics, (2,1) on regular ones — keyATM's defaults). The whole corpus is a
     // single "state", so we reuse the dynamic model's per-state α sampler over
-    // all documents.
+    // all documents. `estimate_alpha = false` skips this (the dominant
+    // non-sweep cost) and uses a fixed symmetric `alpha` — faster, at the price
+    // of the R-matching asymmetric prior.
     let num_keyword_topics = model.num_keyword_topics;
     let doc_len: Vec<f64> = docs
         .iter()
@@ -940,24 +943,34 @@ pub fn fit_keyatm<R: Rng>(
         .collect();
     let min_v = shrinkp(1e-9);
     let max_v = shrinkp(100.0);
-    let mut alpha_vec = vec![50.0 / num_topics as f64; num_topics];
+    let mut alpha_vec = if estimate_alpha {
+        vec![50.0 / num_topics as f64; num_topics] // keyATM's start; then learned
+    } else {
+        vec![alpha; num_topics] // fixed symmetric
+    };
     let mut doc_alpha: Vec<Vec<f64>> = vec![alpha_vec.clone(); docs.len()];
 
     for it in 0..iters {
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
-        dyn_sample_alpha_state(
-            &mut alpha_vec, num_keyword_topics, 0, docs.len() - 1, &model.ndk, &doc_len,
-            1.0, 1.0, 2.0, 1.0, min_v, max_v, rng,
-        );
-        for row in doc_alpha.iter_mut() {
-            row.clone_from(&alpha_vec);
+        if estimate_alpha {
+            dyn_sample_alpha_state(
+                &mut alpha_vec, num_keyword_topics, 0, docs.len() - 1, &model.ndk, &doc_len,
+                1.0, 1.0, 2.0, 1.0, min_v, max_v, rng,
+            );
+            for row in doc_alpha.iter_mut() {
+                row.clone_from(&alpha_vec);
+            }
         }
         if record_ll(it + 1, ll_interval, iters) {
             model.alpha_vec = Some(alpha_vec.clone());
             model
                 .log_likelihood_history
                 .push((it + 1, model.model_loglik(), model.perplexity()));
-            model.alpha_history.push((it + 1, alpha_vec.clone()));
+            // The alpha trace (plot_alpha) is only meaningful when alpha is being
+            // learned; with a fixed symmetric prior it would be a flat line.
+            if estimate_alpha {
+                model.alpha_history.push((it + 1, alpha_vec.clone()));
+            }
             if num_keyword_topics > 0 {
                 model.pi_history.push((it + 1, model.keyword_rate()));
             }
@@ -1589,7 +1602,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -1636,7 +1649,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, WeightScheme::None, 1, &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -1672,7 +1685,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, &mut rng,
         );
 
         let d = docs.len();
@@ -1793,8 +1806,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, WeightScheme::None, 1, &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, WeightScheme::None, 1, &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
@@ -1824,7 +1837,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(3);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, &mut rng,
         );
         let h = &model.log_likelihood_history;
         // iters=60, interval=10 -> sweeps 10,20,30,40,50,60.
@@ -1840,7 +1853,7 @@ mod tests {
         // interval 0 disables tracing.
         let mut rng2 = ChaCha8Rng::seed_from_u64(3);
         let none = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, WeightScheme::None, 1, &mut rng2,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, &mut rng2,
         );
         assert!(none.log_likelihood_history.is_empty());
     }

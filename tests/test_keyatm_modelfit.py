@@ -115,3 +115,34 @@ def test_history_requires_fit():
     m = topica.KeyATM(SEEDS, num_topics=2)
     with pytest.raises(RuntimeError):
         _ = m.log_likelihood_history
+
+
+def test_estimate_alpha_false_keeps_symmetric_prior():
+    # estimate_alpha=False skips the per-sweep alpha slice sampler (the speed
+    # knob); alpha stays symmetric, so the no-alpha trace is not recorded.
+    docs, _ = _corpus()
+    m = topica.KeyATM(SEEDS, num_topics=4, seed=1, estimate_alpha=False)
+    m.fit(docs, iters=150)
+    # With a fixed symmetric prior there is no learned asymmetric alpha to trace.
+    assert m.alpha_history == []
+    # The fit still produces well-formed topics and pi/log-likelihood traces.
+    assert m.topic_word.shape[0] == 4
+    assert len(m.log_likelihood_history) > 0
+    assert len(m.pi_history) > 0
+
+
+def test_estimate_alpha_default_is_true():
+    docs, _ = _corpus()
+    m = topica.KeyATM(SEEDS, num_topics=4, seed=1)  # default
+    m.fit(docs, iters=150)
+    # The default learns an asymmetric alpha, so the alpha trace is populated.
+    assert len(m.alpha_history) > 0
+
+
+def test_estimate_alpha_deterministic():
+    docs, _ = _corpus()
+    a = topica.KeyATM(SEEDS, num_topics=4, seed=2, estimate_alpha=False)
+    a.fit(docs, iters=100)
+    b = topica.KeyATM(SEEDS, num_topics=4, seed=2, estimate_alpha=False)
+    b.fit(docs, iters=100)
+    assert np.array_equal(a.topic_word, b.topic_word)

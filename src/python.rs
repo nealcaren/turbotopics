@@ -6268,6 +6268,7 @@ pub struct KeyATM {
     gamma1: f64,
     gamma2: f64,
     seed: u64,
+    estimate_alpha: bool,
     fitted: bool,
     topic_names: Vec<String>,
     keyword_rate: Vec<f64>,
@@ -6310,7 +6311,7 @@ impl KeyATM {
     /// topic-word smoothing, and `gamma1`/`gamma2` the Beta prior on the
     /// keyword-vs-regular switch.
     #[new]
-    #[pyo3(signature = (keywords, *, num_topics=None, alpha=0.1, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42))]
+    #[pyo3(signature = (keywords, *, num_topics=None, alpha=0.1, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         keywords: &Bound<'_, PyDict>,
@@ -6321,6 +6322,7 @@ impl KeyATM {
         gamma1: f64,
         gamma2: f64,
         seed: u64,
+        estimate_alpha: bool,
     ) -> PyResult<Self> {
         let (names, words) = parse_seed_dict(keywords)?;
         let k = num_topics.unwrap_or(names.len());
@@ -6337,7 +6339,7 @@ impl KeyATM {
         }
         Ok(KeyATM {
             key_names: names, keywords: words, num_topics: k, alpha, beta, beta_keyword,
-            gamma1, gamma2, seed, fitted: false, topic_names: Vec::new(),
+            gamma1, gamma2, seed, estimate_alpha, fitted: false, topic_names: Vec::new(),
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
@@ -6363,7 +6365,8 @@ impl KeyATM {
         }
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics, alpha, beta,
-            beta_keyword: 0.1, gamma1: 1.0, gamma2: 1.0, seed, fitted: false,
+            beta_keyword: 0.1, gamma1: 1.0, gamma2: 1.0, seed, estimate_alpha: true,
+            fitted: false,
             topic_names: Vec::new(), keyword_rate: Vec::new(), phi: None, theta: None,
             corpus: None, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
@@ -6426,6 +6429,7 @@ impl KeyATM {
         let keys = seed_word_ids(&self.keywords, &corpus.id_to_word, num_topics);
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
+        let estimate_alpha = self.estimate_alpha;
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         let nthreads = num_threads.max(1);
         let weight_scheme = match weights {
@@ -6557,7 +6561,7 @@ impl KeyATM {
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, ll_interval, weight_scheme, nthreads, &mut rng,
+                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, &mut rng,
                 ),
             };
             (m, corpus)
@@ -6739,7 +6743,8 @@ impl KeyATM {
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics: s.num_topics,
             alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
-            gamma2: s.gamma2, seed: s.seed, fitted: s.fitted, topic_names: s.topic_names,
+            gamma2: s.gamma2, seed: s.seed, estimate_alpha: true, fitted: s.fitted,
+            topic_names: s.topic_names,
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
