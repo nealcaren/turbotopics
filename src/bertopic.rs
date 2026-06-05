@@ -61,6 +61,8 @@ pub fn fit_bertopic(
     doc_embeddings: &[Vec<f64>],
     vocab_size: usize,
     n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
     nr_topics: Option<usize>,
@@ -72,7 +74,7 @@ pub fn fit_bertopic(
 
     // (1) reduce, (2) cluster.
     let reduced: Vec<Vec<f64>> = if emb_dim > n_components && n_components > 0 {
-        reduce::pca(doc_embeddings, n_components, seed)
+        reduce::reduce(doc_embeddings, n_components, use_umap, n_neighbors, seed)
     } else {
         doc_embeddings.to_vec()
     };
@@ -275,7 +277,7 @@ mod tests {
     #[test]
     fn recovers_topics_via_ctfidf() {
         let (docs, emb, vocab) = planted(3, 40, 1);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, 15, 2, None, 4, 1, 1);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 1);
         assert!(m.num_topics >= 3, "expected >=3 topics, got {}", m.num_topics);
         // Each topic's top words come from a single planted block (block = ids 0..5,
         // 5..10, 10..15).
@@ -294,16 +296,16 @@ mod tests {
     #[test]
     fn nr_topics_reduces_to_target() {
         let (docs, emb, vocab) = planted(4, 40, 2);
-        let full = fit_bertopic(&docs, &emb, vocab, 5, 15, 2, None, 4, 1, 2);
+        let full = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 2);
         assert!(full.num_topics >= 3);
-        let reduced = fit_bertopic(&docs, &emb, vocab, 5, 15, 2, Some(2), 4, 1, 2);
+        let reduced = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, Some(2), 4, 1, 2);
         assert_eq!(reduced.num_topics, 2, "should reduce to 2 topics");
     }
 
     #[test]
     fn approximate_distribution_favors_own_topic() {
         let (docs, emb, vocab) = planted(3, 40, 3);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, 15, 2, None, 4, 1, 3);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 3);
         // A document made only of block-0 words should put its largest mass on the
         // topic whose top words are block 0.
         let block0_topic = (0..m.num_topics)

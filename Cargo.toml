@@ -45,6 +45,10 @@ flate2 = { version = "1", optional = true }
 # matrix type (numpy 0.22 carries ndarray 0.16, so we bridge via raw f64 data).
 petal-clustering = { version = "0.13", optional = true }
 ndarray = { version = "0.17", optional = true }
+# Faithful UMAP reducer (wilsonzlin/umap-rs): pure Rust, BLAS-free, ndarray 0.17
+# (same version as petal-clustering). Behind the `umap` feature so the default
+# embedding build keeps the BLAS-free randomized-PCA reducer.
+umap-rs = { version = "0.4", optional = true }
 # rayon parallelizes the variational E-step (ctm.rs) and the LDA sweep
 # (python.rs); kept non-optional so the parallel path compiles and is exercised
 # by the default `cargo test` build, not only under the `python` feature.
@@ -57,6 +61,8 @@ rayon = "1"
 python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings"]
 # The embedding-native model branch (clustering pipeline + numerical models).
 embeddings = ["dep:petal-clustering", "dep:ndarray"]
+# Faithful UMAP reducer for the embedding models (opt-in; default is PCA).
+umap = ["embeddings", "dep:umap-rs"]
 
 # Whole-program optimization for the shipped wheels and CLI binaries.
 # lto + a single codegen unit let the optimizer inline across the sampler's

@@ -6290,6 +6290,28 @@ impl SeededLDA {
 // Top2Vec: embedding-clustering topic model (Angelov 2020)
 // ---------------------------------------------------------------------------
 
+/// Parse the `reducer` choice for the embedding models into a `use_umap` flag.
+fn parse_reducer(reducer: &str) -> PyResult<bool> {
+    match reducer {
+        "pca" => Ok(false),
+        "umap" => Ok(true),
+        other => Err(PyValueError::new_err(format!(
+            "unknown reducer {other:?}; expected 'pca' or 'umap'"
+        ))),
+    }
+}
+
+/// Reject `reducer='umap'` when topica was not built with the `umap` feature.
+fn check_umap(use_umap: bool) -> PyResult<()> {
+    if use_umap && !crate::reduce::umap_available() {
+        return Err(PyRuntimeError::new_err(
+            "reducer='umap' requires building topica with the `umap` feature \
+             (maturin develop --features python,umap); the default build uses PCA",
+        ));
+    }
+    Ok(())
+}
+
 /// Top2Vec: topics by clustering document embeddings. We reduce the document
 /// embeddings (randomized PCA), density-cluster them (HDBSCAN), and read each
 /// topic off its cluster: the topic vector is the mean of its documents'
@@ -6301,6 +6323,8 @@ impl SeededLDA {
 #[pyclass(module = "topica")]
 pub struct Top2Vec {
     n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
     seed: u64,
@@ -6325,18 +6349,24 @@ impl Top2Vec {
     /// larger `min_cluster_size` yields fewer, broader topics). `min_samples`
     /// defaults to `min_cluster_size`.
     #[new]
-    #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None, seed=42))]
+    #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
+                        reducer="pca", n_neighbors=15, seed=42))]
     fn new(
         n_components: usize,
         min_cluster_size: usize,
         min_samples: Option<usize>,
+        reducer: &str,
+        n_neighbors: usize,
         seed: u64,
     ) -> PyResult<Self> {
         if min_cluster_size < 2 {
             return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
         }
+        let use_umap = parse_reducer(reducer)?;
         Ok(Top2Vec {
             n_components,
+            use_umap,
+            n_neighbors,
             min_cluster_size,
             min_samples: min_samples.unwrap_or(min_cluster_size),
             seed,
@@ -6413,10 +6443,13 @@ impl Top2Vec {
         self.has_word_vectors = !word_vecs.is_empty();
         self.id_to_word = corpus.id_to_word.clone();
 
-        let (nc, mcs, ms, seed) =
-            (self.n_components, self.min_cluster_size, self.min_samples, self.seed);
+        check_umap(self.use_umap)?;
+        let (nc, uu, nn, mcs, ms, seed) = (
+            self.n_components, self.use_umap, self.n_neighbors,
+            self.min_cluster_size, self.min_samples, self.seed,
+        );
         let model = py.allow_threads(move || {
-            top2vec::fit_top2vec(&corpus.docs, &doc_emb, &word_vecs, num_types, nc, mcs, ms, seed)
+            top2vec::fit_top2vec(&corpus.docs, &doc_emb, &word_vecs, num_types, nc, uu, nn, mcs, ms, seed)
         });
         self.model = Some(model);
         self.fitted = true;
@@ -6512,6 +6545,8 @@ impl Top2Vec {
 #[pyclass(module = "topica")]
 pub struct BERTopic {
     n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
     nr_topics: Option<usize>,
@@ -6547,7 +6582,7 @@ impl BERTopic {
     /// parameterize the soft `doc_topic` distribution.
     #[new]
     #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
-                        nr_topics=None, window=4, stride=1, seed=42))]
+                        nr_topics=None, window=4, stride=1, reducer="pca", n_neighbors=15, seed=42))]
     fn new(
         n_components: usize,
         min_cluster_size: usize,
@@ -6555,13 +6590,18 @@ impl BERTopic {
         nr_topics: Option<usize>,
         window: usize,
         stride: usize,
+        reducer: &str,
+        n_neighbors: usize,
         seed: u64,
     ) -> PyResult<Self> {
         if min_cluster_size < 2 {
             return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
         }
+        let use_umap = parse_reducer(reducer)?;
         Ok(BERTopic {
             n_components,
+            use_umap,
+            n_neighbors,
             min_cluster_size,
             min_samples: min_samples.unwrap_or(min_cluster_size),
             nr_topics,
@@ -6604,13 +6644,14 @@ impl BERTopic {
         }
         let num_types = corpus.num_types();
         self.id_to_word = corpus.id_to_word.clone();
-        let (nc, mcs, ms, nr, win, st, seed) = (
-            self.n_components, self.min_cluster_size, self.min_samples, self.nr_topics,
-            self.window, self.stride, self.seed,
+        check_umap(self.use_umap)?;
+        let (nc, uu, nn, mcs, ms, nr, win, st, seed) = (
+            self.n_components, self.use_umap, self.n_neighbors, self.min_cluster_size,
+            self.min_samples, self.nr_topics, self.window, self.stride, self.seed,
         );
         let model = py.allow_threads(move || {
             bertopic::fit_bertopic(
-                &corpus.docs, &doc_emb, num_types, nc, mcs, ms, nr, win, st, seed,
+                &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, seed,
             )
         });
         self.model = Some(model);

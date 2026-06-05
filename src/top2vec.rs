@@ -76,6 +76,8 @@ pub fn fit_top2vec(
     word_embeddings: &[Vec<f64>],
     vocab_size: usize,
     n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
     seed: u64,
@@ -85,7 +87,7 @@ pub fn fit_top2vec(
 
     // (1) Reduce, unless the embeddings are already at or below the target dim.
     let reduced: Vec<Vec<f64>> = if emb_dim > n_components && n_components > 0 {
-        reduce::pca(doc_embeddings, n_components, seed)
+        reduce::reduce(doc_embeddings, n_components, use_umap, n_neighbors, seed)
     } else {
         doc_embeddings.to_vec()
     };
@@ -206,7 +208,7 @@ mod tests {
             word_emb.push(jitter(&mut rng, c));
         }
 
-        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 10, 5, 5, 2, 1);
+        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 10, 5, false, 15, 5, 2, 1);
         assert!(m.num_topics >= 2, "expected >=2 topics, got {}", m.num_topics);
 
         // Each topic's nearest words should come from a single block.
@@ -232,7 +234,7 @@ mod tests {
         let doc_emb: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64 * 10.0, 0.0]).collect();
         let docs: Vec<Vec<u32>> = (0..5).map(|_| vec![0u32]).collect();
         let word_emb = vec![vec![1.0, 0.0]];
-        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 1, 2, 5, 2, 1);
+        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 1, 2, false, 15, 5, 2, 1);
         assert_eq!(m.num_topics, 0);
         assert!(m.topic_vectors.is_empty());
     }

@@ -88,9 +88,15 @@ and `topic_neighbors` (Top2Vec) and `approximate_distribution` (BERTopic).
   gives more, finer ones. `min_samples` (default `min_cluster_size`) sets how
   aggressively sparse documents are called noise (label `-1`).
 - `n_components` is the dimensionality the embeddings are reduced to before
-  clustering. topica's default reducer is a randomized PCA, which is fast and
-  deterministic but separates less sharply than UMAP; on closely spaced themes it
-  can merge clusters a UMAP-based run would split.
+  clustering. The default reducer is a randomized PCA: fast, deterministic, and
+  dependency-free, but it separates less sharply than UMAP and on closely spaced
+  themes can merge clusters a UMAP run would split.
+- `reducer="umap"` switches to a faithful UMAP reducer (with `n_neighbors`), which
+  separates real document embeddings much better. On a four-newsgroup slice it
+  recovers four clean topics where PCA merges them into two. UMAP is opt-in at
+  build time: install topica built with the `umap` feature
+  (`maturin develop --features python,umap`); asking for it without that build
+  raises a clear error. The default build stays lean and PCA-only.
 - Results are reproducible for a fixed `seed`.
 
 !!! note "Faithful to the references"

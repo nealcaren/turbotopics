@@ -1290,6 +1290,8 @@ class Top2Vec:
         n_components: int = 5,
         min_cluster_size: int = 15,
         min_samples: int | None = None,
+        reducer: str = "pca",
+        n_neighbors: int = 15,
         seed: int = 42,
     ) -> None: ...
     def fit(
@@ -1341,6 +1343,8 @@ class BERTopic:
         nr_topics: int | None = None,
         window: int = 4,
         stride: int = 1,
+        reducer: str = "pca",
+        n_neighbors: int = 15,
         seed: int = 42,
     ) -> None: ...
     def fit(
