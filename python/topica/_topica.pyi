@@ -1247,7 +1247,18 @@ class SeededLDA:
         weight: float = 0.01,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 2000) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 2000,
+        doc_topic_prior: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+    ) -> None:
+        """doc_topic_prior (optional, (num_docs, num_topics), all > 0) is a
+        per-document asymmetric Dirichlet prior alpha_{d,k} that replaces the
+        symmetric alpha, biasing each document's topic mixture. It is a prior, so
+        the sampler can still move a document away from it."""
+        ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property

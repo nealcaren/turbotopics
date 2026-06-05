@@ -136,6 +136,28 @@ The whole fitted-model surface (`topic_word`, `doc_topic`, `top_words`,
 holds the embedding-derived seed sets. `topica.embedding_seeds(...)` exposes just
 the clustering step if you want to inspect or edit the seeds before fitting.
 
+### Anchoring documents too
+
+The word embeddings above shape the topic-word side. You can also pass
+**document** embeddings (same embedding space) at fit time to bias each
+document's topic mixture toward the topics its own embedding is nearest:
+
+```python
+doc_emb = SentenceTransformer("all-MiniLM-L6-v2").encode([" ".join(d) for d in docs])
+model.fit(docs, doc_embeddings=doc_emb, iters=1000)
+```
+
+This sets a per-document Dirichlet prior `α_{d,k} = alpha + doc_anchor * max(cos(doc_d, topic_k), 0)`,
+so a document leans toward the topics it is semantically close to. It is still a
+prior, not a hard assignment: two documents with the same words but different
+embeddings are pulled toward different topics, yet the Gibbs sampler can override
+the embedding wherever the text disagrees. `doc_anchor` (constructor) sets the
+strength, and `model.document_topic_prior(doc_emb)` returns the `α` matrix for
+inspection. This is the embedding-clustering idea (as in BERTopic) expressed as a
+prior over a generative, mixed-membership model rather than a hard document
+clustering: you keep `θ`, reproducibility, and the effect-estimation and
+diagnostics stack.
+
 ## Which to use
 
 - **`KeyATM`** is the better-validated choice and the one with the political-

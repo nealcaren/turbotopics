@@ -70,6 +70,35 @@ def _kmeans(x: np.ndarray, k: int, *, seed: int, iters: int = 50):
     return labels, centers
 
 
+def _cluster_words(embeddings, num_topics: int, *, seed: int):
+    """Row-normalize the embeddings, k-means into ``num_topics`` groups, and
+    return ``(unit_word_vectors, labels, unit_centroids)``. The unit centroids
+    are comparable by cosine with any document embedding from the same space."""
+    x = np.asarray(embeddings, dtype=np.float64)
+    if x.ndim != 2:
+        raise ValueError("embeddings must be a 2-D (V, E) array")
+    norms = np.linalg.norm(x, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    xn = x / norms
+    labels, centers = _kmeans(xn, num_topics, seed=seed)
+    cnorm = np.linalg.norm(centers, axis=1, keepdims=True)
+    cnorm[cnorm == 0.0] = 1.0
+    return xn, labels, centers / cnorm
+
+
+def _seeds_from_clusters(xn, labels, centroids, vocabulary, num_topics, top_m):
+    sims = xn @ centroids.T  # (V, K) word-to-centroid cosine
+    seeds: dict[str, list[str]] = {}
+    for k in range(num_topics):
+        members = np.where(labels == k)[0]
+        if members.size == 0:
+            seeds[f"topic_{k}"] = []
+            continue
+        order = members[np.argsort(-sims[members, k])][:top_m]
+        seeds[f"topic_{k}"] = [str(vocabulary[i]) for i in order]
+    return seeds
+
+
 def embedding_seeds(
     embeddings,
     vocabulary: Sequence[str],
@@ -87,48 +116,38 @@ def embedding_seeds(
     ``{"topic_k": [words]}`` ready for :class:`~topica.SeededLDA`; a degenerate
     empty cluster yields an empty (unseeded) topic.
     """
-    x = np.asarray(embeddings, dtype=np.float64)
-    if x.ndim != 2:
-        raise ValueError("embeddings must be a 2-D (V, E) array")
-    if len(vocabulary) != x.shape[0]:
+    if len(vocabulary) != np.asarray(embeddings).shape[0]:
         raise ValueError(
-            f"vocabulary has {len(vocabulary)} words but embeddings has {x.shape[0]} rows"
+            f"vocabulary has {len(vocabulary)} words but embeddings has "
+            f"{np.asarray(embeddings).shape[0]} rows"
         )
     if num_topics < 2:
         raise ValueError("num_topics must be >= 2")
-    if num_topics > x.shape[0]:
+    if num_topics > len(vocabulary):
         raise ValueError("num_topics cannot exceed the vocabulary size")
     if top_m < 1:
         raise ValueError("top_m must be >= 1")
-
-    # Row-normalize so euclidean k-means clusters by direction (cosine).
-    norms = np.linalg.norm(x, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    xn = x / norms
-
-    labels, centers = _kmeans(xn, num_topics, seed=seed)
-    sims = xn @ centers.T  # (V, K); rank within a cluster by similarity to its centroid
-
-    seeds: dict[str, list[str]] = {}
-    for k in range(num_topics):
-        members = np.where(labels == k)[0]
-        if members.size == 0:
-            seeds[f"topic_{k}"] = []
-            continue
-        order = members[np.argsort(-sims[members, k])][:top_m]
-        seeds[f"topic_{k}"] = [str(vocabulary[i]) for i in order]
-    return seeds
+    xn, labels, centroids = _cluster_words(embeddings, num_topics, seed=seed)
+    return _seeds_from_clusters(xn, labels, centroids, vocabulary, num_topics, top_m)
 
 
 class EmbeddingLDA:
-    """LDA whose topics are anchored by pre-trained word embeddings.
+    """LDA whose topics are anchored by pre-trained embeddings, on both sides.
 
-    Clusters the vocabulary embeddings into ``num_topics`` semantic groups, seeds
-    each topic with the ``top_m`` words nearest its centroid, and fits a
-    :class:`~topica.SeededLDA` so those seeds get a prior boost the sampler can
-    still override. All of the fitted-model surface (``topic_word``,
-    ``doc_topic``, ``top_words``, ``coherence``, ``vocabulary``, ...) is delegated
-    to the underlying SeededLDA.
+    The vocabulary embeddings define the topics: k-means clusters them into
+    ``num_topics`` semantic groups, and each topic is seeded with the ``top_m``
+    words nearest its centroid (a prior on the **topic-word** side, via
+    :class:`~topica.SeededLDA`). Optionally, at fit time, **document** embeddings
+    in the same space bias each document's topic mixture toward the topics its
+    own embedding is closest to (a per-document prior on the **document-topic**
+    side, ``α_{d,k}``). Both are priors: the Gibbs sampler reconciles them with
+    word co-occurrence and can override either.
+
+    Word seeds alone (no ``doc_embeddings``) is the lighter mode; adding document
+    embeddings is closer in spirit to embedding-clustering methods, but keeps the
+    generative, mixed-membership, override-able model. The fitted-model surface
+    (``topic_word``, ``doc_topic``, ``top_words``, ``coherence``, ...) is
+    delegated to the underlying SeededLDA.
 
     Parameters
     ----------
@@ -141,10 +160,13 @@ class EmbeddingLDA:
     top_m : int
         How many of each cluster's nearest words to use as seeds.
     weight : float
-        Seed strength, passed to SeededLDA: a seed word gets ``weight * 100``
-        extra prior pseudocounts in its topic. Higher anchors harder.
+        Seed strength: a seed word gets ``weight * 100`` extra prior pseudocounts
+        in its topic. Higher anchors the topic-word side harder.
+    doc_anchor : float
+        Strength of the document-embedding prior used when ``doc_embeddings`` is
+        passed to :meth:`fit`. ``α_{d,k} = alpha + doc_anchor * max(cos, 0)``.
     alpha, beta : float
-        Document-topic and base topic-word Dirichlet priors.
+        Base document-topic and topic-word Dirichlet priors.
     seed : int
         Random seed for the k-means clustering and the sampler.
     """
@@ -157,24 +179,56 @@ class EmbeddingLDA:
         vocabulary: Sequence[str],
         top_m: int = 20,
         weight: float = 1.0,
+        doc_anchor: float = 1.0,
         alpha: float = 0.1,
         beta: float = 0.01,
         seed: int = 42,
     ) -> None:
         from . import SeededLDA
 
+        if len(vocabulary) != np.asarray(embeddings).shape[0]:
+            raise ValueError("vocabulary length must match the number of embedding rows")
+        if num_topics < 2:
+            raise ValueError("num_topics must be >= 2")
+        if num_topics > len(vocabulary):
+            raise ValueError("num_topics cannot exceed the vocabulary size")
+        if top_m < 1:
+            raise ValueError("top_m must be >= 1")
+        if doc_anchor < 0:
+            raise ValueError("doc_anchor must be >= 0")
+
         self.num_topics = num_topics
         self.top_m = top_m
-        self.seeds = embedding_seeds(
-            embeddings, vocabulary, num_topics, top_m=top_m, seed=seed
-        )
+        self.alpha = alpha
+        self.doc_anchor = doc_anchor
+        # One clustering pass: keep the unit centroids for the document prior.
+        xn, labels, self._centroids = _cluster_words(embeddings, num_topics, seed=seed)
+        self.seeds = _seeds_from_clusters(xn, labels, self._centroids, vocabulary, num_topics, top_m)
         self._model = SeededLDA(
             self.seeds, alpha=alpha, beta=beta, weight=weight, seed=seed
         )
 
-    def fit(self, data, *, iters: int = 1000) -> "EmbeddingLDA":
-        """Fit the seeded model on ``data`` (a Corpus or list of token lists)."""
-        self._model.fit(data, iters=iters)
+    def document_topic_prior(self, doc_embeddings) -> np.ndarray:
+        """The per-document Dirichlet prior ``α_{d,k}`` implied by document
+        embeddings: ``alpha + doc_anchor * max(cos(doc_d, centroid_k), 0)``,
+        shape ``(num_docs, num_topics)``. Useful for inspection."""
+        de = np.asarray(doc_embeddings, dtype=np.float64)
+        if de.ndim != 2 or de.shape[1] != self._centroids.shape[1]:
+            raise ValueError(
+                "doc_embeddings must be (num_docs, E) with E matching the word embeddings"
+            )
+        norms = np.linalg.norm(de, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        sim = (de / norms) @ self._centroids.T
+        return self.alpha + self.doc_anchor * np.maximum(sim, 0.0)
+
+    def fit(self, data, *, doc_embeddings=None, iters: int = 1000) -> "EmbeddingLDA":
+        """Fit on ``data`` (a Corpus or list of token lists). If ``doc_embeddings``
+        is given (one row per document, same embedding space as the vocabulary),
+        each document's topic mixture is biased toward the topics its embedding is
+        nearest, as a prior the sampler can still override."""
+        prior = self.document_topic_prior(doc_embeddings) if doc_embeddings is not None else None
+        self._model.fit(data, iters=iters, doc_topic_prior=prior)
         return self
 
     @property

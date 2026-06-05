@@ -6139,8 +6139,20 @@ impl SeededLDA {
 
     /// Fit by collapsed Gibbs for `iters` sweeps. Seeded topics come first (in
     /// the order given), then the residual topics.
-    #[pyo3(signature = (data, *, iters=2000))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: usize) -> PyResult<()> {
+    ///
+    /// `doc_topic_prior` (optional, `(num_docs, num_topics)`) supplies a
+    /// per-document asymmetric Dirichlet prior `α_{d,k}` that replaces the
+    /// symmetric `alpha`, biasing each document's topic mixture toward chosen
+    /// topics (e.g. from a document embedding). It is a prior, so the sampler
+    /// can still move a document away from it.
+    #[pyo3(signature = (data, *, iters=2000, doc_topic_prior=None))]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        iters: usize,
+        doc_topic_prior: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -6156,11 +6168,35 @@ impl SeededLDA {
         let num_types = corpus.num_types();
         let seeds = seed_word_ids(&self.seed_words, &corpus.id_to_word, num_topics);
         let (alpha, beta, seed_weight) = (self.alpha, self.beta, self.weight * 100.0);
+
+        let doc_alpha: Option<Vec<Vec<f64>>> = match doc_topic_prior {
+            Some(p) => {
+                let rows = parse_features(p)?;
+                if rows.len() != corpus.num_docs() {
+                    return Err(PyValueError::new_err(format!(
+                        "doc_topic_prior has {} rows but corpus has {} documents",
+                        rows.len(),
+                        corpus.num_docs()
+                    )));
+                }
+                if rows.iter().any(|r| r.len() != num_topics) {
+                    return Err(PyValueError::new_err(
+                        "each doc_topic_prior row must have num_topics entries",
+                    ));
+                }
+                if rows.iter().any(|r| r.iter().any(|&a| a <= 0.0)) {
+                    return Err(PyValueError::new_err("doc_topic_prior entries must be > 0"));
+                }
+                Some(rows)
+            }
+            None => None,
+        };
+
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         let (model, corpus) = py.allow_threads(move || {
             let m = seeded::fit_seeded_lda(
-                &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, iters,
-                &mut rng,
+                &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, doc_alpha,
+                iters, &mut rng,
             );
             (m, corpus)
         });
