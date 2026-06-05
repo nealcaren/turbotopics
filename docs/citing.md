@@ -1,0 +1,96 @@
+# Citing
+
+## Citing topica
+
+If topica contributes to published work, please cite it:
+
+```bibtex
+@software{caren_topica,
+  author = {Caren, Neal},
+  title  = {topica: fast, all-purpose topic modeling for Python},
+  year   = {2026},
+  url    = {https://github.com/nealcaren/topica}
+}
+```
+
+topica reimplements published methods and is validated against their reference
+implementations. It does not replace the original work: please also cite the
+model you use, and, where you rely on a feature ported from a specific package
+(for example `estimateEffect` from `stm`), that package too.
+
+## Cite the model you used
+
+| Model | Primary citation |
+|-------|------------------|
+| `LDA` | Blei, Ng & Jordan (2003); fast sampler: Yao, Mimno & McCallum (2009) |
+| `DMR` | Mimno & McCallum (2008) |
+| `LabeledLDA` | Ramage, Hall, Nallapati & Manning (2009) |
+| `CTM` | Blei & Lafferty (2007) |
+| `STM` | Roberts, Stewart & Tingley (2014, 2019) |
+| `SAGE` | Eisenstein, Ahmed & Xing (2011) |
+| `HDP` | Teh, Jordan, Beal & Blei (2006) |
+| `DTM` | Blei & Lafferty (2006) |
+| `SupervisedLDA` | McAuliffe & Blei (2008) |
+| `PT` | Zuo et al. (2016) |
+| `GSDMM` | Yin & Wang (2014) |
+| `SeededLDA` | Watanabe (2023) |
+| `KeyATM` | Eshima, Imai & Sasaki (2024) |
+| `PA` | Li & McCallum (2006) |
+| `HLDA` | Griffiths, Jordan, Tenenbaum & Blei (2004) |
+| `LightLDA` (alias sampler) | Yuan et al. (2015) |
+| `BERTopic` | Grootendorst (2022) |
+| `Top2Vec` | Angelov (2020) |
+| `ETM` | Dieng, Ruiz & Blei (2020) |
+| `FASTopic` | Wu et al. (2024) |
+
+## Full references
+
+### Models
+
+- Blei, D. M., Ng, A. Y., & Jordan, M. I. (2003). Latent Dirichlet Allocation. *Journal of Machine Learning Research*, 3, 993–1022.
+- Yao, L., Mimno, D., & McCallum, A. (2009). Efficient methods for topic model inference on streaming document collections. *KDD 2009*. (SparseLDA)
+- Mimno, D., & McCallum, A. (2008). Topic models conditioned on arbitrary features with Dirichlet-multinomial regression. *UAI 2008*.
+- Ramage, D., Hall, D., Nallapati, R., & Manning, C. D. (2009). Labeled LDA: A supervised topic model for credit attribution in multi-labeled corpora. *EMNLP 2009*.
+- Blei, D. M., & Lafferty, J. D. (2007). A correlated topic model of *Science*. *Annals of Applied Statistics*, 1(1), 17–35.
+- Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. *Journal of the American Statistical Association*, 111(515), 988–1003.
+- Roberts, M. E., Stewart, B. M., & Tingley, D. (2019). stm: An R package for structural topic models. *Journal of Statistical Software*, 91(2), 1–40.
+- Eisenstein, J., Ahmed, A., & Xing, E. P. (2011). Sparse additive generative models of text. *ICML 2011*.
+- Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet processes. *Journal of the American Statistical Association*, 101(476), 1566–1581.
+- Blei, D. M., & Lafferty, J. D. (2006). Dynamic topic models. *ICML 2006*.
+- McAuliffe, J. D., & Blei, D. M. (2008). Supervised topic models. *NeurIPS 2007*.
+- Zuo, Y., Wu, J., Zhang, H., Lin, H., Wang, F., Xu, K., & Xiong, H. (2016). Topic modeling of short texts: A pseudo-document view. *KDD 2016*.
+- Yin, J., & Wang, J. (2014). A Dirichlet multinomial mixture model-based approach for short text clustering. *KDD 2014*. (GSDMM)
+- Watanabe, K. (2023). seededlda: Seeded sequential LDA for topic modeling. R package.
+- Eshima, S., Imai, K., & Sasaki, T. (2024). Keyword-assisted topic models. *American Journal of Political Science*, 68(2), 730–750. [doi:10.1111/ajps.12779](https://doi.org/10.1111/ajps.12779)
+- Li, W., & McCallum, A. (2006). Pachinko allocation: DAG-structured mixture models of topic correlations. *ICML 2006*.
+- Griffiths, T. L., Jordan, M. I., Tenenbaum, J. B., & Blei, D. M. (2004). Hierarchical topic models and the nested Chinese restaurant process. *NeurIPS 2003*.
+- Yuan, J., Gao, F., Ho, Q., Dai, W., Wei, J., Zheng, X., Xing, E. P., Liu, T.-Y., & Ma, W.-Y. (2015). LightLDA: Big topic models on modest computer clusters. *WWW 2015*.
+- Grootendorst, M. (2022). BERTopic: Neural topic modeling with a class-based TF-IDF procedure. *arXiv:2203.05794*.
+- Angelov, D. (2020). Top2Vec: Distributed representations of topics. *arXiv:2008.09470*.
+- Dieng, A. B., Ruiz, F. J. R., & Blei, D. M. (2020). Topic modeling in embedding spaces. *Transactions of the Association for Computational Linguistics*, 8, 439–453.
+- Wu, X., Nguyen, T., Zhang, D. C., Wang, W. Y., & Luu, A. T. (2024). FASTopic: A fast, adaptive, stable, and transferable topic modeling paradigm. *NeurIPS 2024*. [arXiv:2405.17978](https://arxiv.org/abs/2405.17978)
+
+### Methods used in the diagnostics and effects tools
+
+- Chib, S. (1998). Estimation and comparison of multiple change-point models. *Journal of Econometrics*, 86(2), 221–241. (dynamic keyATM HMM)
+- Lau, J. H., Newman, D., & Baldwin, T. (2014). Machine reading tea leaves: Automatically evaluating topic coherence and topic model quality. *EACL 2014*. (coherence)
+- Sievert, C., & Shirley, K. (2014). LDAvis: A method for visualizing and interpreting topics. *ACL Workshop on Interactive Language Learning, Visualization, and Interfaces*. (relevance)
+- Chang, J., Boyd-Graber, J., Gerrish, S., Wang, C., & Blei, D. M. (2009). Reading tea leaves: How humans interpret topic models. *NeurIPS 2009*. (intrusion tests)
+- Monroe, B. L., Colaresi, M. P., & Quinn, K. M. (2008). Fightin' words: Lexical feature selection and evaluation for identifying the content of political conflict. *Political Analysis*, 16(4), 372–403. (fighting words)
+- Campello, R. J. G. B., Moulavi, D., & Sander, J. (2013). Density-based clustering based on hierarchical density estimates. *PAKDD 2013*. (HDBSCAN)
+- McInnes, L., Healy, J., & Melville, J. (2018). UMAP: Uniform manifold approximation and projection for dimension reduction. *arXiv:1802.03426*.
+
+## Reference implementations and libraries
+
+topica is validated against, and in places ports features from, these projects:
+
+- [MALLET](https://github.com/mimno/Mallet) (McCallum, 2002) and [RustMallet](https://github.com/mimno/RustMallet) (Mimno)
+- [stm](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley)
+- [keyATM](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki)
+- [seededlda](https://github.com/koheiw/seededlda) (Watanabe)
+- [lda-c / ctm-c / dtm / hdp](https://github.com/blei-lab) (Blei lab)
+- [gensim](https://github.com/piskvorky/gensim) (Řehůřek & Sojka, 2010)
+- [tomotopy](https://github.com/bab2min/tomotopy) (bab2min)
+- [BERTopic](https://github.com/MaartenGr/BERTopic) (Grootendorst) and [Top2Vec](https://github.com/ddangelov/Top2Vec) (Angelov)
+- [ETM](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei) and [FASTopic](https://github.com/BobXWu/FASTopic) (Wu et al.)
+- [petal-clustering](https://github.com/petabi/petal-clustering) (HDBSCAN) and [umap-rs](https://github.com/wilsonzlin/umap-rs) (UMAP), both pure-Rust and BLAS-free

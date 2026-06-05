@@ -86,26 +86,24 @@ Requires `numpy >= 1.21`. Use `--release` (the debug build is much slower).
 
 ## Acknowledgements
 
-Topica stands on a generation of open topic-modeling research and code. The `LDA` core binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) and reproduces [**MALLET**](https://github.com/mimno/Mallet)'s `train` output bit-for-bit; the other models are Rust ports or reimplementations, validated against their reference implementations:
+Topica stands on a generation of open topic-modeling research and code. Each entry below lists the reference, its authors and year, and the topica class(es) it underlies; the other models are Rust ports or reimplementations, validated against these reference implementations.
 
-- [**MALLET**](https://github.com/mimno/Mallet) (McCallum): SparseLDA, DMR, hyperparameter optimization
-- [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley): the Structural Topic Model, `estimateEffect`, `searchK`, FREX, spectral initialization, method of composition
-- [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab): the CTM, Dynamic Topic Model, and HDP samplers
-- [**gensim**](https://github.com/piskvorky/gensim): coherence measures and the `LdaSeqModel` DTM reference
-- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min): API conventions (`summary`, short-text models)
-- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki): the full keyword-assisted family. `KeyATM` ports their base, covariate, and dynamic models, including the information-theory token weighting and the Chib (1998) change-point HMM for topic prevalence over time, validated against the package
-- [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe): seeded LDA
-- [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al.): the alias-table Metropolis-Hastings sampler
-- **GSDMM** (Yin & Wang 2014): the movie-group-process mixture for short text
-- [**BERTopic**](https://github.com/MaartenGr/BERTopic) (Grootendoorn) and [**Top2Vec**](https://github.com/ddangelov/Top2Vec) (Angelov): the embedding-clustering pipeline, class-based TF-IDF, and the `reduce → cluster → represent` design
-- [**ETM**](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei): the Embedded Topic Model, fit here by the variational EM shared with the CTM rather than a VAE
-- [**FASTopic**](https://github.com/BobXWu/FASTopic) (Wu et al.): the optimal-transport topic model, with a hand-coded reverse-mode Sinkhorn in place of the reference's autodiff
+- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit
+- [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley, 2019) — `STM`, `CTM`, `SAGE`: variational EM, `estimateEffect`, `searchK`, FREX, spectral initialization, and the method of composition
+- [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab, 2006–2007) — `CTM`, `DTM`, `HDP`: the CTM, Dynamic Topic Model, and HDP samplers
+- [**gensim**](https://github.com/piskvorky/gensim) (Řehůřek & Sojka, 2010) — `DTM`: coherence measures and the `LdaSeqModel` DTM reference
+- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min, 2020) — API conventions (`summary`, the short-text models)
+- [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki, 2024) — `KeyATM`: the base, covariate, and dynamic models, the information-theory token weighting, and the Chib (1998) change-point HMM, validated against the package
+- [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe, 2023) — `SeededLDA`: the seeded-prior scheme
+- [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al., 2015) — `LDA`: the alias-table Metropolis-Hastings sampler
+- **GSDMM** (Yin & Wang, 2014) — `GSDMM`: the movie-group-process mixture for short text
+- [**BERTopic**](https://github.com/MaartenGr/BERTopic) (Grootendorst, 2022) and [**Top2Vec**](https://github.com/ddangelov/Top2Vec) (Angelov, 2020) — `BERTopic`, `Top2Vec`: the embedding-clustering pipeline, class-based TF-IDF, and the `reduce → cluster → represent` design
+- [**ETM**](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei, 2020) — `ETM`: the Embedded Topic Model (per-document variational EM and an amortized VAE)
+- [**FASTopic**](https://github.com/BobXWu/FASTopic) (Wu et al., 2024) — `FASTopic`: the optimal-transport topic model
 
 The embedding-native models build on two pure-Rust crates: [**petal-clustering**](https://github.com/petabi/petal-clustering) for HDBSCAN and [**umap-rs**](https://github.com/wilsonzlin/umap-rs) for the optional UMAP reducer, both BLAS-free.
 
-Underlying methods are credited to their authors in the [documentation](https://nealcaren.github.io/topica/) and the source. The SparseLDA scheme is Yao, Mimno & McCallum (KDD 2009). If you use `KeyATM`, please cite the original work:
-
-> Eshima, S., Imai, K., & Sasaki, T. (2024). Keyword-Assisted Topic Models. *American Journal of Political Science*, 68(2), 730–750. [doi:10.1111/ajps.12779](https://doi.org/10.1111/ajps.12779)
+Full citations for every model and reference implementation, and how to cite topica, are on the [Citing](https://nealcaren.github.io/topica/citing/) page.
 
 ## License
 
