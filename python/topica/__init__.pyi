@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 import numpy
 import numpy.typing
 
@@ -221,6 +221,46 @@ def plot_report(
     ...
 
 
+def topic_label_prompts(
+    model: Any,
+    texts: Sequence[str] | None = None,
+    *,
+    n_words: int = 12,
+    n_docs: int = 3,
+    max_chars: int = 300,
+    instructions: str | None = None,
+) -> list[str]:
+    """One labeling prompt per topic (top words + representative docs) — the
+    plumbing behind llm_topic_labels."""
+    ...
+
+
+def llm_backend(
+    model: str = "gpt-4o-mini", *, system: str | None = None, **options: Any
+) -> Callable[[str], str]:
+    """A str -> str callable backed by the `llm` library, for llm_topic_labels'
+    call= argument. Requires the optional `llm` package."""
+    ...
+
+
+def llm_topic_labels(
+    model: Any,
+    texts: Sequence[str] | None = None,
+    *,
+    call: Callable[[str], str] | None = None,
+    llm_model: str = "gpt-4o-mini",
+    n_words: int = 12,
+    n_docs: int = 3,
+    max_chars: int = 300,
+    instructions: str | None = None,
+    set_labels: bool = False,
+) -> list[str]:
+    """A short LLM-generated label per topic. Pass `call` (any str->str callable,
+    zero deps) or name an `llm_model` (the topica[llm] extra). With
+    set_labels=True the labels flow into topic_info / plot_report."""
+    ...
+
+
 __all__ = [
     "LDA",
     "DMR",
@@ -257,6 +297,10 @@ __all__ = [
     "representative_docs",
     "topics_over_time",
     "topics_per_class",
+    "plot_report",
+    "llm_topic_labels",
+    "llm_backend",
+    "topic_label_prompts",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
 ]

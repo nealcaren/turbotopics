@@ -19,6 +19,12 @@ in `topica.diagnostics`.
 
 ::: topica.label_topics
 
+::: topica.llm_topic_labels
+
+::: topica.llm_backend
+
+::: topica.topic_label_prompts
+
 ::: topica.frex
 
 ::: topica.relevance

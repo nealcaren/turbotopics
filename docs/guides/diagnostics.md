@@ -41,6 +41,28 @@ topica.find_thoughts(model.doc_topic, texts, topic=0, n=3)      # representative
 topica.find_thoughts_html(model, texts, n_docs=3)               # highlighted close-reading
 ```
 
+For readable labels, `llm_topic_labels` asks an LLM to name each topic from its
+top words and representative documents. topica is the plumbing: it assembles the
+prompt and you bring the model. Pass any callable (your own client, a local
+`ollama` endpoint) as `call`, or name a model through the optional
+[`llm`](https://llm.datasette.io/) adapter, which reaches every provider and
+local models via plugins.
+
+```python
+# Bring your own callable (no extra dependency):
+labels = topica.llm_topic_labels(model, texts, call=my_model_fn, set_labels=True)
+
+# Or name a model via the `llm` adapter (pip install "topica[llm]"):
+backend = topica.llm_backend("gpt-4o-mini", temperature=0)   # pin for stability
+labels = topica.llm_topic_labels(model, texts, call=backend, set_labels=True)
+
+topica.topic_label_prompts(model, texts)[0]   # inspect exactly what the model sees
+```
+
+`set_labels=True` flows the labels into `topic_info` and `plot_report`. LLM labels
+are a convenience, not a reproducible measurement: pin the model and temperature,
+and keep `label_topics` (FREX / probability / lift) as the defensible descriptors.
+
 ## Human validation: intrusion tests
 
 ```python

@@ -141,6 +141,11 @@ from .report import (  # noqa: E402
     plot_report,
 )
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
+from .labeling import (  # noqa: E402  LLM topic labeling as plumbing
+    llm_topic_labels,
+    llm_backend,
+    topic_label_prompts,
+)
 from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
 from .preprocess import split_documents  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
@@ -205,6 +210,9 @@ __all__ = [
     "plot_report",
     "fighting_words",
     "top_fighting_words",
+    "llm_topic_labels",
+    "llm_backend",
+    "topic_label_prompts",
     "estimate_effect",
     "by_strata",
     "top_topics",
