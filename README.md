@@ -20,6 +20,18 @@ for i, words in enumerate(model.top_words(5)):
 
 See the [getting-started guide](https://nealcaren.github.io/topica/getting-started/) and the [worked examples](https://nealcaren.github.io/topica/examples/dubois/) for end-to-end analyses.
 
+## Performance
+
+topica runs on a parallel Rust core. With multithreading it fits the standard models 2 to 11 times faster than the reference R and Java implementations, and it matches MALLET's hand-tuned Java sampler core for core. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
+
+| Model | Reference | topica speedup |
+|-------|-----------|----------------|
+| STM | R `stm` | **11×** |
+| LDA | Java MALLET | parity single-threaded, **2.5×** multithreaded |
+| keyATM | R `keyATM` | parity single-threaded, **2×** multithreaded |
+
+Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
+
 ## Models
 
 | Model | What it's for |
