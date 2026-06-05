@@ -118,6 +118,7 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     topic_stability,
 )
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
+from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
 from .preprocess import split_documents  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 from .frames import from_dataframe, align  # noqa: E402
@@ -168,6 +169,8 @@ __all__ = [
     "bootstrap_stability",
     "fighting_words",
     "top_fighting_words",
+    "EmbeddingLDA",
+    "embedding_seeds",
     "split_documents",
     "from_dataframe",
     "align",

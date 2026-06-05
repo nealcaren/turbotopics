@@ -27,6 +27,7 @@ from ._topica import (
 )
 from . import stm as stm
 from . import keyatm as keyatm
+from .embedding import EmbeddingLDA as EmbeddingLDA, embedding_seeds as embedding_seeds
 
 def one_hot(
     values: Sequence[object],
