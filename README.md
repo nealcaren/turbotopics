@@ -88,7 +88,7 @@ Requires `numpy >= 1.21`. Use `--release` (the debug build is much slower).
 
 Topica stands on a generation of open topic-modeling research and code. Each entry below lists the reference, its authors and year, and the topica class(es) it underlies; the other models are Rust ports or reimplementations, validated against these reference implementations.
 
-- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) and reproduces MALLET's `train` output bit-for-bit
+- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) (Apache-2.0) and reproduces MALLET's `train` output bit-for-bit
 - [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley, 2019) — `STM`, `CTM`, `SAGE`: variational EM, `estimateEffect`, `searchK`, FREX, spectral initialization, and the method of composition
 - [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab, 2006–2007) — `CTM`, `DTM`, `HDP`: the CTM, Dynamic Topic Model, and HDP samplers
 - [**gensim**](https://github.com/piskvorky/gensim) (Řehůřek & Sojka, 2010) — `DTM`: coherence measures and the `LdaSeqModel` DTM reference
@@ -107,4 +107,4 @@ Full citations for every model and reference implementation, and how to cite top
 
 ## License
 
-Apache-2.0. Builds on [RustMallet](https://github.com/mimno/RustMallet) (Apache-2.0).
+Apache-2.0 — see [LICENSE](LICENSE).
