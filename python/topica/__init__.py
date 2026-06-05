@@ -138,6 +138,7 @@ from .report import (  # noqa: E402
     representative_docs,
     topics_over_time,
     topics_per_class,
+    plot_report,
 )
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
 from .embedding import EmbeddingLDA, embedding_seeds  # noqa: E402
@@ -201,6 +202,7 @@ __all__ = [
     "representative_docs",
     "topics_over_time",
     "topics_per_class",
+    "plot_report",
     "fighting_words",
     "top_fighting_words",
     "estimate_effect",

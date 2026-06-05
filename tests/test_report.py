@@ -189,3 +189,51 @@ def test_topics_per_class(lda_corpus):
     for s in strata:
         assert s.mean.shape == (2,)
         assert s.n == 20
+
+
+# ---------------------------------------------------------------------------
+# plot_report (a composite matplotlib figure; skips if matplotlib is absent)
+# ---------------------------------------------------------------------------
+
+mpl = pytest.importorskip("matplotlib")
+mpl.use("Agg")
+
+
+def test_plot_report_full(lda_corpus):
+    import matplotlib.pyplot as plt
+
+    m, docs, texts, timestamps, groups = lda_corpus
+    fig = topica.plot_report(m, texts=texts, timestamps=timestamps, groups=groups, n=5)
+    assert isinstance(fig, plt.Figure)
+    # All five panels apply here, so there is more than one drawn axis.
+    titles = {ax.get_title() for ax in fig.get_axes()}
+    assert "Topics by prevalence" in titles
+    assert any("quality" in t for t in titles)
+    assert any("time" in t.lower() for t in titles)
+    assert any("class" in t.lower() for t in titles)
+    plt.close(fig)
+
+
+def test_plot_report_minimal(lda_corpus):
+    import matplotlib.pyplot as plt
+
+    m, *_ = lda_corpus
+    # No texts/timestamps/groups: the prevalence panel is always present.
+    fig = topica.plot_report(m)
+    titles = {ax.get_title() for ax in fig.get_axes()}
+    assert "Topics by prevalence" in titles
+    # The time/class panels need their inputs, so they are absent here.
+    assert not any("time" in t.lower() for t in titles)
+    assert not any("class" in t.lower() for t in titles)
+    plt.close(fig)
+
+
+def test_plot_report_saves(tmp_path, lda_corpus):
+    import matplotlib.pyplot as plt
+
+    m, docs, texts, *_ = lda_corpus
+    fig = topica.plot_report(m, texts=texts)
+    out = tmp_path / "report.png"
+    fig.savefig(out, dpi=60)
+    assert out.exists() and out.stat().st_size > 0
+    plt.close(fig)

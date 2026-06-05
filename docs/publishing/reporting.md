@@ -50,6 +50,18 @@ table = pd.DataFrame({
 table.to_csv("topic_table.csv", index=False)
 ```
 
+For an at-a-glance figure of the whole model, `topica.plot_report` composes the
+diagnostics into one matplotlib `Figure` you can save straight to a publication
+or supplement. Panels are adaptive: topic prevalence (with each topic's top
+words) and the coherence-vs-exclusivity quality plot are always drawn, and the
+topic-correlation heatmap, topics over time, and prevalence by class appear when
+you pass `texts`, `timestamps`, or `groups`.
+
+```python
+fig = topica.plot_report(model, texts=texts, timestamps=year, groups=party)
+fig.savefig("model_report.png", dpi=200)   # or .pdf
+```
+
 ## Supplementary materials
 
 Put in the appendix / replication archive:

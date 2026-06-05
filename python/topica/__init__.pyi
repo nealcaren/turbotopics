@@ -204,6 +204,23 @@ def topics_per_class(model: Any, groups: Sequence[object], *, ci: float = 0.95) 
     ...
 
 
+def plot_report(
+    model: Any,
+    *,
+    texts: Sequence[str] | None = None,
+    timestamps: Sequence[object] | None = None,
+    groups: Sequence[object] | None = None,
+    n: int = 8,
+    coherence_type: str = "c_v",
+    title: str | None = None,
+    figsize: tuple[float, float] | None = None,
+) -> Any:
+    """A one-figure overview of a fitted model (prevalence, quality, correlation,
+    and, when the inputs are given, topics over time and per class). Returns a
+    matplotlib Figure. Requires matplotlib."""
+    ...
+
+
 __all__ = [
     "LDA",
     "DMR",

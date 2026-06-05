@@ -214,6 +214,134 @@ def topics_per_class(model, groups, *, ci=0.95):
     return _effects.by_strata(model.doc_topic, groups, ci=ci)
 
 
+def _short(label, words, width=42):
+    """A compact 'label: word word word' caption, truncated to `width`."""
+    ws = " ".join(w for w, _ in words) if words and isinstance(words[0], tuple) else " ".join(map(str, words))
+    text = f"{label}: {ws}" if ws else str(label)
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
+                coherence_type="c_v", title=None, figsize=None):
+    """A one-figure overview of a fitted model, composed from topica's diagnostics.
+
+    Panels are adaptive: each is drawn only when its inputs and the model support
+    it, so the report works across every model. Always included is the topic
+    prevalence bar (mean ``doc_topic`` per topic, labelled with each topic's top
+    words). Added when available:
+
+    - **topic quality** — coherence vs exclusivity (the stm quality frontier); a
+      windowed ``coherence_type`` is used when ``texts`` is given, else UMass;
+    - **topic correlation** — the ``doc_topic`` correlation heatmap (K in 2..40);
+    - **topics over time** — mean prevalence per distinct ``timestamps`` value;
+    - **topics per class** — mean prevalence within each level of ``groups``.
+
+    Returns a matplotlib ``Figure``; save it with ``fig.savefig("report.png")`` or
+    ``.pdf``. Requires matplotlib (the only added dependency).
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError("plot_report requires matplotlib") from exc
+
+    rows = [r for r in topic_info(model, n=n) if r["topic"] >= 0]
+    K = len(rows)
+    captions = [_short(r["label"], r["top_words"]) for r in rows]
+    prevalence = np.array([r["prevalence"] for r in rows])
+
+    # Decide which optional panels we can draw.
+    panels = ["prevalence"]
+    quality = None
+    try:
+        quality = _diagnostics.quality_frontier(
+            model, n=n, texts=texts,
+            coherence_type=coherence_type if texts is not None else "u_mass",
+        )
+        panels.append("quality")
+    except Exception:
+        pass
+    corr = None
+    if 2 <= K <= 40:
+        try:
+            corr = np.asarray(_diagnostics.topic_correlation(model.doc_topic).cor)
+            panels.append("correlation")
+        except Exception:
+            pass
+    over_time = None
+    if timestamps is not None:
+        try:
+            over_time = topics_over_time(model, timestamps)
+            panels.append("time")
+        except Exception:
+            pass
+    per_class = None
+    if groups is not None:
+        try:
+            theta = _doc_topic(model)
+            g = np.asarray(list(groups))
+            levels = sorted(np.unique(g), key=lambda v: str(v))
+            per_class = (levels, np.array([theta[g == lv].mean(axis=0) for lv in levels]))
+            panels.append("class")
+        except Exception:
+            pass
+
+    ncols = 1 if len(panels) == 1 else 2
+    nrows = (len(panels) + ncols - 1) // ncols
+    if figsize is None:
+        figsize = (7.0 * ncols, max(3.2, 0.30 * K + 1.4) * nrows)
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = [ax for r in axes for ax in r]
+    for ax in flat[len(panels):]:
+        ax.axis("off")
+
+    for ax, panel in zip(flat, panels):
+        if panel == "prevalence":
+            order = np.argsort(prevalence)
+            ax.barh(np.arange(K), prevalence[order], color="#4C72B0")
+            ax.set_yticks(np.arange(K))
+            ax.set_yticklabels([captions[i] for i in order], fontsize=8)
+            ax.set_xlabel("Mean prevalence (θ)")
+            ax.set_title("Topics by prevalence")
+        elif panel == "quality":
+            ax.scatter(quality["coherence"], quality["exclusivity"],
+                       s=300 * quality["prevalence"] + 20, color="#55A868", alpha=0.8)
+            for t in range(len(quality["topic"])):
+                ax.annotate(str(int(quality["topic"][t])),
+                            (quality["coherence"][t], quality["exclusivity"][t]), fontsize=7)
+            ax.set_xlabel("Semantic coherence")
+            ax.set_ylabel("Exclusivity")
+            ax.set_title("Topic quality (size ∝ prevalence)")
+        elif panel == "correlation":
+            im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
+            ax.set_title("Topic correlation")
+            ax.set_xlabel("topic")
+            ax.set_ylabel("topic")
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        elif panel == "time":
+            labels, prev = over_time["labels"], over_time["prevalence"]
+            top = np.argsort(prev.mean(axis=0))[::-1][:6]
+            for t in top:
+                ax.plot(range(len(labels)), prev[:, t], marker="o", ms=3,
+                        label=captions[t].split(":")[0])
+            ax.set_xticks(range(len(labels)))
+            ax.set_xticklabels([str(lv) for lv in labels], rotation=45, ha="right", fontsize=7)
+            ax.set_ylabel("Topic share")
+            ax.set_title("Topics over time (top 6)")
+            ax.legend(fontsize=6, ncol=2)
+        elif panel == "class":
+            levels, means = per_class
+            im = ax.imshow(means, aspect="auto", cmap="viridis")
+            ax.set_yticks(range(len(levels)))
+            ax.set_yticklabels([str(lv) for lv in levels], fontsize=7)
+            ax.set_xlabel("topic")
+            ax.set_title("Prevalence by class")
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.suptitle(title or f"{type(model).__name__} — {K} topics", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
+    return fig
+
+
 __all__ = [
     "topic_info",
     "topic_sizes",
@@ -222,4 +350,5 @@ __all__ = [
     "representative_docs",
     "topics_over_time",
     "topics_per_class",
+    "plot_report",
 ]
