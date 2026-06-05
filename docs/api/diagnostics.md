@@ -46,3 +46,15 @@ in `topica.diagnostics`.
 ::: topica.align_topics
 
 ::: topica.topic_stability
+
+## Reporting
+
+Model-neutral summaries that work on any fitted model.
+
+::: topica.plot_report
+
+::: topica.topic_info
+
+::: topica.topics_over_time
+
+::: topica.topics_per_class

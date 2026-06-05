@@ -23,14 +23,16 @@ def _formula_context():
 
 
 def design_matrix(formula, data):
-    """Build a design matrix from an R-style `formula` and a pandas `data` frame.
+    """Build a design matrix from an R-style `formula` and a `data` frame
+    (pandas or Polars).
 
     Returns ``(X, feature_names)`` where ``X`` is a ``(n_rows, p)`` float array
     and ``feature_names`` are the column labels. The intercept that `formulaic`
     adds is stripped, because :func:`topica.estimate_effect` and the STM
     prevalence model add their own. Categorical columns become treatment-coded
     dummies; ``a * b`` / ``a:b`` expand interactions; ``spline(x, df=k)`` uses
-    topica's restricted cubic spline.
+    topica's restricted cubic spline. A Polars frame is converted to pandas for
+    `formulaic`.
 
     Requires the optional ``formulaic`` package.
     """
@@ -43,6 +45,12 @@ def design_matrix(formula, data):
         ) from e
     import pandas as pd
 
+    from .frames import _is_polars
+
+    if _is_polars(data):
+        # Build the pandas frame from columns directly; data.to_pandas() would
+        # pull in pyarrow, which we do not want to require.
+        data = pd.DataFrame(data.to_dict(as_series=False))
     mm = model_matrix(formula, data, context=_formula_context())
     frame = pd.DataFrame(mm)
     if "Intercept" in frame.columns:

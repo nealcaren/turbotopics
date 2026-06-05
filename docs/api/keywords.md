@@ -14,6 +14,17 @@
 
 ::: topica.one_hot
 
+## DataFrames & metadata
+
+These accept pandas **or** Polars frames (and `align` also takes numpy arrays and
+lists), keeping document metadata aligned to the rows that survive pruning.
+
+::: topica.from_dataframe
+
+::: topica.align
+
+::: topica.design_matrix
+
 ## Phrases
 
 ::: topica.learn_phrases

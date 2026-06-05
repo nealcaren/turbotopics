@@ -11,6 +11,12 @@ from __future__ import annotations
 from . import Corpus, tokenize
 
 
+def _is_polars(obj) -> bool:
+    """True for a Polars DataFrame/Series, without importing Polars (it is an
+    optional dependency)."""
+    return type(obj).__module__.split(".", 1)[0] == "polars"
+
+
 def from_dataframe(
     df,
     *,
@@ -24,19 +30,20 @@ def from_dataframe(
     min_cf=0,
     rm_top=0,
 ):
-    """Build a :class:`Corpus` from a pandas DataFrame, keeping per-document
-    metadata aligned to the documents that survive pruning.
+    """Build a :class:`Corpus` from a pandas or Polars DataFrame, keeping
+    per-document metadata aligned to the documents that survive pruning.
 
     ``df[text_col]`` is tokenized (with ``tokenizer`` if given, otherwise
     :func:`topica.tokenize`), a :class:`Corpus` is built with the usual pruning
     options, and the surviving rows of ``metadata_cols`` (default: every column
-    except ``text_col``) are attached as ``corpus.metadata`` — a DataFrame
+    except ``text_col``) are attached as ``corpus.metadata`` — a DataFrame of the
+    same kind you passed in (pandas in, pandas out; Polars in, Polars out),
     aligned one-to-one with the corpus documents, in the same row order. Feed
     that metadata straight to an STM prevalence design with no manual alignment.
 
     Parameters
     ----------
-    df : pandas.DataFrame
+    df : pandas.DataFrame or polars.DataFrame
         One row per document.
     text_col : str
         Column holding the document text.
@@ -47,7 +54,7 @@ def from_dataframe(
         ``str -> list[str]``. Defaults to :func:`topica.tokenize` with the
         ``stopwords`` and ``min_length`` arguments below.
     """
-    texts = df[text_col].tolist()
+    texts = list(df[text_col])  # pandas Series and Polars Series both iterate to values
     if tokenizer is None:
         sw = list(stopwords) if stopwords is not None else None
         docs = [
@@ -70,13 +77,18 @@ def from_dataframe(
         if metadata_cols is not None
         else [c for c in df.columns if c != text_col]
     )
-    corpus.metadata = df.iloc[corpus.kept_indices][cols].reset_index(drop=True)
+    idx = corpus.kept_indices
+    if _is_polars(df):
+        corpus.metadata = df[list(idx)].select(cols)  # row-select then column-select
+    else:
+        corpus.metadata = df.iloc[idx][cols].reset_index(drop=True)
     return corpus
 
 
 def align(x, corpus):
     """Realign an external covariate array, DataFrame, Series, or list to the
-    documents a :class:`Corpus` kept after pruning.
+    documents a :class:`Corpus` kept after pruning. Accepts pandas and Polars
+    DataFrames/Series, numpy arrays, and plain lists.
 
     Use it when your covariates were built against the original documents and
     the corpus dropped some during pruning::
@@ -88,6 +100,8 @@ def align(x, corpus):
     idx = corpus.kept_indices
     if hasattr(x, "iloc"):  # pandas DataFrame / Series
         return x.iloc[idx].reset_index(drop=True)
+    if _is_polars(x):  # polars DataFrame / Series: positional row selection
+        return x[list(idx)]
     try:
         import numpy as np
 
