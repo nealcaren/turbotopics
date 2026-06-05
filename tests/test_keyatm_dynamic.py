@@ -114,6 +114,40 @@ def test_string_timestamps_sorted():
     assert m.time_labels == ["era_2000", "era_2001", "era_2002", "era_2003"]
 
 
+def test_noncontiguous_unsorted_timestamps_keep_theta_aligned():
+    # Topica must not require a contiguous, pre-sorted time index: the caller may
+    # pass arbitrary timestamp values with gaps, in any order. build_time_index
+    # maps the distinct values to a contiguous index, and the fit sorts internally
+    # and scatters theta back to the input document order. Plant a block per
+    # document independent of its timestamp, so we can check the per-document
+    # alignment exactly (not just a regime mean).
+    rng = np.random.default_rng(0)
+    gap_years = [2001.0, 2004.0, 2009.0, 2013.0, 2020.0]  # non-contiguous, with gaps
+    docs, ts, block = [], [], []
+    for i in range(120):
+        is_econ = i % 2 == 0
+        heavy, light = (ECON, SOC) if is_econ else (SOC, ECON)
+        docs.append(rng.choice(heavy, 9).tolist() + rng.choice(light, 3).tolist())
+        ts.append(float(rng.choice(gap_years)))  # random, unsorted, gapped
+        block.append(0 if is_econ else 1)
+    block = np.array(block)
+
+    m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
+    m.fit(docs, timestamps=ts, num_states=2, iters=400)
+
+    # The distinct values define the (contiguous) time order; labels are sorted.
+    assert m.time_labels == ["2001", "2004", "2009", "2013", "2020"]
+    assert m.time_prevalence.shape == (5, 2)
+
+    # theta is aligned to the INPUT document order: each doc loads on its own
+    # keyword topic (economic=0, social=1), regardless of timestamp order/gaps.
+    th = np.asarray(m.doc_topic)
+    econ_i = m.topic_names.index("economic")
+    soc_i = m.topic_names.index("social")
+    pred = np.where(th[:, soc_i] > th[:, econ_i], 1, 0)
+    assert (pred == block).mean() > 0.95
+
+
 def test_base_model_has_no_time_outputs():
     docs, _ = _corpus(seed=2, n_years=3, per_year=20)
     m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
