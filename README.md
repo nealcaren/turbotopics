@@ -34,6 +34,8 @@ Every fit is reproducible from a fixed seed and validated against its reference.
 
 ## Models
 
+**Count-based models** learn topics from word counts (collapsed Gibbs or variational EM):
+
 | Model | What it's for |
 |-------|---------------|
 | **`LDA`** | Classic topics via fast collapsed-Gibbs (SparseLDA); optional multi-threaded and LightLDA alias samplers |
@@ -49,7 +51,14 @@ Every fit is reproducible from a fixed seed and validated against its reference.
 | **`SeededLDA` / `KeyATM`** | Guided topics steered by seed words |
 | **`PA` / `HLDA`** | Topic hierarchies (Pachinko, nested-CRP) |
 
-Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, `transform(new_docs)`, and `save`/`load`. The variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic. Full guide: [the models](https://nealcaren.github.io/topica/guides/models/).
+**Embedding-based models** cluster document embeddings you supply (no PyTorch, no UMAP/numba in the wheel):
+
+| Model | What it's for |
+|-------|---------------|
+| **`BERTopic`** | Cluster document embeddings, label topics by class-TF-IDF; topic reduction and a soft per-document distribution |
+| **`Top2Vec`** | Topics as points in the embedding space; topic words are the nearest word vectors |
+
+Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, and `save`/`load`. The count-based variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic; the embedding models run the `reduce → cluster → represent` pipeline in Rust over vectors from any embedder (sentence-transformers, an API, a local model such as ollama). Full guides: [the models](https://nealcaren.github.io/topica/guides/models/) and [embedding topics](https://nealcaren.github.io/topica/guides/embedding/).
 
 ## Diagnostics & analysis
 

@@ -86,6 +86,7 @@ nav:
       - Distinguishing words: guides/keywords.md
       - Guided topics (seed words): guides/guided.md
       - Short text: guides/short-text.md
+      - Embedding topics (BERTopic & Top2Vec): guides/embedding.md
       - Held-out inference: guides/transform.md
   - Benchmarks: benchmarks.md
   - Publishing in a journal:
