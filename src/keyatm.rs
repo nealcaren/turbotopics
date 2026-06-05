@@ -158,6 +158,13 @@ pub struct KeyAtmModel {
     /// Covariate model only: the document feature matrix used at fit time
     /// (`[D][F]`), kept for held-out inference. `None` for the base model.
     pub features: Option<Vec<Vec<f64>>>,
+    /// Covariate model only: a fixed per-document, per-topic embedding offset
+    /// `s_{d,k}` added inside the DMR exponent, `α_{d,k} = exp(x_d · λ_k +
+    /// s_{d,k})`. Anchors each document toward the topics its embedding is near
+    /// while `λ` still estimates covariate effects. `None` for no embedding
+    /// anchor (the plain covariate prior).
+    #[serde(default)]
+    pub prior_offset: Option<Vec<Vec<f64>>>,
     /// Dynamic model only: the fitted Chib (1998) change-point HMM over time
     /// segments. `None` for the base and covariate models.
     pub dynamic: Option<DynamicState>,
@@ -293,9 +300,11 @@ impl KeyAtmModel {
                 .collect();
         }
 
-        // Covariate model: per-document, per-topic α from the regression.
+        // Covariate model: per-document, per-topic α from the regression
+        // (plus the fixed embedding offset, when present).
         if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
-            let doc_alpha = crate::dmr::compute_doc_alpha(lambda, features);
+            let doc_alpha =
+                crate::dmr::compute_doc_alpha(lambda, features, self.prior_offset.as_deref());
             return self
                 .ndk
                 .iter()
@@ -351,7 +360,7 @@ impl KeyAtmModel {
                 .collect();
         }
         if let (Some(lambda), Some(features)) = (&self.lambda, &self.features) {
-            return crate::dmr::compute_doc_alpha(lambda, features);
+            return crate::dmr::compute_doc_alpha(lambda, features, self.prior_offset.as_deref());
         }
         let row = self
             .alpha_vec
@@ -1071,6 +1080,7 @@ fn init_state<R: Rng>(
         vocab_weights,
         lambda: None,
         features: None,
+        prior_offset: None,
         dynamic: None,
         alpha_vec: None,
         log_likelihood_history: Vec::new(),
@@ -1114,10 +1124,18 @@ pub fn fit_keyatm_cov<R: Rng>(
     ll_interval: usize,
     weights: WeightScheme,
     num_threads: usize,
+    offset: Option<&[Vec<f64>]>,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
     assert_eq!(features.len(), docs.len(), "features rows must equal number of documents");
+    if let Some(off) = offset {
+        assert_eq!(off.len(), docs.len(), "offset rows must equal number of documents");
+        assert!(
+            off.iter().all(|r| r.len() == num_topics),
+            "offset columns must equal num_topics"
+        );
+    }
 
     // α is replaced by the covariate prior; pass a nominal 1.0 for the struct.
     let (mut model, mut assignments, ki) = init_state(
@@ -1125,11 +1143,12 @@ pub fn fit_keyatm_cov<R: Rng>(
     );
 
     let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
-    let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+    let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
     // So the log-likelihood trace uses the covariate doc-topic prior: doc_topic()
     // takes the (lambda, features) path only when both are set on the model.
     if ll_interval > 0 {
         model.features = Some(features.to_vec());
+        model.prior_offset = offset.map(|o| o.to_vec());
     }
 
     for it in 0..iters {
@@ -1143,11 +1162,13 @@ pub fn fit_keyatm_cov<R: Rng>(
                 num_features,
                 prior_variance,
                 lbfgs_iters,
+                offset,
             );
-            doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features);
+            doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
         }
         if record_ll(it + 1, ll_interval, iters) {
             model.lambda = Some(lambda.clone());
+            model.prior_offset = offset.map(|o| o.to_vec());
             model
                 .log_likelihood_history
                 .push((it + 1, model.model_loglik(), model.perplexity()));
@@ -1157,6 +1178,7 @@ pub fn fit_keyatm_cov<R: Rng>(
 
     model.lambda = Some(lambda);
     model.features = Some(features.to_vec());
+    model.prior_offset = offset.map(|o| o.to_vec());
     model
 }
 

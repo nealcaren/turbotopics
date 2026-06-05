@@ -249,3 +249,159 @@ class EmbeddingLDA:
             f"EmbeddingLDA(num_topics={self.num_topics}, top_m={self.top_m}, "
             f"{seeded} topics seeded)"
         )
+
+
+def _topic_anchors(seeds, vocabulary, embeddings, num_topics, topic_embeddings):
+    """Per-topic unit anchor vectors (or ``None``). By default a keyword topic's
+    anchor is the mean embedding of its in-vocabulary keywords; residual topics
+    have none. An explicit ``topic_embeddings`` row (finite) overrides a topic's
+    anchor, which also lets residual topics be anchored.
+
+    Returns a list of length ``num_topics`` whose entries are unit-norm
+    ``(E,)`` arrays or ``None``."""
+    emb = np.asarray(embeddings, dtype=np.float64)
+    index = {str(w): i for i, w in enumerate(vocabulary)}
+    anchors: list = [None] * num_topics
+    # Keyword topics come first, in dict order (matching topica's topic order).
+    for t, words in enumerate(seeds.values()):
+        rows = [index[str(w)] for w in words if str(w) in index]
+        if rows:
+            anchors[t] = emb[rows].mean(axis=0)
+
+    if topic_embeddings is not None:
+        te = np.asarray(topic_embeddings, dtype=np.float64)
+        if te.shape != (num_topics, emb.shape[1]):
+            raise ValueError(
+                f"topic_embeddings must be ({num_topics}, {emb.shape[1]}); got {te.shape}"
+            )
+        for t in range(num_topics):
+            if np.all(np.isfinite(te[t])) and np.linalg.norm(te[t]) > 0:
+                anchors[t] = te[t]
+
+    # Normalize to unit length so the offset is a cosine.
+    out = []
+    for a in anchors:
+        if a is None:
+            out.append(None)
+            continue
+        n = np.linalg.norm(a)
+        out.append(a / n if n > 0 else None)
+    return out
+
+
+class EmbeddingKeyATM:
+    """keyATM whose document-topic prior is anchored by document embeddings.
+
+    This is the covariate keyATM (``α_{d,k} = exp(x_d · λ_k)``) with one extra
+    term: a fixed embedding offset added inside the exponent,
+
+        α_{d,k} = exp(x_d · λ_k + doc_anchor · max(cos(emb_d, anchor_k), 0)).
+
+    Each keyword topic's ``anchor_k`` is, by default, the mean embedding of its
+    keywords, so a document leans toward the keyword topics it is semantically
+    near even when it is too short for word co-occurrence to place it. The
+    covariate coefficients ``λ`` are still estimated, so you keep keyATM's
+    effect estimation (``feature_effects``, ``by_strata``) on top of the anchor.
+    Pass ``covariates`` to estimate effects; omit them to use the anchor alone
+    (an intercept-only design is synthesized).
+
+    Unlike a hard embedding clustering, the embedding here is a prior the word
+    likelihood can override, and ``doc_anchor`` dials how much it is trusted.
+
+    Parameters
+    ----------
+    seeds : dict[str, list[str]]
+        Keyword topics, as for :class:`~topica.KeyATM`.
+    num_topics : int
+        Total topics (keyword topics first, then residual topics).
+    embeddings : array (V, E)
+        Word-embedding matrix aligned with ``vocabulary`` (for the keyword-mean
+        anchors).
+    vocabulary : sequence of str
+        Words aligned row-for-row with ``embeddings``.
+    topic_embeddings : array (num_topics, E), optional
+        Explicit per-topic anchor vectors. A finite row overrides that topic's
+        keyword-mean anchor (and can anchor a residual topic); leave a row
+        non-finite to keep the default.
+    doc_anchor : float
+        Strength of the embedding offset.
+    seed : int
+        Random seed for the underlying sampler.
+    """
+
+    def __init__(
+        self,
+        seeds,
+        num_topics: int,
+        *,
+        embeddings,
+        vocabulary: Sequence[str],
+        topic_embeddings=None,
+        doc_anchor: float = 5.0,
+        seed: int = 42,
+        **keyatm_kwargs,
+    ) -> None:
+        from . import KeyATM
+
+        if len(vocabulary) != np.asarray(embeddings).shape[0]:
+            raise ValueError("vocabulary length must match the number of embedding rows")
+        if num_topics < len(seeds):
+            raise ValueError("num_topics cannot be smaller than the number of keyword topics")
+        if doc_anchor < 0:
+            raise ValueError("doc_anchor must be >= 0")
+
+        self.seeds = dict(seeds)
+        self.num_topics = num_topics
+        self.doc_anchor = doc_anchor
+        self._E = np.asarray(embeddings, dtype=np.float64).shape[1]
+        self._anchors = _topic_anchors(
+            self.seeds, vocabulary, embeddings, num_topics, topic_embeddings
+        )
+        self._model = KeyATM(self.seeds, num_topics=num_topics, seed=seed, **keyatm_kwargs)
+
+    def document_topic_offset(self, doc_embeddings) -> np.ndarray:
+        """The fixed offset matrix ``s_{d,k} = doc_anchor · max(cos(emb_d,
+        anchor_k), 0)``, shape ``(num_docs, num_topics)``. Topics without an
+        anchor (residual topics, by default) get a zero column."""
+        de = np.asarray(doc_embeddings, dtype=np.float64)
+        if de.ndim != 2 or de.shape[1] != self._E:
+            raise ValueError(
+                "doc_embeddings must be (num_docs, E) with E matching the word embeddings"
+            )
+        norms = np.linalg.norm(de, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        den = de / norms
+        offset = np.zeros((de.shape[0], self.num_topics))
+        for t, a in enumerate(self._anchors):
+            if a is not None:
+                offset[:, t] = self.doc_anchor * np.maximum(den @ a, 0.0)
+        return offset
+
+    def fit(self, data, *, doc_embeddings=None, covariates=None, iters: int = 1500, **fit_kwargs):
+        """Fit on ``data``. If ``doc_embeddings`` is given (same space as the
+        word embeddings), each document's topic prior is anchored toward the
+        keyword topics it is closest to. ``covariates`` (and other keyATM
+        ``fit`` kwargs) are passed through, so effects are estimated jointly."""
+        offset = self.document_topic_offset(doc_embeddings) if doc_embeddings is not None else None
+        self._model.fit(
+            data, iters=iters, covariates=covariates, prior_offset=offset, **fit_kwargs
+        )
+        return self
+
+    @property
+    def model(self):
+        """The underlying fitted :class:`~topica.KeyATM`."""
+        return self._model
+
+    def __getattr__(self, name):
+        model = self.__dict__.get("_model")
+        if model is None:
+            raise AttributeError(name)
+        return getattr(model, name)
+
+    def __repr__(self) -> str:
+        anchored = sum(1 for a in self._anchors if a is not None)
+        return (
+            f"EmbeddingKeyATM(num_topics={self.num_topics}, "
+            f"{anchored} topics anchored, doc_anchor={self.doc_anchor})"
+        )
