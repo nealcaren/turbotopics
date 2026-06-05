@@ -59,8 +59,61 @@ def test_etm_validation():
     docs, vocab, word_emb, _ = _planted()
     with pytest.raises(ValueError):
         topica.ETM(num_topics=1)  # need >= 2 topics
+    with pytest.raises(ValueError):
+        topica.ETM(num_topics=3, inference="bogus")  # em or vae only
     m = topica.ETM(num_topics=3, seed=1)
     with pytest.raises(ValueError):
         m.fit(docs, word_emb[:-1], vocab)  # embeddings rows != vocab length
     with pytest.raises(RuntimeError):
         topica.ETM(num_topics=3).topic_word  # not fitted
+
+
+# --- VAE inference path -----------------------------------------------------
+
+
+def _vae(num_topics=3, **kw):
+    return topica.ETM(
+        num_topics=num_topics, inference="vae", hidden_size=64, epochs=200,
+        batch_size=64, lr=0.01, **kw
+    )
+
+
+def test_etm_vae_recovers_planted_blocks():
+    docs, vocab, word_emb, _ = _planted()
+    m = _vae(seed=1)
+    theta = m.fit_transform(docs, word_emb, vocab)
+    assert m.inference == "vae"
+    assert m.topic_word.shape == (3, len(vocab))
+    assert theta.shape == (len(docs), 3)
+    assert np.allclose(theta.sum(axis=1), 1.0)
+    assert np.allclose(m.topic_word.sum(axis=1), 1.0)
+    block = 8
+    covered = set()
+    for t in range(3):
+        words = [w for w, _ in m.top_words(4, topic=t)]
+        blocks = {w.split("w")[0] for w in words}
+        assert len(blocks) == 1, f"topic {t} mixes blocks: {words}"
+        covered |= blocks
+    assert len(covered) == 3
+
+
+def test_etm_vae_transform_is_encoder_pass():
+    docs, vocab, word_emb, _ = _planted()
+    m = _vae(seed=2)
+    m.fit(docs, word_emb, vocab)
+    # transform takes token docs and returns a distribution per doc.
+    new = [["b0w1", "b0w2"], ["b1w0", "b1w3"], ["b2w5", "b2w4"]]
+    theta = m.transform(new)
+    assert theta.shape == (3, 3)
+    assert np.allclose(theta.sum(axis=1), 1.0)
+    assert len(set(theta.argmax(axis=1))) == 3  # each lands on a distinct topic
+
+
+def test_etm_vae_determinism():
+    docs, vocab, word_emb, _ = _planted()
+    a = _vae(seed=7)
+    a.fit(docs, word_emb, vocab)
+    b = _vae(seed=7)
+    b.fit(docs, word_emb, vocab)
+    assert np.allclose(a.topic_word, b.topic_word)
+    assert np.allclose(a.doc_topic, b.doc_topic)

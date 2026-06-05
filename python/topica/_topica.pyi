@@ -1410,18 +1410,26 @@ class ETM:
     """Embedded Topic Model (Dieng, Ruiz & Blei 2020): LDA with the topic-word
     matrix factored through embeddings, beta_{k,v} = softmax_v(rho_v . alpha_k),
     and a logistic-normal document prior. You bring the word embeddings rho;
-    topica fits the topic embeddings alpha and the prior by the same variational
-    EM as CTM (no VAE)."""
+    topica fits the topic embeddings alpha. `inference="em"` (default) uses
+    per-document variational EM; `inference="vae"` uses the reference's amortized
+    autoencoder, which scales to large corpora and maps new documents with a single
+    encoder pass. Neither uses PyTorch."""
 
     def __init__(
         self,
         num_topics: int,
         *,
+        inference: str = "em",
         em_iters: int = 100,
         em_tol: float = 1e-4,
         sigma_shrink: float = 0.0,
         prior_variance: float = 1e6,
         max_inner: int = 25,
+        hidden_size: int = 800,
+        epochs: int = 150,
+        batch_size: int = 1000,
+        lr: float = 0.005,
+        wdecay: float = 1.2e-6,
         seed: int = 42,
     ) -> None: ...
     def fit(
@@ -1435,6 +1443,8 @@ class ETM:
         ...
     @property
     def num_topics(self) -> int: ...
+    @property
+    def inference(self) -> str: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property

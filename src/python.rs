@@ -33,6 +33,7 @@ use crate::slda;
 use crate::top2vec;
 use crate::bertopic;
 use crate::etm;
+use crate::etm_vae;
 use crate::fastopic;
 use crate::labeled;
 use crate::sage;
@@ -6865,14 +6866,21 @@ impl BERTopic {
 #[pyclass(module = "topica")]
 pub struct ETM {
     num_topics: usize,
+    inference: String,
     em_iters: usize,
     em_tol: f64,
     sigma_shrink: f64,
     prior_variance: f64,
     max_inner: usize,
+    hidden_size: usize,
+    epochs: usize,
+    batch_size: usize,
+    lr: f64,
+    wdecay: f64,
     seed: u64,
     fitted: bool,
     model: Option<etm::EtmModel>,
+    vae: Option<etm_vae::EtmVaeModel>,
     id_to_word: Vec<String>,
 }
 
@@ -6882,24 +6890,91 @@ impl ETM {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
     }
+
+    fn ensure_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+
+    /// Topic-word matrix beta, from whichever inference path was fit.
+    fn surf_beta(&self) -> PyResult<&Vec<Vec<f64>>> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(&m.beta),
+            (_, Some(m)) => Ok(&m.beta),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
+
+    /// Topic embeddings alpha.
+    fn surf_alpha(&self) -> PyResult<&Vec<Vec<f64>>> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(&m.alpha),
+            (_, Some(m)) => Ok(&m.alpha),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
+
+    /// Document-topic proportions theta (computed fresh for the EM path).
+    fn surf_doc_topic(&self) -> PyResult<Vec<Vec<f64>>> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(m.doc_topics()),
+            (_, Some(m)) => Ok(m.doc_topic.clone()),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
+
+    fn surf_bound(&self) -> PyResult<f64> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(m.bound),
+            (_, Some(m)) => Ok(m.bound),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
+
+    fn surf_converged(&self) -> PyResult<bool> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(m.converged),
+            (_, Some(m)) => Ok(m.converged),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
 }
 
 #[pymethods]
 impl ETM {
-    /// Create an unfitted model. `em_iters`/`em_tol` control the variational EM;
-    /// `prior_variance` is the Gaussian prior on the topic embeddings (large =
-    /// weak); `max_inner` caps the per-iteration L-BFGS steps for the embedding
-    /// update; `sigma_shrink` shrinks the off-diagonal topic covariance.
+    /// Create an unfitted model. `inference` selects the engine: `"em"` (default)
+    /// is per-document variational EM, accurate but not minibatched; `"vae"` is the
+    /// reference's amortized autoencoder, which scales to large corpora and maps new
+    /// documents with a single encoder pass. `em_iters`/`em_tol`/`prior_variance`/
+    /// `max_inner`/`sigma_shrink` govern the EM path; `hidden_size`/`epochs`/
+    /// `batch_size`/`lr`/`wdecay`/`em_tol` govern the VAE path.
     #[new]
-    #[pyo3(signature = (num_topics, *, em_iters=100, em_tol=1e-4, sigma_shrink=0.0,
-                        prior_variance=1e6, max_inner=25, seed=42))]
+    #[pyo3(signature = (num_topics, *, inference="em", em_iters=100, em_tol=1e-4,
+                        sigma_shrink=0.0, prior_variance=1e6, max_inner=25,
+                        hidden_size=800, epochs=150, batch_size=1000, lr=0.005,
+                        wdecay=1.2e-6, seed=42))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         num_topics: usize,
+        inference: &str,
         em_iters: usize,
         em_tol: f64,
         sigma_shrink: f64,
         prior_variance: f64,
         max_inner: usize,
+        hidden_size: usize,
+        epochs: usize,
+        batch_size: usize,
+        lr: f64,
+        wdecay: f64,
         seed: u64,
     ) -> PyResult<Self> {
         if num_topics < 2 {
@@ -6908,16 +6983,26 @@ impl ETM {
         if prior_variance <= 0.0 {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
+        if inference != "em" && inference != "vae" {
+            return Err(PyValueError::new_err("inference must be \"em\" or \"vae\""));
+        }
         Ok(ETM {
             num_topics,
+            inference: inference.to_string(),
             em_iters,
             em_tol,
             sigma_shrink,
             prior_variance,
             max_inner,
+            hidden_size,
+            epochs,
+            batch_size,
+            lr,
+            wdecay,
             seed,
             fitted: false,
             model: None,
+            vae: None,
             id_to_word: Vec::new(),
         })
     }
@@ -6966,16 +7051,29 @@ impl ETM {
         }
         let num_types = vocabulary.len();
         self.id_to_word = vocabulary;
-
-        let (k, ei, et, ss, pv, mi) = (
-            self.num_topics, self.em_iters, self.em_tol, self.sigma_shrink,
-            self.prior_variance, self.max_inner,
-        );
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
-        let model = py.allow_threads(move || {
-            etm::fit_etm(&docs_ids, k, num_types, &rho, ei, et, ss, pv, mi, &mut rng)
-        });
-        self.model = Some(model);
+
+        if self.inference == "vae" {
+            let (k, h, ep, bs, lr, wd, et) = (
+                self.num_topics, self.hidden_size, self.epochs, self.batch_size,
+                self.lr, self.wdecay, self.em_tol,
+            );
+            let m = py.allow_threads(move || {
+                etm_vae::fit_etm_vae(&docs_ids, k, num_types, &rho, h, ep, bs, lr, wd, et, &mut rng)
+            });
+            self.vae = Some(m);
+            self.model = None;
+        } else {
+            let (k, ei, et, ss, pv, mi) = (
+                self.num_topics, self.em_iters, self.em_tol, self.sigma_shrink,
+                self.prior_variance, self.max_inner,
+            );
+            let model = py.allow_threads(move || {
+                etm::fit_etm(&docs_ids, k, num_types, &rho, ei, et, ss, pv, mi, &mut rng)
+            });
+            self.model = Some(model);
+            self.vae = None;
+        }
         self.fitted = true;
         Ok(())
     }
@@ -6984,38 +7082,42 @@ impl ETM {
     fn num_topics(&self) -> usize {
         self.num_topics
     }
+    #[getter]
+    fn inference(&self) -> String {
+        self.inference.clone()
+    }
     /// Topic-word matrix beta (num_topics, vocab), each row a distribution.
     #[getter]
     fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        Ok(vecs_to_arr2(&self.fitted_model()?.beta).to_pyarray_bound(py))
+        Ok(vecs_to_arr2(self.surf_beta()?).to_pyarray_bound(py))
     }
     /// Document-topic proportions theta (num_docs, num_topics).
     #[getter]
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topics()).to_pyarray_bound(py))
+        Ok(vecs_to_arr2(&self.surf_doc_topic()?).to_pyarray_bound(py))
     }
     /// Topic embeddings alpha (num_topics, E).
     #[getter]
     fn topic_embeddings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        Ok(vecs_to_arr2(&self.fitted_model()?.alpha).to_pyarray_bound(py))
+        Ok(vecs_to_arr2(self.surf_alpha()?).to_pyarray_bound(py))
     }
-    /// The variational evidence bound at convergence.
+    /// The variational evidence bound (EM) or the ELBO (VAE) at convergence.
     #[getter]
     fn bound(&self) -> PyResult<f64> {
-        Ok(self.fitted_model()?.bound)
+        self.surf_bound()
     }
     #[getter]
     fn converged(&self) -> PyResult<bool> {
-        Ok(self.fitted_model()?.converged)
+        self.surf_converged()
     }
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
-        self.fitted_model()?;
+        self.ensure_fitted()?;
         Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
-        self.fitted_model()?;
+        self.ensure_fitted()?;
         Ok(self.id_to_word.clone())
     }
     #[pyo3(signature = (n=10, *, topic=None))]
@@ -7025,22 +7127,27 @@ impl ETM {
         n: usize,
         topic: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.fitted_model()?;
-        let phi = vecs_to_arr2(&m.beta);
+        let phi = vecs_to_arr2(self.surf_beta()?);
         topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
     }
 
-    /// Held-out topic proportions for new documents: the logistic-normal E-step
-    /// with the fitted `beta` and prior held fixed. Tokens outside the vocabulary
-    /// are dropped. Returns `(num_docs, num_topics)`.
+    /// Held-out topic proportions for new documents. For the EM path this is the
+    /// logistic-normal E-step with the fitted `beta` and prior held fixed; for the
+    /// VAE path it is a single encoder forward pass (`theta = softmax(mu)`). Tokens
+    /// outside the vocabulary are dropped. Returns `(num_docs, num_topics)`.
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let m = self.fitted_model()?;
+        self.ensure_fitted()?;
         let docs = docs_to_ids(data, &self.id_to_word)?;
-        Ok(infer_theta_batch(py, &m.beta, &m.mu, &m.sigma, &docs).to_pyarray_bound(py))
+        if let Some(m) = &self.vae {
+            Ok(vecs_to_arr2(&m.transform(&docs)).to_pyarray_bound(py))
+        } else {
+            let m = self.fitted_model()?;
+            Ok(infer_theta_batch(py, &m.beta, &m.mu, &m.sigma, &docs).to_pyarray_bound(py))
+        }
     }
 
     /// Fit, then return the document-topic proportions (`fit_transform`).
@@ -7053,11 +7160,14 @@ impl ETM {
         vocabulary: Vec<String>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.fit(py, data, word_embeddings, vocabulary)?;
-        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topics()).to_pyarray_bound(py))
+        Ok(vecs_to_arr2(&self.surf_doc_topic()?).to_pyarray_bound(py))
     }
 
     fn __repr__(&self) -> String {
-        format!("ETM(num_topics={}, fitted={})", self.num_topics, self.fitted)
+        format!(
+            "ETM(num_topics={}, inference={}, fitted={})",
+            self.num_topics, self.inference, self.fitted
+        )
     }
 }
 

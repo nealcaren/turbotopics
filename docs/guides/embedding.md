@@ -103,9 +103,31 @@ model.bound, model.converged           # the variational evidence bound
 
 Because ETM is generative and mixed-membership, you get a proper `θ` and the full
 [effects](../publishing/effects.md) and diagnostics stack, not a hard partition.
-It fits in a fraction of a second on a few thousand documents. The trade for the
-reference's VAE is scale: the per-document EM is more accurate per document but
-less suited to corpora of tens of millions of documents.
+It fits in a fraction of a second on a few thousand documents.
+
+### Inference: EM or VAE
+
+ETM has two inference engines, selected with `inference=`. The default `"em"` is
+the per-document variational EM above: accurate per document, but it runs an
+optimizer for every document, so it does not minibatch. `"vae"` is the reference's
+amortized autoencoder, an encoder network that maps a document's word counts
+straight to its topic proportions. It trains by minibatch Adam, scales to large
+corpora, and maps a new document with a single encoder pass rather than a
+per-document optimization.
+
+```python
+model = topica.ETM(num_topics=20, inference="vae",
+                   hidden_size=800, epochs=150, batch_size=1000, lr=0.005, seed=1)
+model.fit(docs, word_emb, vocab)
+model.transform(new_docs)              # fast: one encoder forward pass
+```
+
+The reference fits the VAE with PyTorch autograd; topica hand-codes the encoder's
+forward and backward (every gradient checked against finite differences) and steps
+with Adam, so the VAE path is the same model with no PyTorch. Both engines return
+the same surface (`topic_word`, `doc_topic`, `topic_embeddings`); `bound` is the
+variational bound for EM and the ELBO for VAE. The trade is the usual one: EM is
+more accurate per document, the VAE scales.
 
 ## FASTopic
 
