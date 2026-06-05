@@ -1324,6 +1324,19 @@ class Top2Vec:
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def topic_neighbors(self, n: int = 10, *, topic: int) -> list[tuple[str, float]]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        vocabulary: Sequence[str] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
     def __repr__(self) -> str: ...
 
 
@@ -1345,6 +1358,8 @@ class BERTopic:
         stride: int = 1,
         reducer: str = "pca",
         n_neighbors: int = 15,
+        bm25: bool = False,
+        reduce_frequent: bool = False,
         seed: int = 42,
     ) -> None: ...
     def fit(
@@ -1375,6 +1390,14 @@ class BERTopic:
         *,
         window: int | None = None,
         stride: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
     ) -> numpy.typing.NDArray[numpy.float64]: ...
     def __repr__(self) -> str: ...
 
@@ -1425,6 +1448,15 @@ class ETM:
     def top_words(
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        vocabulary: Sequence[str],
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
     def __repr__(self) -> str: ...
 
 

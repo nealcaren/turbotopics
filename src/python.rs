@@ -6528,6 +6528,36 @@ impl Top2Vec {
             .collect())
     }
 
+    /// Soft topic membership for new documents from their embeddings (cosine to
+    /// each topic vector, normalized). `data` is accepted for API symmetry but
+    /// Top2Vec assigns by embedding only. Returns `(num_docs, num_topics)`.
+    #[pyo3(signature = (data, doc_embeddings))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        doc_embeddings: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let m = self.fitted_model()?;
+        let _ = data;
+        let de = parse_features(doc_embeddings)?;
+        Ok(vecs_to_arr2(&m.assign(&de)).to_pyarray_bound(py))
+    }
+
+    /// Fit, then return the document-topic proportions (`fit_transform`).
+    #[pyo3(signature = (data, doc_embeddings, *, word_embeddings=None, vocabulary=None))]
+    fn fit_transform<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        doc_embeddings: &Bound<'py, PyAny>,
+        word_embeddings: Option<&Bound<'py, PyAny>>,
+        vocabulary: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.fit(py, data, doc_embeddings, word_embeddings, vocabulary)?;
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
     fn __repr__(&self) -> String {
         let k = self.model.as_ref().map_or(0, |m| m.num_topics);
         format!("Top2Vec(fitted={}, num_topics={})", self.fitted, k)
@@ -6553,6 +6583,8 @@ pub struct BERTopic {
     nr_topics: Option<usize>,
     window: usize,
     stride: usize,
+    bm25: bool,
+    reduce_frequent: bool,
     seed: u64,
     fitted: bool,
     model: Option<bertopic::BertopicModel>,
@@ -6583,7 +6615,9 @@ impl BERTopic {
     /// parameterize the soft `doc_topic` distribution.
     #[new]
     #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
-                        nr_topics=None, window=4, stride=1, reducer="pca", n_neighbors=15, seed=42))]
+                        nr_topics=None, window=4, stride=1, reducer="pca", n_neighbors=15,
+                        bm25=false, reduce_frequent=false, seed=42))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         n_components: usize,
         min_cluster_size: usize,
@@ -6593,6 +6627,8 @@ impl BERTopic {
         stride: usize,
         reducer: &str,
         n_neighbors: usize,
+        bm25: bool,
+        reduce_frequent: bool,
         seed: u64,
     ) -> PyResult<Self> {
         if min_cluster_size < 2 {
@@ -6608,6 +6644,8 @@ impl BERTopic {
             nr_topics,
             window: window.max(1),
             stride: stride.max(1),
+            bm25,
+            reduce_frequent,
             seed,
             fitted: false,
             model: None,
@@ -6646,13 +6684,14 @@ impl BERTopic {
         let num_types = corpus.num_types();
         self.id_to_word = corpus.id_to_word.clone();
         check_umap(self.use_umap)?;
-        let (nc, uu, nn, mcs, ms, nr, win, st, seed) = (
+        let (nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed) = (
             self.n_components, self.use_umap, self.n_neighbors, self.min_cluster_size,
-            self.min_samples, self.nr_topics, self.window, self.stride, self.seed,
+            self.min_samples, self.nr_topics, self.window, self.stride,
+            self.bm25, self.reduce_frequent, self.seed,
         );
         let model = py.allow_threads(move || {
             bertopic::fit_bertopic(
-                &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, seed,
+                &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed,
             )
         });
         self.model = Some(model);
@@ -6726,6 +6765,29 @@ impl BERTopic {
             stride.unwrap_or(self.stride),
         );
         Ok(vecs_to_arr2(&dist).to_pyarray_bound(py))
+    }
+
+    /// Soft topic distribution for new documents (the approximate distribution
+    /// over their words). BERTopic reads topics from text, so no new embeddings
+    /// are needed. Returns `(num_docs, num_topics)`.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.approximate_distribution(py, data, None, None)
+    }
+
+    /// Fit, then return the document-topic distribution (`fit_transform`).
+    #[pyo3(signature = (data, doc_embeddings))]
+    fn fit_transform<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        doc_embeddings: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.fit(py, data, doc_embeddings)?;
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
     }
 
     fn __repr__(&self) -> String {
@@ -6910,6 +6972,32 @@ impl ETM {
         let m = self.fitted_model()?;
         let phi = vecs_to_arr2(&m.beta);
         topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
+    }
+
+    /// Held-out topic proportions for new documents: the logistic-normal E-step
+    /// with the fitted `beta` and prior held fixed. Tokens outside the vocabulary
+    /// are dropped. Returns `(num_docs, num_topics)`.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let m = self.fitted_model()?;
+        let docs = docs_to_ids(data, &self.id_to_word)?;
+        Ok(infer_theta_batch(py, &m.beta, &m.mu, &m.sigma, &docs).to_pyarray_bound(py))
+    }
+
+    /// Fit, then return the document-topic proportions (`fit_transform`).
+    #[pyo3(signature = (data, word_embeddings, vocabulary))]
+    fn fit_transform<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        word_embeddings: &Bound<'py, PyAny>,
+        vocabulary: Vec<String>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.fit(py, data, word_embeddings, vocabulary)?;
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topics()).to_pyarray_bound(py))
     }
 
     fn __repr__(&self) -> String {

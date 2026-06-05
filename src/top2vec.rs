@@ -60,6 +60,13 @@ impl Top2VecModel {
     pub fn topic_neighbors(&self, n: usize, topic: usize) -> Vec<(usize, f64)> {
         represent::nearest_by_cosine(&self.topic_vectors[topic], &self.word_vectors, n)
     }
+
+    /// Soft topic membership for new document embeddings (D×K): cosine to each
+    /// topic vector, clamped at zero and normalized. This is held-out `transform`,
+    /// the same assignment the fit uses for in-sample documents.
+    pub fn assign(&self, doc_embeddings: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        soft_doc_topic(doc_embeddings, &self.topic_vectors)
+    }
 }
 
 /// Fit Top2Vec on token-id documents plus document and word embeddings.

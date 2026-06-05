@@ -40,7 +40,55 @@
 ///
 /// Returns a `num_classes x vocab_size` matrix with `num_classes = max_label + 1`
 /// (so row `c` is class `c`), or an empty matrix when there are no non-noise docs.
+///
+/// This is the plain c-TF-IDF; [`ctfidf_weighted`] adds the BM25 and
+/// frequent-word knobs. BERTopic ships with both knobs off by default, so this
+/// default matches BERTopic's documented default (`bm25_weighting=False`,
+/// `reduce_frequent_words=False`).
 pub fn ctfidf(docs: &[Vec<u32>], labels: &[i64], vocab_size: usize) -> Vec<Vec<f64>> {
+    ctfidf_weighted(docs, labels, vocab_size, false, false)
+}
+
+/// Class-based TF-IDF with BERTopic's two documented tuning knobs.
+///
+/// The base score is the same as [`ctfidf`]: for class `c` and term `t`,
+///
+/// ```text
+/// c-TF-IDF_{t,c} = tf_{t,c} * ln(1 + A / f_t)
+/// ```
+///
+/// with `tf_{t,c}` the raw count of `t` in class `c`, `f_t` the count of `t`
+/// summed over every class, and `A` the average class size. With `bm25 == false`
+/// and `reduce_frequent == false` we return exactly what [`ctfidf`] returns.
+///
+/// `reduce_frequent` swaps `tf_{t,c}` for `sqrt(tf_{t,c})`, BERTopic's
+/// `reduce_frequent_words`. Taking the square root before the idf factor flattens
+/// the gap between very frequent and merely common terms, which trims stop-word
+/// leakage from the top of a topic.
+///
+/// `bm25` swaps the idf factor for BERTopic's class-based BM25 idf,
+///
+/// ```text
+/// ln(1 + (A - f_t + 0.5) / (f_t + 0.5))
+/// ```
+///
+/// where `A` plays the corpus-size role and `f_t` the document-frequency role. We
+/// clamp the argument of the log at 1.0 so the factor never goes negative even
+/// when `f_t` exceeds `A` (the BERTopic docs render this formula as an SVG rather
+/// than text; we use the standard class-based BM25 idf, guarded against negative
+/// logs).
+///
+/// The two flags compose: `bm25 && reduce_frequent` applies both.
+///
+/// Returns a `num_classes x vocab_size` matrix with `num_classes = max_label + 1`
+/// (so row `c` is class `c`), or an empty matrix when there are no non-noise docs.
+pub fn ctfidf_weighted(
+    docs: &[Vec<u32>],
+    labels: &[i64],
+    vocab_size: usize,
+    bm25: bool,
+    reduce_frequent: bool,
+) -> Vec<Vec<f64>> {
     // Number of classes is one past the largest label; -1 contributes nothing.
     let max_label = labels.iter().copied().max().unwrap_or(-1);
     if max_label < 0 {
@@ -75,12 +123,18 @@ pub fn ctfidf(docs: &[Vec<u32>], labels: &[i64], vocab_size: usize) -> Vec<Vec<f
     }
     let avg_class_size = total_tokens / num_classes as f64;
 
-    // The idf-like factor depends only on the term, so compute it once.
+    // The idf-like factor depends only on the term, so compute it once. BM25 uses
+    // the saturating form; the plain form is BERTopic's default. Either way a term
+    // with `f_t == 0` gets weight 0, and we never feed the log a value below 1.
     let idf: Vec<f64> = f
         .iter()
         .map(|&ft| {
             if ft == 0.0 {
                 0.0
+            } else if bm25 {
+                (1.0 + (avg_class_size - ft + 0.5) / (ft + 0.5))
+                    .max(1.0)
+                    .ln()
             } else {
                 (1.0 + avg_class_size / ft).ln()
             }
@@ -89,7 +143,14 @@ pub fn ctfidf(docs: &[Vec<u32>], labels: &[i64], vocab_size: usize) -> Vec<Vec<f
 
     for class in &mut tf {
         for (t, weight) in class.iter_mut().enumerate() {
-            *weight *= idf[t];
+            // reduce_frequent_words damps the term frequency with a square root
+            // before the idf factor multiplies it in.
+            let tf_t = if reduce_frequent {
+                weight.sqrt()
+            } else {
+                *weight
+            };
+            *weight = tf_t * idf[t];
         }
     }
     tf
@@ -215,6 +276,75 @@ mod tests {
         // than the distinctive words', which appear in only one class.
         assert!(m[0][1] > m[1][1]); // word 1 absent from class 1
         assert_eq!(m[1][1], 0.0);
+    }
+
+    #[test]
+    fn ctfidf_weighted_default_matches_ctfidf() {
+        // With both knobs off, ctfidf_weighted must reproduce ctfidf exactly.
+        let docs = vec![
+            vec![0, 1, 1],
+            vec![0, 1, 1],
+            vec![0, 2, 2],
+            vec![0, 2, 2],
+        ];
+        let labels = vec![0, 0, 1, 1];
+        let base = ctfidf(&docs, &labels, 3);
+        let weighted = ctfidf_weighted(&docs, &labels, 3, false, false);
+        assert_eq!(base.len(), weighted.len());
+        for (br, wr) in base.iter().zip(weighted.iter()) {
+            assert_eq!(br.len(), wr.len());
+            for (&b, &w) in br.iter().zip(wr.iter()) {
+                assert_eq!(b, w);
+            }
+        }
+    }
+
+    #[test]
+    fn ctfidf_reduce_frequent_damps_ubiquitous_term() {
+        // Word 0 is deliberately ubiquitous: it appears many times in every class.
+        // Words 1 and 2 are distinctive to classes 0 and 1 respectively.
+        let docs = vec![
+            vec![0, 0, 0, 0, 1, 1],
+            vec![0, 0, 0, 0, 1, 1],
+            vec![0, 0, 0, 0, 2, 2],
+            vec![0, 0, 0, 0, 2, 2],
+        ];
+        let labels = vec![0, 0, 1, 1];
+        let base = ctfidf(&docs, &labels, 3);
+        let reduced = ctfidf_weighted(&docs, &labels, 3, false, true);
+
+        // The square root damps the ubiquitous word 0 relative to its plain weight.
+        // (Word 0 still has nonzero idf since A / f_t > 0 even when seen everywhere.)
+        assert!(reduced[0][0] < base[0][0]);
+        // The distinctive word still ranks above the ubiquitous one in its class,
+        // so the ranking we care about is preserved under reduce_frequent.
+        assert!(reduced[0][1] > reduced[0][0]);
+        assert!(base[0][1] > base[0][0]);
+    }
+
+    #[test]
+    fn ctfidf_bm25_is_finite_nonneg_and_downweights_ubiquitous() {
+        // Word 0 appears in every class; words 1 and 2 are class-specific.
+        let docs = vec![
+            vec![0, 1, 1],
+            vec![0, 1, 1],
+            vec![0, 2, 2],
+            vec![0, 2, 2],
+        ];
+        let labels = vec![0, 0, 1, 1];
+        let m = ctfidf_weighted(&docs, &labels, 3, true, false);
+
+        // Every weight is finite and non-negative.
+        for row in &m {
+            for &w in row {
+                assert!(w.is_finite());
+                assert!(w >= 0.0);
+            }
+        }
+        // The term seen in every class is downweighted below the distinctive term
+        // in the same class.
+        assert!(m[0][1] > m[0][0]);
+        assert!(m[1][2] > m[1][0]);
     }
 
     #[test]

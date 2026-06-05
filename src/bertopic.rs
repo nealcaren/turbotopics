@@ -68,6 +68,8 @@ pub fn fit_bertopic(
     nr_topics: Option<usize>,
     window: usize,
     stride: usize,
+    bm25: bool,
+    reduce_frequent: bool,
     seed: u64,
 ) -> BertopicModel {
     let emb_dim = doc_embeddings.first().map_or(0, |r| r.len());
@@ -84,7 +86,7 @@ pub fn fit_bertopic(
     // (3) optional topic reduction: merge the most c-TF-IDF-similar topics.
     if let Some(target) = nr_topics {
         while num_topics > target.max(1) {
-            let ctfidf = represent::ctfidf(docs, &labels, vocab_size);
+            let ctfidf = represent::ctfidf_weighted(docs, &labels, vocab_size, bm25, reduce_frequent);
             let (a, b) = most_similar_pair(&ctfidf);
             if a == b {
                 break;
@@ -96,7 +98,7 @@ pub fn fit_bertopic(
 
     // Final c-TF-IDF and its idf, then the topic-word distribution and the soft
     // document-topic distribution.
-    let ctfidf_raw = represent::ctfidf(docs, &labels, vocab_size);
+    let ctfidf_raw = represent::ctfidf_weighted(docs, &labels, vocab_size, bm25, reduce_frequent);
     let idf = idf_weights(docs, &labels, vocab_size);
     let mut topic_word = ctfidf_raw.clone();
     for row in topic_word.iter_mut() {
@@ -277,7 +279,7 @@ mod tests {
     #[test]
     fn recovers_topics_via_ctfidf() {
         let (docs, emb, vocab) = planted(3, 40, 1);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 1);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 1);
         assert!(m.num_topics >= 3, "expected >=3 topics, got {}", m.num_topics);
         // Each topic's top words come from a single planted block (block = ids 0..5,
         // 5..10, 10..15).
@@ -296,16 +298,16 @@ mod tests {
     #[test]
     fn nr_topics_reduces_to_target() {
         let (docs, emb, vocab) = planted(4, 40, 2);
-        let full = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 2);
+        let full = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 2);
         assert!(full.num_topics >= 3);
-        let reduced = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, Some(2), 4, 1, 2);
+        let reduced = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, Some(2), 4, 1, false, false, 2);
         assert_eq!(reduced.num_topics, 2, "should reduce to 2 topics");
     }
 
     #[test]
     fn approximate_distribution_favors_own_topic() {
         let (docs, emb, vocab) = planted(3, 40, 3);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, 3);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 3);
         // A document made only of block-0 words should put its largest mass on the
         // topic whose top words are block 0.
         let block0_topic = (0..m.num_topics)
