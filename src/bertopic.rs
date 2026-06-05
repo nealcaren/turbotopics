@@ -49,6 +49,68 @@ impl BertopicModel {
     ) -> Vec<Vec<f64>> {
         approximate_distribution(docs, &self.ctfidf_raw, &self.idf, self.num_topics, window, stride)
     }
+
+    /// Merge each group of topics into one and rebuild the representation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn merge_topics(
+        &mut self,
+        docs: &[Vec<u32>],
+        groups: &[Vec<usize>],
+        vocab_size: usize,
+        bm25: bool,
+        reduce_frequent: bool,
+        window: usize,
+        stride: usize,
+    ) {
+        self.labels = represent::merge_labels(&self.labels, groups);
+        self.rebuild(docs, vocab_size, bm25, reduce_frequent, window, stride);
+    }
+
+    /// Reassign noise documents to their nearest topic and rebuild.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reduce_outliers(
+        &mut self,
+        docs: &[Vec<u32>],
+        vocab_size: usize,
+        bm25: bool,
+        reduce_frequent: bool,
+        window: usize,
+        stride: usize,
+    ) {
+        self.labels = represent::assign_outliers(docs, &self.labels, &self.topic_word);
+        self.rebuild(docs, vocab_size, bm25, reduce_frequent, window, stride);
+    }
+
+    /// Recompute everything that depends on the labels (after a merge or an
+    /// outlier reassignment): the c-TF-IDF, the topic-word distribution, and the
+    /// document-topic distribution.
+    fn rebuild(
+        &mut self,
+        docs: &[Vec<u32>],
+        vocab_size: usize,
+        bm25: bool,
+        reduce_frequent: bool,
+        window: usize,
+        stride: usize,
+    ) {
+        self.num_topics = topic_count(&self.labels);
+        self.ctfidf_raw = represent::ctfidf_weighted(docs, &self.labels, vocab_size, bm25, reduce_frequent);
+        self.idf = idf_weights(docs, &self.labels, vocab_size);
+        self.topic_word = self
+            .ctfidf_raw
+            .iter()
+            .map(|row| {
+                let s: f64 = row.iter().sum();
+                if s > 0.0 {
+                    row.iter().map(|w| w / s).collect()
+                } else {
+                    row.clone()
+                }
+            })
+            .collect();
+        self.doc_topic =
+            approximate_distribution(docs, &self.ctfidf_raw, &self.idf, self.num_topics, window, stride);
+    }
 }
 
 /// Fit BERTopic on token-id documents plus document embeddings. `nr_topics`, if

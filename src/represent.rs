@@ -49,6 +49,75 @@ pub fn ctfidf(docs: &[Vec<u32>], labels: &[i64], vocab_size: usize) -> Vec<Vec<f
     ctfidf_weighted(docs, labels, vocab_size, false, false)
 }
 
+/// Number of topics implied by a label vector (max non-noise label + 1).
+fn label_count(labels: &[i64]) -> usize {
+    labels.iter().filter(|&&l| l >= 0).map(|&l| l as usize + 1).max().unwrap_or(0)
+}
+
+/// Relabel after merging topics: every id in a group collapses to one cluster,
+/// then surviving topics are renumbered to a dense `0..k`. Groups may chain
+/// (a topic appearing in two groups links them); noise (`-1`) is preserved. Used
+/// by both Top2Vec and BERTopic for manual `merge_topics`.
+pub fn merge_labels(labels: &[i64], groups: &[Vec<usize>]) -> Vec<i64> {
+    let k = label_count(labels);
+    if k == 0 {
+        return labels.to_vec();
+    }
+    // Union each group to its smallest member, then resolve chains.
+    let mut rep: Vec<usize> = (0..k).collect();
+    for g in groups {
+        if let Some(&r0) = g.iter().filter(|&&t| t < k).min() {
+            for &t in g {
+                if t < k {
+                    rep[t] = r0;
+                }
+            }
+        }
+    }
+    for i in 0..k {
+        let mut r = i;
+        while rep[r] != r {
+            r = rep[r];
+        }
+        rep[i] = r;
+    }
+    // Dense ids for the surviving representatives, in sorted order.
+    let mut distinct: Vec<usize> = rep.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let dense: std::collections::HashMap<usize, i64> =
+        distinct.iter().enumerate().map(|(i, &r)| (r, i as i64)).collect();
+    labels
+        .iter()
+        .map(|&l| if l < 0 { -1 } else { dense[&rep[l as usize]] })
+        .collect()
+}
+
+/// Reassign every noise document (label `-1`) to the topic whose `topic_word`
+/// (K×V, rows sum to ~1) best explains its tokens, by the argmax of
+/// `sum_w log topic_word[k][w]`. Non-noise labels are unchanged. This is the
+/// embedding-free outlier-reduction strategy shared by Top2Vec and BERTopic.
+pub fn assign_outliers(docs: &[Vec<u32>], labels: &[i64], topic_word: &[Vec<f64>]) -> Vec<i64> {
+    let k = topic_word.len();
+    labels
+        .iter()
+        .enumerate()
+        .map(|(d, &l)| {
+            if l >= 0 || k == 0 || docs[d].is_empty() {
+                return l;
+            }
+            let mut best = (f64::NEG_INFINITY, -1i64);
+            for (t, tw) in topic_word.iter().enumerate() {
+                let s: f64 = docs[d].iter().map(|&w| (tw[w as usize] + 1e-12).ln()).sum();
+                if s > best.0 {
+                    best = (s, t as i64);
+                }
+            }
+            best.1
+        })
+        .collect()
+}
+
 /// Class-based TF-IDF with BERTopic's two documented tuning knobs.
 ///
 /// The base score is the same as [`ctfidf`]: for class `c` and term `t`,
@@ -251,6 +320,32 @@ fn sort_desc_by_value(scored: &mut [(usize, f64)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_labels_collapses_groups_and_densifies() {
+        // 4 topics; merge {0,2} and {1,3} -> 2 dense topics.
+        let labels = vec![0i64, 1, 2, 3, -1, 0];
+        let merged = merge_labels(&labels, &[vec![0, 2], vec![1, 3]]);
+        // 0 and 2 share a new id; 1 and 3 share the other; -1 preserved.
+        assert_eq!(merged[0], merged[2]);
+        assert_eq!(merged[1], merged[3]);
+        assert_ne!(merged[0], merged[1]);
+        assert_eq!(merged[4], -1);
+        // dense range 0..2
+        assert!(merged.iter().filter(|&&l| l >= 0).all(|&l| l == 0 || l == 1));
+    }
+
+    #[test]
+    fn assign_outliers_sends_noise_to_best_topic() {
+        // Topic 0 favors word 0, topic 1 favors word 1.
+        let topic_word = vec![vec![0.9, 0.1], vec![0.1, 0.9]];
+        let docs = vec![vec![0u32, 0], vec![1, 1], vec![1, 1]];
+        let labels = vec![0i64, 1, -1]; // doc 2 is noise, all word-1
+        let out = assign_outliers(&docs, &labels, &topic_word);
+        assert_eq!(out[0], 0); // unchanged
+        assert_eq!(out[1], 1); // unchanged
+        assert_eq!(out[2], 1); // noise doc of word-1 -> topic 1
+    }
 
     #[test]
     fn ctfidf_picks_distinctive_words() {

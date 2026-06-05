@@ -106,6 +106,22 @@ It fits in a fraction of a second on a few thousand documents. The trade for the
 reference's VAE is scale: the per-document EM is more accurate per document but
 less suited to corpora of tens of millions of documents.
 
+## Inspecting and adjusting clustering models
+
+Top2Vec and BERTopic produce hard `labels` (`-1` is a noise/outlier document), so
+they support two post-hoc edits. `reduce_outliers()` reassigns every `-1`
+document to the topic whose words best explain it and rebuilds the topic-word
+matrix, returning how many it moved. `merge_topics([[3, 7], [1, 2]])` collapses
+groups of topics you decide to combine, rebuilding the representation and
+renumbering topics. Both also gain `transform`/`fit_transform` for held-out
+documents, and the c-TF-IDF knobs `bm25=` and `reduce_frequent=` on BERTopic.
+
+For a quick read of any fitted model (not just these), `topica.topic_info(model,
+texts)` returns per-topic size, prevalence, top words, and representative
+documents, with an outlier row when present; `topica.topics_over_time(model,
+timestamps)` and `topica.topics_per_class(model, groups)` summarize prevalence by
+time or group; and `topica.set_topic_labels(model, {...})` stores your own labels.
+
 ## The shared surface
 
 Both models expose topica's standard fitted surface, so they slot in alongside

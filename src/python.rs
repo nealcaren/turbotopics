@@ -6333,6 +6333,7 @@ pub struct Top2Vec {
     has_word_vectors: bool,
     model: Option<top2vec::Top2VecModel>,
     id_to_word: Vec<String>,
+    docs: Vec<Vec<u32>>,
 }
 
 impl Top2Vec {
@@ -6375,6 +6376,7 @@ impl Top2Vec {
             has_word_vectors: false,
             model: None,
             id_to_word: Vec::new(),
+            docs: Vec::new(),
         })
     }
 
@@ -6443,6 +6445,7 @@ impl Top2Vec {
         };
         self.has_word_vectors = !word_vecs.is_empty();
         self.id_to_word = corpus.id_to_word.clone();
+        self.docs = corpus.docs.clone();
 
         check_umap(self.use_umap)?;
         let (nc, uu, nn, mcs, ms, seed) = (
@@ -6558,6 +6561,30 @@ impl Top2Vec {
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
     }
 
+    /// Merge groups of topics into single topics, e.g. ``[[3, 7], [1, 2]]``. The
+    /// topic vectors, document-topic, and topic-word are rebuilt and topic ids
+    /// renumbered to a dense range.
+    fn merge_topics(&mut self, groups: Vec<Vec<usize>>) -> PyResult<()> {
+        let vocab = self.id_to_word.len();
+        let m = self.model.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("model is not fitted yet; call fit() first")
+        })?;
+        m.merge_topics(&self.docs, &groups, vocab);
+        Ok(())
+    }
+
+    /// Reassign noise documents (label ``-1``) to their nearest topic and rebuild
+    /// the topic-word matrix. Returns how many documents were reassigned.
+    fn reduce_outliers(&mut self) -> PyResult<usize> {
+        let vocab = self.id_to_word.len();
+        let m = self.model.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("model is not fitted yet; call fit() first")
+        })?;
+        let before = m.labels.iter().filter(|&&l| l < 0).count();
+        m.reduce_outliers(&self.docs, vocab);
+        Ok(before - m.labels.iter().filter(|&&l| l < 0).count())
+    }
+
     fn __repr__(&self) -> String {
         let k = self.model.as_ref().map_or(0, |m| m.num_topics);
         format!("Top2Vec(fitted={}, num_topics={})", self.fitted, k)
@@ -6589,6 +6616,7 @@ pub struct BERTopic {
     fitted: bool,
     model: Option<bertopic::BertopicModel>,
     id_to_word: Vec<String>,
+    docs: Vec<Vec<u32>>,
 }
 
 impl BERTopic {
@@ -6650,6 +6678,7 @@ impl BERTopic {
             fitted: false,
             model: None,
             id_to_word: Vec::new(),
+            docs: Vec::new(),
         })
     }
 
@@ -6683,6 +6712,7 @@ impl BERTopic {
         }
         let num_types = corpus.num_types();
         self.id_to_word = corpus.id_to_word.clone();
+        self.docs = corpus.docs.clone();
         check_umap(self.use_umap)?;
         let (nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed) = (
             self.n_components, self.use_umap, self.n_neighbors, self.min_cluster_size,
@@ -6788,6 +6818,31 @@ impl BERTopic {
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.fit(py, data, doc_embeddings)?;
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
+    /// Merge groups of topics into single topics, e.g. ``[[3, 7], [1, 2]]``,
+    /// rebuilding the c-TF-IDF representation and the document-topic distribution.
+    fn merge_topics(&mut self, groups: Vec<Vec<usize>>) -> PyResult<()> {
+        let (vocab, b25, rf, win, st) =
+            (self.id_to_word.len(), self.bm25, self.reduce_frequent, self.window, self.stride);
+        let m = self.model.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("model is not fitted yet; call fit() first")
+        })?;
+        m.merge_topics(&self.docs, &groups, vocab, b25, rf, win, st);
+        Ok(())
+    }
+
+    /// Reassign noise documents (label ``-1``) to their nearest topic by c-TF-IDF
+    /// fit and rebuild. Returns how many documents were reassigned.
+    fn reduce_outliers(&mut self) -> PyResult<usize> {
+        let (vocab, b25, rf, win, st) =
+            (self.id_to_word.len(), self.bm25, self.reduce_frequent, self.window, self.stride);
+        let m = self.model.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("model is not fitted yet; call fit() first")
+        })?;
+        let before = m.labels.iter().filter(|&&l| l < 0).count();
+        m.reduce_outliers(&self.docs, vocab, b25, rf, win, st);
+        Ok(before - m.labels.iter().filter(|&&l| l < 0).count())
     }
 
     fn __repr__(&self) -> String {

@@ -67,6 +67,89 @@ impl Top2VecModel {
     pub fn assign(&self, doc_embeddings: &[Vec<f64>]) -> Vec<Vec<f64>> {
         soft_doc_topic(doc_embeddings, &self.topic_vectors)
     }
+
+    /// Merge each group of topics into one. The merged topic vector is the
+    /// size-weighted mean of its members' vectors (which is exactly the centroid
+    /// of the merged documents), the merged document-topic column is the sum of
+    /// its members' columns, and the topic-word matrix is recomputed by c-TF-IDF.
+    pub fn merge_topics(&mut self, docs: &[Vec<u32>], groups: &[Vec<usize>], vocab_size: usize) {
+        let old_k = self.num_topics;
+        if old_k == 0 {
+            return;
+        }
+        let map = represent::merge_labels(&(0..old_k as i64).collect::<Vec<_>>(), groups);
+        let new_k = map.iter().map(|&m| m + 1).max().unwrap_or(0) as usize;
+
+        let mut sizes = vec![0.0f64; old_k];
+        for &l in &self.labels {
+            if l >= 0 {
+                sizes[l as usize] += 1.0;
+            }
+        }
+        let e = self.topic_vectors.first().map_or(0, |v| v.len());
+        let mut vectors = vec![vec![0.0f64; e]; new_k];
+        let mut wsum = vec![0.0f64; new_k];
+        for ot in 0..old_k {
+            let nt = map[ot] as usize;
+            let w = sizes[ot].max(1e-9);
+            for d in 0..e {
+                vectors[nt][d] += self.topic_vectors[ot][d] * w;
+            }
+            wsum[nt] += w;
+        }
+        for nt in 0..new_k {
+            if wsum[nt] > 0.0 {
+                for d in 0..e {
+                    vectors[nt][d] /= wsum[nt];
+                }
+            }
+        }
+
+        let doc_topic = self
+            .doc_topic
+            .iter()
+            .map(|row| {
+                let mut nr = vec![0.0f64; new_k];
+                for (ot, &p) in row.iter().enumerate().take(old_k) {
+                    nr[map[ot] as usize] += p;
+                }
+                let s: f64 = nr.iter().sum();
+                if s > 0.0 {
+                    nr.iter_mut().for_each(|x| *x /= s);
+                } else {
+                    nr.iter_mut().for_each(|x| *x = 1.0 / new_k as f64);
+                }
+                nr
+            })
+            .collect();
+
+        self.labels = represent::merge_labels(&self.labels, groups);
+        self.num_topics = new_k;
+        self.topic_vectors = vectors;
+        self.doc_topic = doc_topic;
+        self.topic_word = normalize_rows(represent::ctfidf(docs, &self.labels, vocab_size));
+    }
+
+    /// Reassign noise documents to their nearest topic (by topic-word fit) and
+    /// recompute the topic-word matrix. The topic vectors and soft memberships are
+    /// left unchanged.
+    pub fn reduce_outliers(&mut self, docs: &[Vec<u32>], vocab_size: usize) {
+        self.labels = represent::assign_outliers(docs, &self.labels, &self.topic_word);
+        self.topic_word = normalize_rows(represent::ctfidf(docs, &self.labels, vocab_size));
+    }
+}
+
+/// Row-normalize a matrix to sum to one per row (zero rows left as is).
+fn normalize_rows(mut m: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
+    for row in m.iter_mut() {
+        let s: f64 = row.iter().sum();
+        if s > 0.0 {
+            for x in row.iter_mut() {
+                *x /= s;
+            }
+        }
+    }
+    m
 }
 
 /// Fit Top2Vec on token-id documents plus document and word embeddings.
