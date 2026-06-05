@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,9 @@ STM_EM_ITERS = int(os.environ.get("STM_EM_ITERS", "30"))
 KEYATM_K = int(os.environ.get("KEYATM_K", "10"))
 KEYATM_ITERS = int(os.environ.get("KEYATM_ITERS", "1000"))
 KEYATM_THREADS = int(os.environ.get("KEYATM_THREADS", "4"))
+LDA_K = int(os.environ.get("LDA_K", "20"))
+LDA_ITERS = int(os.environ.get("LDA_ITERS", "1000"))
+LDA_THREADS = int(os.environ.get("LDA_THREADS", "4"))
 
 
 def _rscript(body: str, timeout=3600) -> str:
@@ -154,6 +158,57 @@ def bench_keyatm() -> dict:
     }
 
 
+# --- LDA vs. Java MALLET -----------------------------------------------------
+
+def mallet_available() -> bool:
+    return shutil.which("mallet") is not None
+
+
+def bench_lda() -> dict:
+    """Time MALLET's `train-topics` vs. topica LDA, both with hyperparameter
+    optimization off and the same K / iterations (MALLET's import step, which
+    topica does not need, is excluded from the timing)."""
+    docs = STM.load_and_prep()[0]
+    from topica import LDA
+
+    mallet = shutil.which("mallet")
+    d = tempfile.mkdtemp(dir="/private/tmp")
+    try:
+        txt = os.path.join(d, "tok.txt")
+        with open(txt, "w") as f:
+            for i, toks in enumerate(docs):
+                f.write(f"doc{i}\t{' '.join(toks)}\n")
+        mal = os.path.join(d, "tok.mallet")
+        subprocess.run(
+            [mallet, "import-file", "--input", txt, "--output", mal, "--keep-sequence",
+             "--token-regex", r"\S+", "--line-regex", r"^(\S+)\t(.*)$",
+             "--name", "1", "--data", "2", "--label", "0"],
+            check=True, capture_output=True, text=True,
+        )
+        t0 = time.perf_counter()
+        subprocess.run(
+            [mallet, "train-topics", "--input", mal, "--num-topics", str(LDA_K),
+             "--num-iterations", str(LDA_ITERS), "--random-seed", "1",
+             "--optimize-interval", "0", "--num-threads", "1"],
+            check=True, capture_output=True, text=True,
+        )
+        mallet_time = time.perf_counter() - t0
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    def topica_fit(threads):
+        t0 = time.perf_counter()
+        LDA(num_topics=LDA_K, seed=1, optimize_interval=0, num_threads=threads).fit(
+            docs, iterations=LDA_ITERS
+        )
+        return time.perf_counter() - t0
+
+    return {
+        "n_docs": len(docs), "k": LDA_K, "iters": LDA_ITERS,
+        "mallet": mallet_time, "tt1": topica_fit(1), "ttN": topica_fit(LDA_THREADS),
+    }
+
+
 def main():
     if not STM.r_stm_available():
         print("SKIP: Rscript with the 'stm' package not available")
@@ -162,14 +217,23 @@ def main():
 
     s = bench_stm()
     rows = [
-        ("STM", f"K={s['k']}, {s['iters']} EM its, spectral",
+        ("STM", "R stm", f"K={s['k']}, {s['iters']} EM its, spectral",
          s["r"], s["tt"], s["r"] / s["tt"], "single-thread (variational EM)"),
     ]
+
+    if mallet_available():
+        ll = bench_lda()
+        rows.append((
+            "LDA", "MALLET", f"K={ll['k']}, {ll['iters']} Gibbs its",
+            ll["mallet"], ll["tt1"], ll["mallet"] / ll["tt1"],
+            f"1 thread; {LDA_THREADS}-thread: {ll['ttN']:.1f}s "
+            f"({ll['mallet'] / ll['ttN']:.1f}x)",
+        ))
 
     if KA.r_keyatm_available():
         k = bench_keyatm()
         rows.append((
-            "keyATM", f"K={k['k']} ({k['kw']} kw), {k['iters']} sweeps",
+            "keyATM", "R keyATM", f"K={k['k']} ({k['kw']} kw), {k['iters']} sweeps",
             k["r"], k["tt1"], k["r"] / k["tt1"],
             f"1 thread; {KEYATM_THREADS}-thread: {k['ttN']:.1f}s "
             f"({k['r'] / k['ttN']:.1f}x)",
@@ -179,10 +243,10 @@ def main():
         corpus = f"{s['n_docs']} docs, {s['vocab']} vocab"
 
     print(f"corpus: {corpus} (poliblog)\n")
-    print(f"| {'Model':<7} | {'Settings':<30} | {'R':>7} | {'topica':>7} | {'speedup':>7} | notes |")
-    print(f"|{'-'*9}|{'-'*32}|{'-'*9}|{'-'*9}|{'-'*9}|-------|")
-    for name, settings, r, tt, sp, notes in rows:
-        print(f"| {name:<7} | {settings:<30} | {r:6.1f}s | {tt:6.1f}s | {sp:5.1f}x | {notes} |")
+    print(f"| {'Model':<7} | {'Reference':<9} | {'Settings':<30} | {'ref':>7} | {'topica':>7} | {'speedup':>7} | notes |")
+    print(f"|{'-'*9}|{'-'*11}|{'-'*32}|{'-'*9}|{'-'*9}|{'-'*9}|-------|")
+    for name, ref, settings, rt, tt, sp, notes in rows:
+        print(f"| {name:<7} | {ref:<9} | {settings:<30} | {rt:6.1f}s | {tt:6.1f}s | {sp:5.1f}x | {notes} |")
 
 
 if __name__ == "__main__":
