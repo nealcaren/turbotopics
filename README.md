@@ -98,6 +98,10 @@ Topica stands on a generation of open topic-modeling research and code. The `LDA
 - [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe): seeded LDA
 - [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al.): the alias-table Metropolis-Hastings sampler
 - **GSDMM** (Yin & Wang 2014): the movie-group-process mixture for short text
+- [**BERTopic**](https://github.com/MaartenGr/BERTopic) (Grootendoorn) and [**Top2Vec**](https://github.com/ddangelov/Top2Vec) (Angelov): the embedding-clustering pipeline, class-based TF-IDF, and the `reduce → cluster → represent` design
+- [**ETM**](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei): the Embedded Topic Model, fit here by the variational EM shared with the CTM rather than a VAE
+
+The embedding-native models build on two pure-Rust crates: [**petal-clustering**](https://github.com/petabi/petal-clustering) for HDBSCAN and [**umap-rs**](https://github.com/wilsonzlin/umap-rs) for the optional UMAP reducer, both BLAS-free.
 
 Underlying methods are credited to their authors in the [documentation](https://nealcaren.github.io/topica/) and the source. The SparseLDA scheme is Yao, Mimno & McCallum (KDD 2009). If you use `KeyATM`, please cite the original work:
 
