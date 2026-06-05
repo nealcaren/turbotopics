@@ -51,15 +51,16 @@ Every fit is reproducible from a fixed seed and validated against its reference.
 | **`SeededLDA` / `KeyATM`** | Guided topics steered by seed words |
 | **`PA` / `HLDA`** | Topic hierarchies (Pachinko, nested-CRP) |
 
-**Embedding-based models** cluster document embeddings you supply (no PyTorch, no UMAP/numba in the wheel):
+**Embedding-based models** start from document embeddings you supply (no PyTorch, no UMAP/numba in the wheel):
 
 | Model | What it's for |
 |-------|---------------|
 | **`BERTopic`** | Cluster document embeddings, label topics by class-TF-IDF; topic reduction and a soft per-document distribution |
 | **`Top2Vec`** | Topics as points in the embedding space; topic words are the nearest word vectors |
-| **`ETM`** | Generative LDA with the topic-word distribution factored through embeddings (`β = softmax(ρ·α)`) |
+| **`ETM`** | Generative LDA with the topic-word distribution factored through embeddings (`β = softmax(ρ·α)`); per-document EM or an amortized VAE (`inference="vae"`) |
+| **`FASTopic`** | Topics read off two optimal-transport plans between document, topic, and word embeddings |
 
-Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, and `save`/`load`. The count-based variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic; the embedding models run the `reduce → cluster → represent` pipeline in Rust over vectors from any embedder (sentence-transformers, an API, a local model such as ollama). Full guides: [the models](https://nealcaren.github.io/topica/guides/models/) and [embedding topics](https://nealcaren.github.io/topica/guides/embedding/).
+Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, and `save`/`load`. The count-based variational models (`CTM`/`STM`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic. The embedding models split into two kinds: `BERTopic` and `Top2Vec` run the `reduce → cluster → represent` pipeline, while `ETM` and `FASTopic` are generative and mixed-membership; all of them take vectors from any embedder (sentence-transformers, an API, a local model such as ollama). Full guides: [the models](https://nealcaren.github.io/topica/guides/models/) and [embedding topics](https://nealcaren.github.io/topica/guides/embedding/).
 
 ## Diagnostics & analysis
 

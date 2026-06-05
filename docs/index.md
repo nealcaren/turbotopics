@@ -28,7 +28,9 @@ for i, words in enumerate(model.top_words(5)):
 
 - **One package, many models.** LDA, DMR, Labeled LDA, SAGE, CTM, the full STM
   (prevalence **and** content covariates), HDP, dynamic topics, supervised LDA,
-  and short-text models. See [the models](guides/models.md).
+  short-text models, and embedding-based models (BERTopic, Top2Vec, ETM,
+  FASTopic). See [the models](guides/models.md) and
+  [embedding topics](guides/embedding.md).
 - **Built for social science.** Covariate effects with the method of
   composition, **clustered standard errors**, GLM links, Fighting Words,
   intrusion tests, bootstrap stability, and `searchK`: the things reviewers ask
@@ -54,6 +56,8 @@ for i, words in enumerate(model.top_words(5)):
 | [`PT`](guides/short-text.md) / [`GSDMM`](guides/short-text.md) | Short-text models for tweets, survey answers |
 | [`SeededLDA`](guides/guided.md) / [`KeyATM`](guides/guided.md) | Guided topics steered by seed words |
 | `PA` / `HLDA` | Topic hierarchies (Pachinko, nested-CRP) |
+| [`BERTopic`](guides/embedding.md) / [`Top2Vec`](guides/embedding.md) | Cluster document embeddings you supply into topics |
+| [`ETM`](guides/embedding.md) / [`FASTopic`](guides/embedding.md) | Generative topics from embeddings (factored β; optimal transport) |
 
 ## Worked examples
 
