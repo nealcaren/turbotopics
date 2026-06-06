@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `topica.viz` — a manuscript-first visualization toolkit (the honest successor to
+  pyLDAvis). Each view is a panel with `.to_frame()` (the numbers, always),
+  `.to_png()` (matplotlib, for papers), and `.to_html()` (Altair, for the
+  interactive subset). Panels read a per-model capability descriptor and switch
+  their statistics/labels on it: c-TF-IDF `topic_word` disables the FREX/lift
+  modes and is labeled as such, effect-plot CIs are refused where there is no θ
+  posterior (and ghosted where the bootstrap flags a topic unreliable), and
+  uncertainty is labeled for what it is. Panels: `coherence_frontier`, `search_k`,
+  `effect_plot`, `term_barchart`, `topic_similarity` (a seriated K×K heatmap, the
+  pyLDAvis replacement), `term_topic_browser` (linked interactive), and a
+  `dashboard()` composite. New extras: `topica[viz]` (matplotlib/pandas/scipy) and
+  `topica[viz-interactive]` (altair).
+
 ## [0.9.0] - 2026-06-06
 
 ### Added

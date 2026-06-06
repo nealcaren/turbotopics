@@ -84,6 +84,7 @@ nav:
       - Covariates & STM: guides/covariates.md
       - Diagnostics & validation: guides/diagnostics.md
       - Reporting uncertainty: guides/uncertainty.md
+      - Visualization: guides/visualization.md
       - Distinguishing words: guides/keywords.md
       - Guided topics (seed words): guides/guided.md
       - Short text: guides/short-text.md
@@ -110,6 +111,7 @@ nav:
   - API reference:
       - Models: api/models.md
       - Diagnostics: api/diagnostics.md
+      - Visualization: api/viz.md
       - STM toolkit: api/stm.md
       - keyATM toolkit: api/keyatm.md
       - Keywords & preprocessing: api/keywords.md
