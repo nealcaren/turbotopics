@@ -12,11 +12,11 @@ modeled from sentence embeddings rather than word counts).
     `plot_report`. For the count-based workflow on this corpus see
     [Du Bois](dubois.md).
 
-    Needs the optional extras and two `llm` plugins for the fully local path:
-    ```bash
-    pip install "topica[llm,viz]" llm-sentence-transformers llm-ollama
-    ```
-    Reproducible with [`examples/llm_topics.py`](https://github.com/nealcaren/topica/blob/main/examples/llm_topics.py).
+    `pip install "topica[llm,viz]"` covers `llm` (OpenAI built in) and the ollama
+    plugin. The local `sentence-transformers` embedder below additionally needs
+    `pip install llm-sentence-transformers`; for a fully local, torch-free run use
+    ollama embeddings (`all-minilm`) instead. Reproducible with
+    [`examples/llm_topics.py`](https://github.com/nealcaren/topica/blob/main/examples/llm_topics.py).
 
 ## 1. Corpus
 

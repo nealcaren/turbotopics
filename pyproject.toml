@@ -34,9 +34,13 @@ formula = ["formulaic>=0.6", "pandas>=1.3"]
 # design_matrix). The DataFrame is not the cost center, so this is a convenience,
 # not a speedup.
 polars = ["polars>=0.20"]
-# Optional adapter for LLM topic labeling (topica.llm_backend). The core
-# (llm_topic_labels with call=...) takes any callable and needs nothing.
-llm = ["llm>=0.13"]
+# Optional adapter for LLM labeling and embeddings (topica.llm_backend /
+# llm_embed). The core (llm_topic_labels with call=..., or your own embeddings)
+# takes any callable/array and needs nothing. This extra adds `llm` plus the
+# ollama plugin, so OpenAI works out of the box (set OPENAI_API_KEY) and a fully
+# local, torch-free path runs through ollama (both chat and embedding models).
+# Local sentence-transformer embeddings additionally need `llm-sentence-transformers`.
+llm = ["llm>=0.13", "llm-ollama"]
 viz = ["matplotlib>=3.4"]
 test = ["pytest>=7", "pandas>=1.3", "formulaic>=0.6", "matplotlib>=3.4"]
 
