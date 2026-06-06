@@ -6,6 +6,11 @@
 pip install topica
 ```
 
+The core needs only NumPy. Optional extras add features without weighing the core
+down: `topica[viz]` (matplotlib plots), `topica[formula]` (R-style formulas),
+`topica[polars]` (Polars frames), and `topica[llm]` (LLM labels and embeddings,
+OpenAI or local via ollama). PyTorch is never required.
+
 ```python
 from topica import LDA
 

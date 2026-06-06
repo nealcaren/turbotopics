@@ -12,14 +12,22 @@ or, with [uv](https://github.com/astral-sh/uv):
 uv pip install topica
 ```
 
-The only runtime dependency is **NumPy**. A few features light up if you also
-have optional packages installed:
+The only runtime dependency is **NumPy**. Everything else is an optional extra,
+so the core stays light. Install the ones you need:
 
-| Optional package | Enables |
-|------------------|---------|
-| `pyLDAvis` | Interactive intertopic-distance charts via [`prepare_pyldavis`](../api/diagnostics.md) |
-| `matplotlib` | The `plot=True` figure from [`quality_frontier`](../api/diagnostics.md) |
-| `pandas` | Convenient tabular handling of effect tables and diagnostics |
+| Install | Enables |
+|---------|---------|
+| `pip install "topica[viz]"` | matplotlib figures: [`plot_report`](../api/diagnostics.md), `quality_frontier(plot=True)`, the search-K and discovery plots |
+| `pip install "topica[formula]"` | The R-style formula interface ([`design_matrix`](../api/keywords.md), `estimate_effect(formula=...)`); pulls in `formulaic` and `pandas` |
+| `pip install "topica[polars]"` | Pass Polars DataFrames/Series to [`from_dataframe`](../api/keywords.md), `align`, and `design_matrix` |
+| `pip install "topica[llm]"` | LLM topic labels and embeddings ([`llm_topic_labels`](../api/diagnostics.md), [`llm_embed`](../api/keywords.md)); installs `llm` plus the ollama plugin, so OpenAI works with `OPENAI_API_KEY` and a fully local path runs through ollama |
+
+Combine extras in one install, e.g. `pip install "topica[llm,viz,formula]"`. For
+local *sentence-transformer* embeddings add `llm-sentence-transformers` (which
+pulls in PyTorch); ollama's own embedding models need nothing extra. Two more
+packages also light up if already present: `pyLDAvis` (interactive
+intertopic-distance charts) and `pandas` (tabular handling of effect/diagnostic
+tables).
 
 ## Requirements
 

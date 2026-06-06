@@ -37,8 +37,10 @@ for i, words in enumerate(model.top_words(5)):
   for. See [covariates](guides/covariates.md) and [diagnostics](guides/diagnostics.md).
 - **Fast and deterministic.** A Rust core with bit-for-bit reproducible fits. The
   variational models parallelize across cores automatically.
-- **No heavy dependencies.** NumPy only. Optional integrations (pyLDAvis,
-  matplotlib) light up if installed.
+- **No heavy dependencies.** A NumPy-only core. Optional extras add what you need
+  — `topica[viz]` for plots, `topica[formula]` for the formula interface,
+  `topica[polars]` for Polars, `topica[llm]` for LLM labels and embeddings — and
+  PyTorch is never required. See [installation](getting-started/installation.md).
 
 ## The model families
 
