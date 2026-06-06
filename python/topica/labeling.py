@@ -20,6 +20,23 @@ import numpy as np
 
 from .report import _top_words, representative_docs, set_topic_labels
 
+def _unknown_model_message(_llm, model, kind="chat") -> str:
+    """An actionable error for a model `llm` does not know — the failure a user
+    hits when the needed plugin, server, or pulled model is missing."""
+    try:
+        getter = _llm.get_models if kind == "chat" else _llm.get_embedding_models
+        known = ", ".join(m.model_id for m in list(getter())[:6])
+    except Exception:  # pragma: no cover - defensive
+        known = "(could not list installed models)"
+    plugin = "llm-ollama" if kind == "chat" else "llm-sentence-transformers"
+    return (
+        f"llm has no {kind} model named {model!r}. OpenAI models work once "
+        f"OPENAI_API_KEY is set; for a local model install a plugin and make the "
+        f"model available — e.g. `pip install {plugin}`, and for ollama run the "
+        f"server and `ollama pull {model}`. Known {kind} models include: {known}."
+    )
+
+
 _DEFAULT_INSTRUCTIONS = (
     "You are labeling topics from a topic model fit on a document collection. "
     "Given a topic's most characteristic words and a few representative "
@@ -80,7 +97,13 @@ def llm_backend(model="gpt-4o-mini", *, key=None, system=None, **options):
             "llm_backend needs the optional `llm` package "
             '(pip install llm, or pip install "topica[llm]").'
         ) from e
-    obj = _llm.get_model(model)
+    try:
+        obj = _llm.get_model(model)
+    except Exception as e:
+        unknown = getattr(_llm, "UnknownModelError", None)
+        if unknown is not None and not isinstance(e, unknown):
+            raise
+        raise ValueError(_unknown_model_message(_llm, model, kind="chat")) from e
     if key is not None:
         obj.key = key
 

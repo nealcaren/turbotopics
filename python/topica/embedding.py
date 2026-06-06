@@ -231,7 +231,15 @@ def llm_embed(texts, model="text-embedding-3-small", *, key=None, batch=True, ca
             "llm_embed needs the optional `llm` package "
             '(pip install llm, or pip install "topica[llm]").'
         ) from e
-    em = _llm.get_embedding_model(model)
+    try:
+        em = _llm.get_embedding_model(model)
+    except Exception as e:
+        from .labeling import _unknown_model_message
+
+        unknown = getattr(_llm, "UnknownModelError", None)
+        if unknown is not None and not isinstance(e, unknown):
+            raise
+        raise ValueError(_unknown_model_message(_llm, model, kind="embedding")) from e
     if key is not None:
         em.key = key
     vecs = list(em.embed_multi(items)) if batch else [em.embed(t) for t in items]

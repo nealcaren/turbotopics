@@ -206,3 +206,35 @@ def test_llm_backend_passes_explicit_key(monkeypatch):
     obj.key = None
     topica.llm_backend("gpt-4o-mini")  # no key -> untouched, llm resolves from env
     assert obj.key is None
+
+
+def test_unknown_model_gives_actionable_error(monkeypatch):
+    import sys
+    import types
+
+    class UnknownModelError(Exception):
+        pass
+
+    class _M:
+        model_id = "gpt-4o-mini"
+
+    fake = types.ModuleType("llm")
+    fake.UnknownModelError = UnknownModelError
+
+    def get_model(name):
+        raise UnknownModelError(f"Unknown model: {name}")
+
+    fake.get_model = get_model
+    fake.get_models = lambda: [_M()]
+    fake.get_embedding_models = lambda: [_M()]
+    fake.get_embedding_model = lambda name: (_ for _ in ()).throw(UnknownModelError(name))
+    monkeypatch.setitem(sys.modules, "llm", fake)
+
+    with pytest.raises(ValueError) as exc:
+        topica.llm_backend("gemma4:e2b")
+    msg = str(exc.value)
+    assert "gemma4:e2b" in msg and "ollama" in msg and "OPENAI_API_KEY" in msg
+
+    with pytest.raises(ValueError) as exc2:
+        topica.llm_embed(["a"], model="mystery-embedder")
+    assert "mystery-embedder" in str(exc2.value) and "sentence-transformers" in str(exc2.value)
