@@ -34,11 +34,27 @@ topica.save_embeddings("emb.npz", doc_emb, texts=texts, model="all-MiniLM-L6-v2"
 doc_emb = topica.load_embeddings("emb.npz")
 ```
 
-```python
-import numpy as np, topica
+End to end, from raw text to a fitted model, with `llm_embed` doing the
+text-to-vectors step offline (no API key, runs in the wheel):
 
-docs = [["the", "economy", "and", "jobs"], ["pitching", "and", "home", "runs"], ...]
-doc_emb = embed([" ".join(d) for d in docs])   # (num_docs, E), your embedder
+```python
+import topica
+
+texts = [
+    "The economy added jobs as the unemployment rate fell again.",
+    "Inflation cooled and the central bank held interest rates steady.",
+    "Markets rallied on the strong payrolls and wage-growth report.",
+    "The home team scored late to win the playoff game in extra innings.",
+    "He threw a complete-game shutout in the opener of the series.",
+    "The rookie hit two home runs and drove in five for the win.",
+]
+
+# text -> (num_docs, E) vectors; the topica[llm] extra, sentence-transformers backend
+doc_emb = topica.llm_embed(texts, model="sentence-transformers/all-MiniLM-L6-v2")
+
+docs = [topica.tokenize(t, stopwords=topica.ENGLISH_STOPWORDS) for t in texts]
+model = topica.BERTopic(min_cluster_size=2, seed=1).fit(docs, doc_emb)
+print(topica.report(model))
 ```
 
 ## BERTopic

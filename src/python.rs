@@ -55,6 +55,45 @@ fn io_err(e: std::io::Error) -> PyErr {
     PyIOError::new_err(e.to_string())
 }
 
+/// Validate a count argument given as a signed Python int, so negatives raise a
+/// clean `ValueError` instead of PyO3's raw "can't convert negative int to
+/// unsigned" `OverflowError`. Accepting `i64` at the signature keeps the boundary
+/// from rejecting negatives before our own message can run.
+fn require_count(value: i64, min: i64, name: &str) -> PyResult<usize> {
+    if value < min {
+        return Err(PyValueError::new_err(format!(
+            "{name} must be >= {min}, got {value}"
+        )));
+    }
+    Ok(value as usize)
+}
+
+// `from_py_with` hooks for count constructor arguments. They take the int as a
+// signed `i64` so a negative value yields a clean `ValueError` here rather than
+// PyO3's raw `OverflowError`. Per-model minimums above 1 (e.g. CTM/STM need >= 2)
+// stay enforced by the existing guards inside each constructor body.
+fn py_num_topics(ob: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_count(ob.extract()?, 1, "num_topics")
+}
+fn py_num_pseudo(ob: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_count(ob.extract()?, 1, "num_pseudo")
+}
+fn py_num_super(ob: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_count(ob.extract()?, 1, "num_super")
+}
+fn py_num_sub(ob: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_count(ob.extract()?, 1, "num_sub")
+}
+fn py_depth(ob: &Bound<'_, PyAny>) -> PyResult<usize> {
+    require_count(ob.extract()?, 1, "depth")
+}
+fn py_num_topics_opt(ob: &Bound<'_, PyAny>) -> PyResult<Option<usize>> {
+    if ob.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(require_count(ob.extract()?, 1, "num_topics")?))
+}
+
 // ---------------------------------------------------------------------------
 // Model serialization (save / load)
 // ---------------------------------------------------------------------------
@@ -767,7 +806,7 @@ impl LDA {
                         sampler="sparse", mh_steps=2, use_symmetric_alpha=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha_sum: Option<f64>,
         beta: f64,
         optimize_interval: usize,
@@ -2441,7 +2480,7 @@ impl DMR {
     #[pyo3(signature = (num_topics, *, beta=0.01, optimize_interval=50,
                         burn_in=200, seed=42, prior_variance=1.0, lbfgs_iters=20))]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         beta: f64,
         optimize_interval: usize,
         burn_in: usize,
@@ -3326,7 +3365,7 @@ impl SAGE {
     #[pyo3(signature = (num_topics, *, alpha=0.1, prior_variance=1.0,
                         optimize_interval=50, burn_in=100, seed=42, lbfgs_iters=20))]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha: f64,
         prior_variance: f64,
         optimize_interval: usize,
@@ -3836,7 +3875,7 @@ impl CTM {
     /// default — `seed` is then irrelevant) or ``"random"`` (seeded).
     #[new]
     #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral"))]
-    fn new(num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -4190,7 +4229,7 @@ impl STM {
     /// topic-word β; with a content model the per-group β is always random.
     #[new]
     #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral"))]
-    fn new(num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -5118,7 +5157,7 @@ impl DTM {
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=0.01, chain_variance=0.005, obs_variance=0.5, seed=42))]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha: f64,
         chain_variance: f64,
         obs_variance: f64,
@@ -5430,7 +5469,7 @@ impl SupervisedLDA {
     /// concentration on document-topic proportions.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=0.1, seed=42))]
-    fn new(num_topics: usize, alpha: f64, seed: u64) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, alpha: f64, seed: u64) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -5738,7 +5777,7 @@ impl PT {
     /// short texts are aggregated into (more = finer, fewer = more aggregation).
     #[new]
     #[pyo3(signature = (num_topics, *, num_pseudo=100, alpha=0.1, beta=0.01, seed=42))]
-    fn new(num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, #[pyo3(from_py_with = "py_num_pseudo")] num_pseudo: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -5888,7 +5927,7 @@ impl GSDMM {
     /// toward populous clusters; `beta` is the word-Dirichlet smoothing.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=0.1, beta=0.1, seed=42))]
-    fn new(num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics (max clusters) must be >= 2"));
         }
@@ -6347,6 +6386,9 @@ fn check_umap(use_umap: bool) -> PyResult<()> {
 /// You bring the embeddings. `fit(data, doc_embeddings)` needs one embedding row
 /// per document; pass `word_embeddings` with the aligned `vocabulary` (same
 /// space) to also get `topic_neighbors`. The topic count is discovered, not set.
+///
+/// No embedder of your own? `topica.llm_embed(texts, model=...)` builds the
+/// matrix (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
 pub struct Top2Vec {
     n_components: usize,
@@ -6633,6 +6675,9 @@ impl Top2Vec {
 /// embeddings are needed. `nr_topics` merges the most similar topics down to a
 /// target count; `doc_topic` is the approximate distribution (a sliding window's
 /// c-TF-IDF compared to each topic). You bring the document embeddings.
+///
+/// No embedder of your own? `topica.llm_embed(texts, model=...)` builds the
+/// matrix (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
 pub struct BERTopic {
     n_components: usize,
@@ -6901,6 +6946,9 @@ impl BERTopic {
 /// embeddings ``alpha`` and the prior by the same variational EM as ``CTM`` (no
 /// VAE, no PyTorch). Semantically related words share topic mass even when a
 /// topic never saw them.
+///
+/// No embedder of your own? `topica.llm_embed(vocabulary, model=...)` builds the
+/// word embeddings `rho` (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
 pub struct ETM {
     num_topics: usize,
@@ -7001,7 +7049,7 @@ impl ETM {
                         wdecay=1.2e-6, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         inference: &str,
         em_iters: usize,
         em_tol: f64,
@@ -7217,6 +7265,9 @@ impl ETM {
 /// bag-of-words reconstruction plus the two transport costs. New documents are
 /// mapped to topics by a distance-softmax over the fitted topic embeddings, so
 /// ``transform`` needs only their embeddings.
+///
+/// No embedder of your own? `topica.llm_embed(texts, model=...)` builds the
+/// matrix (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
 pub struct FASTopic {
     num_topics: usize,
@@ -7254,7 +7305,7 @@ impl FASTopic {
                         theta_temp=1.0, em_tol=1e-6, sinkhorn_iters=50, sinkhorn_tol=1e-4, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        num_topics: usize,
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         epochs: usize,
         lr: f64,
         dt_alpha: f64,
@@ -7492,7 +7543,7 @@ impl KeyATM {
     #[allow(clippy::too_many_arguments)]
     fn new(
         keywords: &Bound<'_, PyDict>,
-        num_topics: Option<usize>,
+        #[pyo3(from_py_with = "py_num_topics_opt")] num_topics: Option<usize>,
         alpha: Option<f64>,
         beta: f64,
         beta_keyword: f64,
@@ -7535,7 +7586,7 @@ impl KeyATM {
     /// keyword-specific outputs (``keyword_rate``, ``pi_history``) are empty.
     #[staticmethod]
     #[pyo3(signature = (num_topics, *, alpha=0.1, beta=0.01, seed=42))]
-    fn weighted_lda(num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+    fn weighted_lda(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
@@ -8038,7 +8089,7 @@ impl PA {
     /// sub-topics (the sub-topics are the word-level topics).
     #[new]
     #[pyo3(signature = (num_super, num_sub, *, alpha=0.1, beta=0.01, seed=42))]
-    fn new(num_super: usize, num_sub: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_num_super")] num_super: usize, #[pyo3(from_py_with = "py_num_sub")] num_sub: usize, alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
         if num_super < 1 || num_sub < 2 {
             return Err(PyValueError::new_err("num_super must be >= 1 and num_sub >= 2"));
         }
@@ -8203,7 +8254,7 @@ impl HLDA {
     /// topic-word Dirichlet; `alpha` the per-document level distribution.
     #[new]
     #[pyo3(signature = (*, depth=3, gamma=1.0, eta=0.01, alpha=0.1, seed=42))]
-    fn new(depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64) -> PyResult<Self> {
+    fn new(#[pyo3(from_py_with = "py_depth")] depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64) -> PyResult<Self> {
         if depth < 2 {
             return Err(PyValueError::new_err("depth must be >= 2"));
         }

@@ -166,7 +166,12 @@ def topic_stability(runs: Any, *, topn: int = 10, metric: str = "cosine") -> flo
     ...
 
 
-# Model-neutral fitted-model analysis surface (also in topica.report).
+def report(model: Any, topn: int = 8) -> str:
+    """One-call overview of a fitted model. Alias for ``summary``."""
+    ...
+
+
+# Model-neutral fitted-model analysis surface (also in topica.analysis).
 def topic_info(
     model: Any,
     texts: Sequence[str] | None = None,

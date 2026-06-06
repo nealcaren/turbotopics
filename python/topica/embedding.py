@@ -267,6 +267,9 @@ class EmbeddingLDA:
     (``topic_word``, ``doc_topic``, ``top_words``, ``coherence``, ...) is
     delegated to the underlying SeededLDA.
 
+    No embedder of your own? :func:`~topica.llm_embed` builds the ``embeddings``
+    matrix (OpenAI, or offline ``sentence-transformers``).
+
     Parameters
     ----------
     num_topics : int

@@ -66,3 +66,41 @@ def test_empty_clustering_warns_and_diagnostics_guard():
 def test_citation_handle():
     # #14: programmatic citation.
     assert "Caren" in topica.__citation__ and "topica" in topica.__citation__
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: topica.LDA(-3),
+        lambda: topica.DMR(-1),
+        lambda: topica.CTM(-2),
+        lambda: topica.STM(-2),
+        lambda: topica.GSDMM(-1),
+        lambda: topica.PA(-1, 3),
+        lambda: topica.PA(3, -1),
+        lambda: topica.PT(-2),
+        lambda: topica.PT(2, num_pseudo=-1),
+        lambda: topica.HLDA(depth=-1),
+        lambda: topica.KeyATM({"a": ["x"]}, num_topics=-5),
+    ],
+)
+def test_negative_count_is_value_error(make):
+    # #13: a negative count raises a clean ValueError, not a raw OverflowError.
+    with pytest.raises(ValueError):
+        make()
+
+
+def test_zero_num_topics_still_guarded():
+    # #13: the existing zero guard keeps working.
+    with pytest.raises(ValueError, match="num_topics must be >= 1"):
+        topica.LDA(0)
+
+
+def test_report_is_callable():
+    # #12: report(model) works as a one-call overview (alias for summary).
+    assert callable(topica.report)
+    docs = [["cat", "dog"], ["star", "moon"]] * 8
+    m = topica.LDA(2, seed=1)
+    m.fit(docs, iterations=50)
+    assert topica.report(m) == topica.summary(m)
+    assert "num_topics" in topica.report(m)

@@ -1,4 +1,4 @@
-"""The model-neutral fitted-model analysis surface (``topica.report``)."""
+"""The model-neutral fitted-model analysis surface (``topica.analysis``)."""
 
 import numpy as np
 import pytest

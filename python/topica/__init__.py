@@ -142,8 +142,7 @@ from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analy
     align_topics,
     topic_stability,
 )
-from . import report  # noqa: E402  (model-neutral fitted-model analysis surface)
-from .report import (  # noqa: E402
+from .analysis import (  # noqa: E402  (model-neutral fitted-model analysis surface)
     topic_info,
     topic_sizes,
     topic_labels,
@@ -153,6 +152,18 @@ from .report import (  # noqa: E402
     topics_per_class,
     plot_report,
 )
+
+
+def report(model, topn=8):
+    """One-call overview of a fitted model. Alias for :func:`summary`.
+
+    ``report`` reads like a verb, so ``report(model)`` is a natural thing to
+    try; it returns the same multi-line overview as ``summary(model)``. The
+    richer analysis surface (``topic_info``, ``topic_sizes``,
+    ``representative_docs``, ``topics_over_time``, ``plot_report``, …) lives in
+    ``topica.analysis`` and is also exported as top-level functions.
+    """
+    return summary(model, topn=topn)
 from .keywords import fighting_words, top_fighting_words  # noqa: E402
 from .labeling import (  # noqa: E402  LLM topic labeling as plumbing
     llm_topic_labels,

@@ -6,6 +6,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `topica.report(model)` is now a callable one-line overview (an alias for
+  `summary`), so the natural `report(model)` call works instead of raising
+  `'module' object is not callable` (#12).
+- A bundled `text -> llm_embed -> BERTopic` example and an `llm_embed`
+  cross-reference in every embedding model's docstring (#5).
+
+### Changed
+
+- The model-neutral analysis surface moved from the `topica.report` module to
+  `topica.analysis` (its functions remain available top-level, e.g.
+  `topica.topic_info`, `topica.plot_report`), freeing the verb-like `report`
+  name for the new callable (#12).
+
+### Fixed
+
+- A negative count (`num_topics`, `num_pseudo`, `num_super`, `num_sub`, `depth`)
+  now raises a clean `ValueError` instead of leaking PyO3's
+  `OverflowError: can't convert negative int to unsigned` (#13).
+
 ## [0.7.0] - 2026-06-06
 
 ### Added

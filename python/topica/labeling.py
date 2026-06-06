@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .report import _top_words, representative_docs, set_topic_labels
+from .analysis import _top_words, representative_docs, set_topic_labels
 
 def _unknown_model_message(_llm, model, kind="chat") -> str:
     """An actionable error for a model `llm` does not know — the failure a user

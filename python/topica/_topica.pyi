@@ -1287,7 +1287,8 @@ class Top2Vec:
     embeddings are reduced (randomized PCA), density-clustered (HDBSCAN), and
     each topic is read off its cluster: the topic vector is the mean of its
     documents' embeddings and its words are the nearest vocabulary terms. You
-    bring the embeddings; the topic count is discovered, not set."""
+    bring the embeddings; the topic count is discovered, not set. No embedder of
+    your own? ``topica.llm_embed(texts, model=...)`` builds the matrix."""
 
     def __init__(
         self,
@@ -1352,7 +1353,8 @@ class BERTopic:
     but topics are defined by class-based TF-IDF over their documents' words, so
     no word embeddings are needed. `nr_topics` merges the most similar topics down
     to a target; `doc_topic` is the approximate distribution. You bring the
-    document embeddings; the topic count is discovered (before any reduction)."""
+    document embeddings; the topic count is discovered (before any reduction).
+    No embedder of your own? ``topica.llm_embed(texts, model=...)`` builds it."""
 
     def __init__(
         self,
@@ -1418,7 +1420,8 @@ class ETM:
     topica fits the topic embeddings alpha. `inference="em"` (default) uses
     per-document variational EM; `inference="vae"` uses the reference's amortized
     autoencoder, which scales to large corpora and maps new documents with a single
-    encoder pass. Neither uses PyTorch."""
+    encoder pass. Neither uses PyTorch. No embedder of your own?
+    ``topica.llm_embed(vocabulary, model=...)`` builds the word embeddings rho."""
 
     def __init__(
         self,
@@ -1486,7 +1489,8 @@ class FASTopic:
     embeddings; topica learns the topic embeddings, word embeddings (same space),
     and transport marginals, minimizing a bag-of-words reconstruction plus the two
     transport costs. Held-out documents are mapped by a distance-softmax over the
-    fitted topic embeddings, so `transform` needs only their embeddings."""
+    fitted topic embeddings, so `transform` needs only their embeddings. No
+    embedder of your own? ``topica.llm_embed(texts, model=...)`` builds it."""
 
     def __init__(
         self,
