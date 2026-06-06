@@ -206,11 +206,12 @@ def search_k(
     ``model="stm"`` fits an :class:`~topica.STM` per K — pass ``prevalence``
     (a covariate design matrix) to scan K for the model you'll actually report.
 
-    Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass),
-    ``exclusivity`` (mean top-word exclusivity), and — for ``model="lda"`` with
-    ``held_out`` — ``perplexity`` (held-out). The coherence/exclusivity trade-off
-    is the signal: there is rarely a single best K, so read it alongside
-    interpretability (see the K guide).
+    Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass,
+    so negative; the metric is named in ``coherence_metric`` since ``plot_report``
+    reports c_v on a different scale), ``exclusivity`` (mean top-word
+    exclusivity), and — for ``model="lda"`` with ``held_out`` — ``perplexity``
+    (held-out). The coherence/exclusivity trade-off is the signal: there is rarely
+    a single best K, so read it alongside interpretability (see the K guide).
     """
     from . import LDA, STM  # local import to avoid a cycle at module load
 
@@ -229,6 +230,7 @@ def search_k(
         row = {
             "k": k,
             "coherence": float(np.mean(m.coherence(coherence_n))),
+            "coherence_metric": "u_mass",
             "exclusivity": _mean_exclusivity(m.topic_word, coherence_n),
         }
         if model == "lda" and held_out is not None:

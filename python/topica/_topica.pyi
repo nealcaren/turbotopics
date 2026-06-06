@@ -50,7 +50,12 @@ class Corpus:
         min_doc_freq: int = 1,
         max_doc_fraction: float = 1.0,
     ) -> Corpus:
-        """Build a Corpus from a list of token lists."""
+        """Build a Corpus from a list of token lists.
+
+        A document left with no tokens by pruning is dropped, so ``num_docs`` can
+        be smaller than ``len(documents)``; the surviving original indices are in
+        ``kept_indices`` (realign external covariates with ``X[corpus.kept_indices]``).
+        """
         ...
 
     @staticmethod

@@ -481,6 +481,12 @@ impl Corpus {
     /// (maximum fraction of documents), by `min_cf` (minimum collection/total
     /// frequency), and by `rm_top` (drop the N most frequent words) — matching
     /// tomotopy's `min_df` / `min_cf` / `rm_top`.
+    ///
+    /// A document left with no tokens by pruning is dropped, so `num_docs` can be
+    /// smaller than `len(documents)`. The surviving original indices are in
+    /// `kept_indices`; realign any external covariate matrix with
+    /// `X[corpus.kept_indices]`. (An input document that is empty before any
+    /// pruning is retained.)
     #[staticmethod]
     #[pyo3(signature = (documents, *, doc_names=None, doc_labels=None,
                         stopwords=None, min_doc_freq=1, max_doc_fraction=1.0,

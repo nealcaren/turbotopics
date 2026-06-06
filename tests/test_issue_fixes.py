@@ -96,6 +96,13 @@ def test_zero_num_topics_still_guarded():
         topica.LDA(0)
 
 
+def test_search_k_labels_its_coherence_metric():
+    # #14: search_k reports UMass; label it so its scale isn't confused with c_v.
+    docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
+    rows = topica.search_k(docs, [2, 3], iterations=60, num_samples=1)
+    assert all(r["coherence_metric"] == "u_mass" for r in rows)
+
+
 def test_report_is_callable():
     # #12: report(model) works as a one-call overview (alias for summary).
     assert callable(topica.report)

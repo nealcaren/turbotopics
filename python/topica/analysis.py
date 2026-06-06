@@ -314,7 +314,10 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
             for t in range(len(quality["topic"])):
                 ax.annotate(str(int(quality["topic"][t])),
                             (quality["coherence"][t], quality["exclusivity"][t]), fontsize=7)
-            ax.set_xlabel("Semantic coherence")
+            # Name the coherence metric so its scale is not mistaken for another
+            # (c_v ~ 0..1 when texts are given; u_mass is negative otherwise).
+            coh_metric = coherence_type if ref is not None else "u_mass"
+            ax.set_xlabel(f"Semantic coherence ({coh_metric})")
             ax.set_ylabel("Exclusivity")
             ax.set_title("Topic quality (size ∝ prevalence)")
             # Exclusivity saturates near 1; stop matplotlib's offset notation
