@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-06
+
 ### Added
 
 - `topica.mmr(model, word_embeddings, diversity=...)` — maximal-marginal-relevance
