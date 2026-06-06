@@ -1,0 +1,123 @@
+# Reporting uncertainty
+
+Topic estimates are estimates. The proportions `θ`, the top words, the covariate
+effects you put in a table all carry sampling error, and a credible result
+reports it. `topica.standard_errors` is one entry point for the quantities people
+publish, and it propagates the topic-estimation uncertainty rather than treating
+the fit as if it were observed exactly.
+
+```python
+import topica
+
+se = topica.standard_errors(model, corpus, of="effect", formula="~ year", data=meta)
+```
+
+There are two distinct uncertainties, and they call for two methods.
+
+## Method of composition (the default)
+
+Given a fixed fit, `θ` is still uncertain: each document's topic proportions are
+estimated from its tokens. The **method of composition** (Treier & Jackman 2008,
+the procedure R `stm` uses) draws `θ` from the model's own posterior, computes the
+quantity on each draw, and pools by Rubin's rules, so the standard errors inflate
+over a naive regression on point `θ`. It is cheap (no refit) and honest for
+covariate effects and group prevalence.
+
+`standard_errors` detects the model family and picks the right sampler for you:
+STM and CTM have a logistic-normal posterior; the Gibbs models (LDA, keyATM,
+SeededLDA, ...) have a per-document Dirichlet conditional, which needs the
+document lengths, so pass the `Corpus` you fit on.
+
+```python
+# Covariate effects, uncertainty propagated (one regression per topic):
+eff = topica.standard_errors(model, corpus, of="effect",
+                             formula="~ party", data=meta, nsims=50)
+for e in eff:
+    print(e.topic, e.as_dict())
+
+# Each topic's mean prevalence, with an interval:
+prev = topica.standard_errors(model, corpus, of="prevalence", nsims=50)
+```
+
+The effect result is the same `TopicEffect` list as `estimate_effect` (so
+`cluster=`, `link=`, `spline`, and `interaction` all carry over); prevalence
+returns a `TopicPrevalence` per topic. `estimate_effect` itself now also accepts
+the model directly: `estimate_effect(model, X, corpus=corpus, nsims=50)` draws the
+right posterior internally.
+
+Composition covers `of="effect"` and `of="prevalence"` for LDA, keyATM, STM, and
+CTM. It cannot give top-word uncertainty (it only varies `θ`), and it does not
+apply to the embedding models (they have no posterior over `θ`). For those, use
+the bootstrap.
+
+## Bootstrap (top words, embedding models)
+
+Refitting on resampled documents captures the *full* model uncertainty, including
+which topics emerge. It is the only route to standard errors for the embedding
+models and the only way to get top-word or topic-quality intervals.
+
+```python
+# How stable is each topic's top-word list?
+tw = topica.standard_errors(model, corpus, of="top_words", method="bootstrap",
+                            n_boot=200, topn=10)
+for t in tw:
+    for word, prob, lo, hi in t.words:
+        print(t.topic, word, f"kept in {prob:.0%} of resamples")
+```
+
+`of="prevalence"` and `of="effect"` also work with `method="bootstrap"` and report
+the across-refit spread.
+
+### The alignment catch
+
+Each refit permutes and drifts the topics, so a quantity must be matched back to
+the reference fit before pooling. topica matches by top-word overlap (Hungarian),
+but a forced one-to-one match silently corrupts the standard error when a topic
+**splits or merges** across resamples, or when the reference topics are not
+distinct. This is exactly why R `stm` prefers the method of composition.
+
+So the bootstrap reports two alignment diagnostics per topic and **suppresses the
+standard error (sets it to `NaN`, `reliable=False`) when matching is unstable**:
+
+- `alignment_quality` — mean top-word Jaccard with the matched topic (is the match
+  *close*?).
+- `alignment_margin` — how much better the match is than the next-best topic (is
+  the match *unambiguous*?). A high quality with a low margin means the topics are
+  interchangeable and the match is arbitrary, which the Jaccard alone would miss.
+
+```python
+for t in topica.standard_errors(model, corpus, of="prevalence", method="bootstrap"):
+    if not t.reliable:
+        print(f"topic {t.topic}: unstable alignment "
+              f"(quality={t.alignment_quality:.2f}, margin={t.alignment_margin:.2f}) "
+              "— SE suppressed")
+```
+
+### Embedding models
+
+The default bootstrap refits a count model on resampled token lists. An embedding
+model's `fit` also needs the document embeddings, so pass a `refit` hook that
+resamples them alongside the documents and returns a fitted model:
+
+```python
+def refit(doc_indices):
+    m = topica.BERTopic(min_cluster_size=15, seed=1)
+    m.fit([docs[i] for i in doc_indices], doc_emb[doc_indices])
+    return m
+
+tw = topica.standard_errors(bertopic, corpus, of="top_words",
+                            method="bootstrap", refit=refit, n_boot=200)
+```
+
+## Which to use
+
+| Quantity | Models | Method |
+|---|---|---|
+| Covariate effects | LDA, keyATM, STM, CTM | `composition` (default) |
+| Group / overall prevalence | LDA, keyATM, STM, CTM | `composition` |
+| Top words, topic quality | any | `bootstrap` |
+| Anything, embedding models | BERTopic, Top2Vec, ETM, FASTopic | `bootstrap` (with `refit=`) |
+
+Composition is cheaper and avoids the alignment problem, so prefer it where it
+applies. Reach for the bootstrap when you need top-word intervals or you are on a
+model with no posterior, and read the `reliable` flag before quoting a number.

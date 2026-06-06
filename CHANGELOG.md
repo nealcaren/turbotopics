@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `topica.standard_errors(model, corpus, of=..., method=...)` — one entry point
+  for uncertainty on the quantities people publish (#15). `method="composition"`
+  (default) auto-detects the model family, draws the right θ posterior
+  (logistic-normal for STM/CTM, Dirichlet for the Gibbs models), and pools by
+  Rubin's rules for `of="effect"`/`"prevalence"`. `method="bootstrap"` refits on
+  resampled documents for `of="top_words"` and the embedding models, matching
+  topics across refits and reporting `alignment_quality`/`alignment_margin` so it
+  can flag and suppress SEs where the matching is unstable (split/merge or
+  indistinct topics).
+- `Corpus.doc_lengths` — per-document token counts in the pruned vocabulary,
+  parallel to a model's `doc_topic` rows (needed by `dirichlet_theta_samples`).
+- `estimate_effect` and `by_strata` now accept the fitted model directly and draw
+  θ internally (with `corpus=`/`nsims=`), so the sampler no longer has to be
+  wired by hand. `topica.model_family(model)` exposes the detection.
+
 ## [0.7.1] - 2026-06-06
 
 ### Added

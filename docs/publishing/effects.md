@@ -41,6 +41,17 @@ For non-linear time trends and interactions, build the design matrix with
 `stm.spline` and `stm.interaction`, the same `~ s(year)` and `~ a*b` you'd write
 in R.
 
+`topica.standard_errors` wraps this in one call: it detects the model family,
+draws the right posterior for you, and returns the same effects. It also reaches
+quantities the manual path doesn't, group prevalence and bootstrap intervals on
+the top words, with an alignment-quality flag for the embedding models. See
+[Reporting uncertainty](../guides/uncertainty.md).
+
+```python
+eff = topica.standard_errors(model, corpus, of="effect",
+                             formula="~ party", data=meta, nsims=50)
+```
+
 ## It is not just for STM
 
 `topica.estimate_effect` regresses *any* model's θ on covariates, and

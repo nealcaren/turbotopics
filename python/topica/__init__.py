@@ -115,6 +115,8 @@ from .effects import (  # noqa: E402  general, work on any model's theta
     top_topics,
     posterior_theta_samples,
     dirichlet_theta_samples,
+    standard_errors,
+    model_family,
 )
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
@@ -249,6 +251,8 @@ __all__ = [
     "top_topics",
     "posterior_theta_samples",
     "dirichlet_theta_samples",
+    "standard_errors",
+    "model_family",
     "EmbeddingLDA",
     "embedding_seeds",
     "llm_embed",

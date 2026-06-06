@@ -83,6 +83,7 @@ nav:
       - Preprocessing: guides/preprocessing.md
       - Covariates & STM: guides/covariates.md
       - Diagnostics & validation: guides/diagnostics.md
+      - Reporting uncertainty: guides/uncertainty.md
       - Distinguishing words: guides/keywords.md
       - Guided topics (seed words): guides/guided.md
       - Short text: guides/short-text.md

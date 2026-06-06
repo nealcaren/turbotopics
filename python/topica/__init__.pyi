@@ -38,6 +38,8 @@ from .effects import (
     top_topics as top_topics,
     posterior_theta_samples as posterior_theta_samples,
     dirichlet_theta_samples as dirichlet_theta_samples,
+    standard_errors as standard_errors,
+    model_family as model_family,
 )
 from .embedding import (
     EmbeddingLDA as EmbeddingLDA,

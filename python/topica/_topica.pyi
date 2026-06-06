@@ -100,6 +100,12 @@ class Corpus:
         ...
 
     @property
+    def doc_lengths(self) -> list[int]:
+        """Tokens per document in the pruned vocabulary, parallel to a model's
+        ``doc_topic`` rows. The N_d that ``dirichlet_theta_samples`` needs."""
+        ...
+
+    @property
     def vocabulary(self) -> list[str]:
         """Ordered list of vocabulary terms."""
         ...

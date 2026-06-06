@@ -91,27 +91,67 @@ class StrataPrevalence:
         }
 
 
-def by_strata(model_or_theta, strata, *, ci=0.95, topic_names=None):
+def by_strata(model_or_theta, strata, *, ci=0.95, topic_names=None, corpus=None, nsims=None, seed=0):
     """Mean topic prevalence within each level of a document covariate
     (≈ ``keyATM::by_strata_DocTopic``).
 
     Splits documents by their value in ``strata`` (one label per document) and,
     for each level, reports the mean of each topic's proportion with a
     normal-approximation confidence interval on that mean. This is keyATM's
-    descriptive answer to "how does topic prevalence differ across groups"; for
-    a regression with uncertainty propagated from the topic estimates, use
-    :func:`topica.stm.estimate_effect` with posterior draws instead.
+    descriptive answer to "how does topic prevalence differ across groups".
+
+    With ``nsims`` (and a fitted **model** as the first argument), the interval is
+    widened by the **method of composition**: the model's θ posterior is drawn for
+    you (logistic-normal for STM/CTM, Dirichlet for the Gibbs models — pass
+    ``corpus=`` so document lengths are available) and the per-stratum means are
+    pooled by Rubin's rules, so the topic-estimation uncertainty is propagated, not
+    just the across-document spread. For a regression with the same propagation use
+    :func:`topica.stm.estimate_effect`.
 
     Returns a list of :class:`StrataPrevalence`, one per unique stratum (sorted).
     ``[s.as_dict() for s in result]`` builds a table.
     """
     from .stm import _normal_ppf
 
-    theta, names = _theta_and_names(model_or_theta, topic_names)
+    z = _normal_ppf(0.5 + ci / 2.0)
     strata = np.asarray(strata)
+
+    if nsims:
+        from .effects import composition_theta
+
+        if not hasattr(model_or_theta, "doc_topic"):
+            raise ValueError("by_strata(..., nsims=) needs a fitted model to draw theta")
+        names = list(getattr(model_or_theta, "topic_names", [])) or None
+        draws = composition_theta(model_or_theta, corpus, nsims=nsims, seed=seed)
+        m, d, k = draws.shape
+        names = names or [f"topic_{t}" for t in range(k)]
+        if strata.shape[0] != d:
+            raise ValueError("strata must have one label per document")
+        out = []
+        for level in sorted(np.unique(strata), key=lambda v: str(v)):
+            mask = strata == level
+            n = int(mask.sum())
+            sub = draws[:, mask, :]                       # (M, n, K)
+            per_draw = sub.mean(axis=1)                   # (M, K)
+            estimate = per_draw.mean(axis=0)
+            between = per_draw.var(axis=0, ddof=1) if m > 1 else np.zeros(k)
+            within = sub.var(axis=1, ddof=1).mean(axis=0) / n if n > 1 else np.zeros(k)
+            se = np.sqrt(np.clip(within + (1.0 + 1.0 / m) * between, 0.0, None))
+            out.append(
+                StrataPrevalence(
+                    stratum=level.item() if hasattr(level, "item") else level,
+                    n=n,
+                    topic_names=names,
+                    mean=estimate,
+                    ci_low=np.clip(estimate - z * se, 0.0, 1.0),
+                    ci_high=np.clip(estimate + z * se, 0.0, 1.0),
+                )
+            )
+        return out
+
+    theta, names = _theta_and_names(model_or_theta, topic_names)
     if strata.shape[0] != theta.shape[0]:
         raise ValueError("strata must have one label per document")
-    z = _normal_ppf(0.5 + ci / 2.0)
 
     out = []
     for level in sorted(np.unique(strata), key=lambda v: str(v)):

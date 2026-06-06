@@ -598,6 +598,16 @@ impl Corpus {
         self.inner.total_tokens()
     }
 
+    /// Tokens per document in the pruned vocabulary, one entry per kept document
+    /// (parallel to the rows of a fitted model's ``doc_topic``). This is the
+    /// document length ``N_d`` that :func:`topica.dirichlet_theta_samples` needs to
+    /// recover each document's Dirichlet posterior for method-of-composition
+    /// standard errors.
+    #[getter]
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.inner.docs.iter().map(|d| d.len()).collect()
+    }
+
     #[getter]
     fn vocabulary(&self) -> Vec<String> {
         self.inner.id_to_word.clone()

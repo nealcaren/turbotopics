@@ -161,6 +161,9 @@ def estimate_effect(
     ci=0.95,
     cluster=None,
     link="identity",
+    corpus=None,
+    nsims=None,
+    seed=0,
 ):
     """Regress each topic's proportion on document covariates.
 
@@ -186,10 +189,12 @@ def estimate_effect(
 
     Parameters
     ----------
-    doc_topic : array
+    doc_topic : array or fitted model
         Either ``(num_docs, num_topics)`` — a point θ (``model.doc_topic``) for
         plain OLS — or ``(nsims, num_docs, num_topics)`` — posterior θ draws for
-        method-of-composition pooling.
+        method-of-composition pooling. You may also pass the **fitted model**
+        itself: with ``nsims`` (and ``corpus=`` for a Gibbs model) the right θ
+        posterior is drawn for you; without ``nsims`` its point θ is used.
     X : array (num_docs, p)
         Document covariates (design matrix); build nonlinear/interaction terms
         with :func:`spline` / :func:`interaction`. An intercept is prepended when
@@ -220,6 +225,19 @@ def estimate_effect(
             cluster = np.asarray(data[cluster])
     elif X is None:
         raise ValueError("provide X (a design matrix), or formula= with data=.")
+
+    # Accept a fitted model as the first argument and draw theta internally: with
+    # nsims, the family-appropriate posterior is sampled for method-of-composition
+    # standard errors (no hand-wiring a sampler); without it, the point theta is
+    # used for plain OLS.
+    if hasattr(doc_topic, "doc_topic") and not isinstance(doc_topic, np.ndarray):
+        from .effects import composition_theta
+
+        _model = doc_topic
+        if nsims:
+            doc_topic = composition_theta(_model, corpus, nsims=nsims, seed=seed)
+        else:
+            doc_topic = np.asarray(_model.doc_topic, dtype=np.float64)
 
     theta = np.asarray(doc_topic, dtype=np.float64)
     pooled = theta.ndim == 3
