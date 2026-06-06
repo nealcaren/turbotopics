@@ -6409,14 +6409,28 @@ fn parse_clusterer(clusterer: &str, num_clusters: Option<i64>) -> PyResult<(Stri
     }
 }
 
-/// Reject `reducer='umap'` when topica was not built with the `umap` feature.
-fn check_umap(use_umap: bool) -> PyResult<()> {
-    if use_umap && !crate::reduce::umap_available() {
+/// For `reducer='umap'`, warn that the topic-discovery fit is not reproducible
+/// (the transform / prediction phase is deterministic regardless), so the default
+/// `reducer='pca'` stays the reproducible choice. Also guards the case (not present
+/// in a standard wheel) where the `umap` feature was not compiled in.
+fn umap_notice(py: Python<'_>, use_umap: bool) -> PyResult<()> {
+    if !use_umap {
+        return Ok(());
+    }
+    if !crate::reduce::umap_available() {
         return Err(PyRuntimeError::new_err(
-            "reducer='umap' requires building topica with the `umap` feature \
-             (maturin develop --features python,umap); the default build uses PCA",
+            "reducer='umap' is not available in this build; rebuild with the `umap` \
+             feature, or use reducer='pca' (the default)",
         ));
     }
+    let warnings = py.import_bound("warnings")?;
+    warnings.call_method1(
+        "warn",
+        ("reducer='umap': the UMAP topic-discovery fit is not reproducible across runs \
+          (the Rust UMAP optimizer's negative sampling is unseeded). The transform / \
+          prediction phase is deterministic regardless. Use reducer='pca' (the default) \
+          for a reproducible fit.",),
+    )?;
     Ok(())
 }
 
@@ -6574,7 +6588,7 @@ impl Top2Vec {
         self.id_to_word = corpus.id_to_word.clone();
         self.docs = corpus.docs.clone();
 
-        check_umap(self.use_umap)?;
+        umap_notice(py, self.use_umap)?;
         let (nc, uu, nn, mcs, ms, seed) = (
             self.n_components, self.use_umap, self.n_neighbors,
             self.min_cluster_size, self.min_samples, self.seed,
@@ -6915,7 +6929,7 @@ impl BERTopic {
         let num_types = corpus.num_types();
         self.id_to_word = corpus.id_to_word.clone();
         self.docs = corpus.docs.clone();
-        check_umap(self.use_umap)?;
+        umap_notice(py, self.use_umap)?;
         let (nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed) = (
             self.n_components, self.use_umap, self.n_neighbors, self.min_cluster_size,
             self.min_samples, self.nr_topics, self.window, self.stride,

@@ -56,12 +56,15 @@ rayon = "1"
 
 [features]
 # maturin enables this (see pyproject.toml -> [tool.maturin] features).
-# `python` implies `embeddings` so the PyO3 bindings can expose the embedding
-# models; `embeddings` also builds/tests standalone (`cargo test --features embeddings`).
-python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings"]
+# `python` implies `embeddings` (so the bindings expose the embedding models) and
+# `umap` (so the shipped wheel offers `reducer="umap"`); both also build/test
+# standalone (`cargo test --features embeddings`).
+python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings", "umap"]
 # The embedding-native model branch (clustering pipeline + numerical models).
 embeddings = ["dep:petal-clustering", "dep:ndarray"]
-# Faithful UMAP reducer for the embedding models (opt-in; default is PCA).
+# Faithful UMAP reducer for the embedding models. PCA stays the default reducer;
+# UMAP's discovery fit is stochastic (the umap-rs optimizer's negative sampling is
+# unseeded), while the transform / prediction phase is deterministic regardless.
 umap = ["embeddings", "dep:umap-rs"]
 
 # Whole-program optimization for the shipped wheels and CLI binaries.

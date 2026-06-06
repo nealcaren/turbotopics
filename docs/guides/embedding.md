@@ -275,11 +275,22 @@ and `topic_neighbors` (Top2Vec) and `approximate_distribution` (BERTopic).
   dependency-free, but it separates less sharply than UMAP and on closely spaced
   themes can merge clusters a UMAP run would split.
 - `reducer="umap"` switches to a faithful UMAP reducer (with `n_neighbors`), which
-  separates real document embeddings much better. On a four-newsgroup slice it
-  recovers four clean topics where PCA merges them into two. UMAP is opt-in at
-  build time: install topica built with the `umap` feature
-  (`maturin develop --features python,umap`); asking for it without that build
-  raises a clear error. The default build stays lean and PCA-only.
+  separates real document embeddings much better than a linear projection and, on
+  closely spaced themes, splits clusters PCA would merge. It ships in the wheel, so
+  it is opt-in at runtime, not build time.
+
+  **One caveat, by design.** The UMAP *discovery* fit is **not reproducible** across
+  runs: the underlying Rust UMAP optimizer's negative sampling is unseeded, so a
+  fixed `seed` does not pin the layout, and `reducer="umap"` emits a warning saying
+  so. This is the one place topica relaxes its determinism guarantee, and it follows
+  BERTopic's own fit-vs-predict split: the reducer runs only during topic
+  *discovery*, while the **prediction phase is deterministic** — `transform` assigns
+  new documents by cosine to the fitted topic vectors (Top2Vec) or by c-TF-IDF
+  (BERTopic) and never re-runs UMAP. So a fitted model maps documents
+  reproducibly even though the discovery that produced it was stochastic. For a
+  fully reproducible fit, keep the default `reducer="pca"`. If your aim is simply to
+  empty the `-1` noise bucket rather than to use UMAP specifically,
+  `clusterer="kmeans"` (above) is the deterministic route.
 - Results are reproducible for a fixed `seed`.
 
 !!! note "Faithful to the references"

@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `reducer="umap"` now ships in the wheel for `BERTopic` / `Top2Vec` (opt-in at
+  runtime, no special build). PCA stays the default. The UMAP discovery fit is not
+  reproducible (the `umap-rs` optimizer's negative sampling is unseeded) and emits
+  a warning saying so; following BERTopic's fit-vs-predict split, the prediction
+  phase is deterministic regardless — `transform` never re-runs the reducer — so a
+  fitted model still maps documents reproducibly. Use `reducer="pca"` for a fully
+  reproducible fit, or `clusterer="kmeans"` to empty the `-1` bucket deterministically.
 - `topica.diagnostics(model, texts)` — a one-call per-topic table (coherence,
   exclusivity, FREX, size, prevalence, top words, and optional bootstrap
   stability) as a pandas DataFrame, consolidating the scattered quality
