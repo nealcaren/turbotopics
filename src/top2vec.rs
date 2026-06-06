@@ -158,7 +158,9 @@ fn normalize_rows(mut m: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
 /// only for the class-TF-IDF representation. `doc_embeddings` (D x E) drives the
 /// clustering; `word_embeddings` (V x E) places the vocabulary in the same space
 /// for `topic_neighbors`. `n_components` is the reduced dimensionality before
-/// clustering; `min_cluster_size`/`min_samples` are HDBSCAN's.
+/// clustering; `min_cluster_size`/`min_samples` are HDBSCAN's. `clusterer` is
+/// `"hdbscan"` (default), `"kmeans"`, or `"agglomerative"`; the latter two assign
+/// every document to `num_clusters` clusters (no `-1` noise bucket).
 #[allow(clippy::too_many_arguments)]
 pub fn fit_top2vec(
     docs: &[Vec<u32>],
@@ -170,6 +172,8 @@ pub fn fit_top2vec(
     n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
+    clusterer: &str,
+    num_clusters: Option<usize>,
     seed: u64,
 ) -> Top2VecModel {
     let n_docs = doc_embeddings.len();
@@ -182,8 +186,11 @@ pub fn fit_top2vec(
         doc_embeddings.to_vec()
     };
 
-    // (2) Density-cluster the reduced points.
-    let labels = cluster::hdbscan_labels(&reduced, min_cluster_size, min_samples);
+    // (2) Cluster the reduced points. HDBSCAN (the default) leaves sparse points
+    // as `-1` noise; KMeans / agglomerative assign every document instead.
+    let labels = cluster::cluster_points(
+        &reduced, clusterer, num_clusters, min_cluster_size, min_samples, seed,
+    );
     let num_topics = labels
         .iter()
         .filter(|&&l| l >= 0)
@@ -298,7 +305,7 @@ mod tests {
             word_emb.push(jitter(&mut rng, c));
         }
 
-        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 10, 5, false, 15, 5, 2, 1);
+        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 10, 5, false, 15, 5, 2, "hdbscan", None, 1);
         assert!(m.num_topics >= 2, "expected >=2 topics, got {}", m.num_topics);
 
         // Each topic's nearest words should come from a single block.
@@ -324,7 +331,7 @@ mod tests {
         let doc_emb: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64 * 10.0, 0.0]).collect();
         let docs: Vec<Vec<u32>> = (0..5).map(|_| vec![0u32]).collect();
         let word_emb = vec![vec![1.0, 0.0]];
-        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 1, 2, false, 15, 5, 2, 1);
+        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 1, 2, false, 15, 5, 2, "hdbscan", None, 1);
         assert_eq!(m.num_topics, 0);
         assert!(m.topic_vectors.is_empty());
     }

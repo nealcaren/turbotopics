@@ -6373,6 +6373,32 @@ fn parse_reducer(reducer: &str) -> PyResult<bool> {
     }
 }
 
+/// Validate the `clusterer` choice for the embedding models. `"hdbscan"` (the
+/// default) discovers the topic count and leaves a `-1` noise bucket; `"kmeans"`
+/// and `"agglomerative"` assign every document to `num_clusters` clusters, so they
+/// require `num_clusters >= 1`.
+fn parse_clusterer(clusterer: &str, num_clusters: Option<i64>) -> PyResult<(String, Option<usize>)> {
+    match clusterer {
+        "hdbscan" => Ok(("hdbscan".to_string(), None)),
+        "kmeans" | "agglomerative" => {
+            let k = num_clusters.ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "clusterer={clusterer:?} needs num_clusters (the number of clusters to form)"
+                ))
+            })?;
+            if k < 1 {
+                return Err(PyValueError::new_err(format!(
+                    "num_clusters must be >= 1, got {k}"
+                )));
+            }
+            Ok((clusterer.to_string(), Some(k as usize)))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown clusterer {other:?}; expected 'hdbscan', 'kmeans', or 'agglomerative'"
+        ))),
+    }
+}
+
 /// Reject `reducer='umap'` when topica was not built with the `umap` feature.
 fn check_umap(use_umap: bool) -> PyResult<()> {
     if use_umap && !crate::reduce::umap_available() {
@@ -6409,6 +6435,8 @@ pub struct Top2Vec {
     n_neighbors: usize,
     min_cluster_size: usize,
     min_samples: usize,
+    clusterer: String,
+    num_clusters: Option<usize>,
     seed: u64,
     fitted: bool,
     has_word_vectors: bool,
@@ -6428,30 +6456,38 @@ impl Top2Vec {
 #[pymethods]
 impl Top2Vec {
     /// Create an unfitted model. `n_components` is the reduced dimensionality
-    /// before clustering; `min_cluster_size`/`min_samples` are HDBSCAN's (a
-    /// larger `min_cluster_size` yields fewer, broader topics). `min_samples`
-    /// defaults to `min_cluster_size`.
+    /// before clustering. `clusterer` is `"hdbscan"` (default; discovers the topic
+    /// count, leaves a `-1` noise bucket — `min_cluster_size`/`min_samples` are
+    /// its knobs), or `"kmeans"` / `"agglomerative"`, which assign every document
+    /// to `num_clusters` clusters (no noise). `min_samples` defaults to
+    /// `min_cluster_size`.
     #[new]
     #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
-                        reducer="pca", n_neighbors=15, seed=42))]
+                        reducer="pca", n_neighbors=15, clusterer="hdbscan",
+                        num_clusters=None, seed=42))]
     fn new(
         n_components: usize,
         min_cluster_size: usize,
         min_samples: Option<usize>,
         reducer: &str,
         n_neighbors: usize,
+        clusterer: &str,
+        num_clusters: Option<i64>,
         seed: u64,
     ) -> PyResult<Self> {
         if min_cluster_size < 2 {
             return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
         }
         let use_umap = parse_reducer(reducer)?;
+        let (clusterer, num_clusters) = parse_clusterer(clusterer, num_clusters)?;
         Ok(Top2Vec {
             n_components,
             use_umap,
             n_neighbors,
             min_cluster_size,
             min_samples: min_samples.unwrap_or(min_cluster_size),
+            clusterer,
+            num_clusters,
             seed,
             fitted: false,
             has_word_vectors: false,
@@ -6533,8 +6569,13 @@ impl Top2Vec {
             self.n_components, self.use_umap, self.n_neighbors,
             self.min_cluster_size, self.min_samples, self.seed,
         );
+        let clusterer = self.clusterer.clone();
+        let num_clusters = self.num_clusters;
         let model = py.allow_threads(move || {
-            top2vec::fit_top2vec(&corpus.docs, &doc_emb, &word_vecs, num_types, nc, uu, nn, mcs, ms, seed)
+            top2vec::fit_top2vec(
+                &corpus.docs, &doc_emb, &word_vecs, num_types, nc, uu, nn, mcs, ms,
+                &clusterer, num_clusters, seed,
+            )
         });
         if model.num_topics == 0 {
             let warnings = py.import_bound("warnings")?;
@@ -6755,6 +6796,8 @@ pub struct BERTopic {
     stride: usize,
     bm25: bool,
     reduce_frequent: bool,
+    clusterer: String,
+    num_clusters: Option<usize>,
     seed: u64,
     fitted: bool,
     model: Option<bertopic::BertopicModel>,
@@ -6787,7 +6830,8 @@ impl BERTopic {
     #[new]
     #[pyo3(signature = (*, n_components=5, min_cluster_size=15, min_samples=None,
                         nr_topics=None, window=4, stride=1, reducer="pca", n_neighbors=15,
-                        bm25=false, reduce_frequent=false, seed=42))]
+                        bm25=false, reduce_frequent=false, clusterer="hdbscan",
+                        num_clusters=None, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         n_components: usize,
@@ -6800,12 +6844,15 @@ impl BERTopic {
         n_neighbors: usize,
         bm25: bool,
         reduce_frequent: bool,
+        clusterer: &str,
+        num_clusters: Option<i64>,
         seed: u64,
     ) -> PyResult<Self> {
         if min_cluster_size < 2 {
             return Err(PyValueError::new_err("min_cluster_size must be >= 2"));
         }
         let use_umap = parse_reducer(reducer)?;
+        let (clusterer, num_clusters) = parse_clusterer(clusterer, num_clusters)?;
         Ok(BERTopic {
             n_components,
             use_umap,
@@ -6817,6 +6864,8 @@ impl BERTopic {
             stride: stride.max(1),
             bm25,
             reduce_frequent,
+            clusterer,
+            num_clusters,
             seed,
             fitted: false,
             model: None,
@@ -6862,9 +6911,12 @@ impl BERTopic {
             self.min_samples, self.nr_topics, self.window, self.stride,
             self.bm25, self.reduce_frequent, self.seed,
         );
+        let clusterer = self.clusterer.clone();
+        let num_clusters = self.num_clusters;
         let model = py.allow_threads(move || {
             bertopic::fit_bertopic(
-                &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed,
+                &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, b25, rf,
+                &clusterer, num_clusters, seed,
             )
         });
         if model.num_topics == 0 {

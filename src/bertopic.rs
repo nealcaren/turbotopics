@@ -132,17 +132,22 @@ pub fn fit_bertopic(
     stride: usize,
     bm25: bool,
     reduce_frequent: bool,
+    clusterer: &str,
+    num_clusters: Option<usize>,
     seed: u64,
 ) -> BertopicModel {
     let emb_dim = doc_embeddings.first().map_or(0, |r| r.len());
 
-    // (1) reduce, (2) cluster.
+    // (1) reduce, (2) cluster. HDBSCAN (default) leaves `-1` noise; KMeans /
+    // agglomerative assign every document instead.
     let reduced: Vec<Vec<f64>> = if emb_dim > n_components && n_components > 0 {
         reduce::reduce(doc_embeddings, n_components, use_umap, n_neighbors, seed)
     } else {
         doc_embeddings.to_vec()
     };
-    let mut labels = cluster::hdbscan_labels(&reduced, min_cluster_size, min_samples);
+    let mut labels = cluster::cluster_points(
+        &reduced, clusterer, num_clusters, min_cluster_size, min_samples, seed,
+    );
     let mut num_topics = topic_count(&labels);
 
     // (3) optional topic reduction: merge the most c-TF-IDF-similar topics.
@@ -341,7 +346,7 @@ mod tests {
     #[test]
     fn recovers_topics_via_ctfidf() {
         let (docs, emb, vocab) = planted(3, 40, 1);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 1);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, "hdbscan", None, 1);
         assert!(m.num_topics >= 3, "expected >=3 topics, got {}", m.num_topics);
         // Each topic's top words come from a single planted block (block = ids 0..5,
         // 5..10, 10..15).
@@ -360,16 +365,16 @@ mod tests {
     #[test]
     fn nr_topics_reduces_to_target() {
         let (docs, emb, vocab) = planted(4, 40, 2);
-        let full = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 2);
+        let full = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, "hdbscan", None, 2);
         assert!(full.num_topics >= 3);
-        let reduced = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, Some(2), 4, 1, false, false, 2);
+        let reduced = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, Some(2), 4, 1, false, false, "hdbscan", None, 2);
         assert_eq!(reduced.num_topics, 2, "should reduce to 2 topics");
     }
 
     #[test]
     fn approximate_distribution_favors_own_topic() {
         let (docs, emb, vocab) = planted(3, 40, 3);
-        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, 3);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, "hdbscan", None, 3);
         // A document made only of block-0 words should put its largest mass on the
         // topic whose top words are block 0.
         let block0_topic = (0..m.num_topics)

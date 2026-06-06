@@ -1303,6 +1303,8 @@ class Top2Vec:
         min_samples: int | None = None,
         reducer: str = "pca",
         n_neighbors: int = 15,
+        clusterer: str = "hdbscan",
+        num_clusters: int | None = None,
         seed: int = 42,
     ) -> None: ...
     def fit(
@@ -1374,6 +1376,8 @@ class BERTopic:
         n_neighbors: int = 15,
         bm25: bool = False,
         reduce_frequent: bool = False,
+        clusterer: str = "hdbscan",
+        num_clusters: int | None = None,
         seed: int = 42,
     ) -> None: ...
     def fit(

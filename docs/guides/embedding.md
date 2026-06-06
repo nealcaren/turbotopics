@@ -212,6 +212,33 @@ Sinkhorn (every gradient checked against finite differences) and steps with Adam
 `dt_alpha`/`tw_alpha` are the inverse entropic regularizations for the two
 transport problems (reference defaults 3.0 and 2.0); larger is sharper.
 
+## Avoiding the `-1` noise bucket
+
+HDBSCAN (the default) discovers the topic count but leaves sparse documents
+unassigned as `-1`. On real sentence-transformer embeddings that bucket can be
+large, and for many social-science questions every document should land
+somewhere. Two ways out:
+
+- **Switch the clusterer.** Pass `clusterer="kmeans"` or `"agglomerative"` with
+  `num_clusters=K` to BERTopic or Top2Vec. Both assign every document to one of
+  `K` clusters, so there is no `-1` label (and the topic count is fixed, not
+  discovered). KMeans scales; agglomerative (average linkage) suits moderate
+  corpora.
+
+  ```python
+  model = topica.BERTopic(clusterer="kmeans", num_clusters=20, seed=1)
+  model.fit(docs, doc_emb)
+  assert -1 not in model.labels
+  ```
+
+- **Use a fixed-K, every-document model.** `EmbeddingLDA`, `FASTopic`, and `ETM`
+  are embedding-driven but give every document a full topic distribution `θ` with
+  no noise bucket. In our testing `EmbeddingLDA` gave the best recovery when the
+  `-1` bucket was the problem.
+
+`reduce_outliers()` (below) is the third option: keep HDBSCAN, then reassign the
+`-1` documents after the fact.
+
 ## Inspecting and adjusting clustering models
 
 Top2Vec and BERTopic produce hard `labels` (`-1` is a noise/outlier document), so
@@ -240,7 +267,9 @@ and `topic_neighbors` (Top2Vec) and `approximate_distribution` (BERTopic).
 
 - `min_cluster_size` is the main dial: larger gives fewer, broader topics; smaller
   gives more, finer ones. `min_samples` (default `min_cluster_size`) sets how
-  aggressively sparse documents are called noise (label `-1`).
+  aggressively sparse documents are called noise (label `-1`). These apply to the
+  default `clusterer="hdbscan"`; `clusterer="kmeans"`/`"agglomerative"` use
+  `num_clusters` instead (see above).
 - `n_components` is the dimensionality the embeddings are reduced to before
   clustering. The default reducer is a randomized PCA: fast, deterministic, and
   dependency-free, but it separates less sharply than UMAP and on closely spaced

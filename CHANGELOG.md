@@ -8,6 +8,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `BERTopic` and `Top2Vec` accept `clusterer="kmeans"` / `"agglomerative"` with
+  `num_clusters=K`, a swappable alternative to the default HDBSCAN that assigns
+  every document to a cluster (no `-1` noise bucket) (#7).
 - `topica.report(model)` is now a callable one-line overview (an alias for
   `summary`), so the natural `report(model)` call works instead of raising
   `'module' object is not callable` (#12).
@@ -16,6 +19,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Changed
 
+- `Top2Vec.top_words()` now returns the centroid representation (vocabulary
+  nearest the cluster centroid) by default when fit with `word_embeddings`, so
+  its headline output is distinct from `BERTopic`'s shared c-TF-IDF; pass
+  `representation="c-tf-idf"` for the shared view. `topic_neighbors` is now
+  `(topic, *, n=10)`, so `topic_neighbors(0, n=8)` reads naturally (#8).
+- `frex`, `label_topics`, `relevance`, `topic_correlation`, and `find_thoughts`
+  now accept a fitted model or the raw matrix as the first argument (vocabulary
+  derived from the model when omitted), matching `exclusivity` and the intrusion
+  tests; a bare matrix with no vocabulary raises a clear message (#10).
 - The model-neutral analysis surface moved from the `topica.report` module to
   `topica.analysis` (its functions remain available top-level, e.g.
   `topica.topic_info`, `topica.plot_report`), freeing the verb-like `report`

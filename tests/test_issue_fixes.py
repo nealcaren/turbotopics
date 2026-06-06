@@ -169,6 +169,40 @@ def test_top2vec_centroid_requires_word_vectors():
         tv.top_words(3, topic=0, representation="centroid")
 
 
+def _three_blobs(seed=0):
+    rng = np.random.default_rng(seed)
+    centers = np.array([[4, 0], [-4, 0], [0, 4]], float)
+    doc_emb, docs = [], []
+    for c in range(3):
+        for _ in range(25):
+            doc_emb.append(centers[c] + rng.normal(0, 0.3, 2))
+            docs.append([f"w{c}_{i}" for i in rng.integers(0, 5, 6)])
+    return docs, np.array(doc_emb)
+
+
+@pytest.mark.parametrize("model_cls", ["BERTopic", "Top2Vec"])
+@pytest.mark.parametrize("clusterer", ["kmeans", "agglomerative"])
+def test_swappable_clusterer_assigns_every_doc(model_cls, clusterer):
+    # #7: KMeans / agglomerative assign every document (no -1 noise bucket) to a
+    # fixed number of clusters, unlike HDBSCAN.
+    docs, doc_emb = _three_blobs()
+    cls = getattr(topica, model_cls)
+    m = cls(min_cluster_size=8, clusterer=clusterer, num_clusters=3, seed=1)
+    m.fit(docs, doc_emb)
+    assert m.num_topics == 3
+    assert -1 not in set(m.labels)  # no noise bucket
+
+
+def test_clusterer_validation():
+    # #7: clear errors for the new knobs.
+    with pytest.raises(ValueError, match="needs num_clusters"):
+        topica.BERTopic(clusterer="kmeans")
+    with pytest.raises(ValueError, match="unknown clusterer"):
+        topica.Top2Vec(clusterer="dbscan")
+    with pytest.raises(ValueError, match="num_clusters must be >= 1"):
+        topica.Top2Vec(clusterer="kmeans", num_clusters=-2)
+
+
 def test_report_is_callable():
     # #12: report(model) works as a one-call overview (alias for summary).
     assert callable(topica.report)
