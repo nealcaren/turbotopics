@@ -52,17 +52,25 @@ for r in results:
 ```
 
 Then, for the two or three best candidates, fit the model and **read the
-topics**. Count how many you can label, and look at the coherence×exclusivity
-spread per topic:
+topics**. Count how many you can label, look at the per-topic
+coherence×exclusivity spread, and check held-out perplexity directly:
 
 ```python
 model = topica.STM(num_topics=20, seed=1)
 model.fit(docs, prevalence=X)
 
+table = topica.diagnostics(model, texts)          # one row per topic: coherence,
+                                                   # exclusivity, FREX, size, ...
+pp = topica.perplexity(model, held_out)            # held-out, lower is better
+
 frontier = topica.quality_frontier(model, n=10)   # per-topic coherence & exclusivity
 # scatter frontier["coherence"] vs frontier["exclusivity"];
 # weak topics cluster in the lower-left.
 ```
+
+`topica.perplexity(model, held_out)` works across the generative models (LDA,
+DMR, CTM, STM, HDP, …) by inferring each held-out document's topic mixture from
+half its tokens and scoring the other half, so it is comparable across `K`.
 
 A nonparametric model is a useful sanity check on your choice: it *infers* a
 topic count rather than taking one.

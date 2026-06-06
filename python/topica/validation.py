@@ -27,6 +27,200 @@ import numpy as np
 
 from .coherence import _as_topic_word, _as_doc_topic, _vocabulary_of
 
+
+def _ref_corpus(texts):
+    """Normalize a coherence reference to ``list[list[str]]``: a Corpus, raw
+    strings (split on whitespace), or token lists all work."""
+    if hasattr(texts, "documents"):
+        return texts.documents()
+    if len(texts) and isinstance(texts[0], str):
+        return [t.split() for t in texts]
+    return [list(t) for t in texts]
+
+
+def diagnostics(model, texts=None, *, n=10, coherence_type=None, stability=False,
+                n_boot=20, model_factory=None, seed=0):
+    """One per-topic diagnostics table for a fitted model.
+
+    Consolidates the quality numbers people otherwise gather one function at a
+    time — coherence, exclusivity, FREX words, size, prevalence, top words, and
+    (optionally) bootstrap stability — into a single row-per-topic table. It reads
+    a model's analysis surface, so it works for every model and you never pass a
+    raw matrix where a model is wanted, or vice versa.
+
+    Parameters
+    ----------
+    model : a fitted topica model.
+    texts : the reference corpus for windowed coherence (a ``Corpus``, raw
+        strings, or token lists). Without it, coherence falls back to the model's
+        own UMass score. Required when ``stability=True``.
+    n : top-word count used for coherence, exclusivity, FREX, and the word lists.
+    coherence_type : override the coherence metric (``"c_v"`` default when
+        ``texts`` is given, ``"u_mass"`` otherwise).
+    stability : also report per-topic bootstrap stability (mean top-word Jaccard
+        over ``n_boot`` refits, matched back to this model). Off by default since
+        it refits the model; needs ``texts`` (the documents) to resample.
+    model_factory : ``callable(seed) -> unfitted model`` for the stability refits;
+        defaults to rebuilding the model's own type as ``type(model)(num_topics=K,
+        seed=seed)``. Pass your own for models whose constructor needs more.
+
+    Returns
+    -------
+    A pandas ``DataFrame`` indexed by topic (columns: ``label``, ``size``,
+    ``prevalence``, ``coherence``, ``exclusivity``, ``stability``, ``top_words``,
+    ``frex``), or a list of row dicts when pandas is not installed.
+    """
+    from .coherence import coherence as _coherence, exclusivity as _exclusivity
+    from .analysis import topic_labels as _topic_labels, topic_sizes as _topic_sizes
+
+    phi = _as_topic_word(model)
+    k = phi.shape[0]
+    if k == 0:
+        raise ValueError(
+            "the model has no topics (empty topic_word). For BERTopic/Top2Vec this "
+            "means clustering found no clusters — lower min_cluster_size or add data."
+        )
+    theta = _as_doc_topic(model)
+    prevalence = theta.mean(axis=0)
+    names = _topic_labels(model)
+    sizes = _topic_sizes(model)["size"]
+
+    ref = _ref_corpus(texts) if texts is not None else None
+    ct = coherence_type or ("c_v" if ref is not None else "u_mass")
+    if ref is not None:
+        coh = np.asarray(_coherence(model, ref, coherence_type=ct, topn=n), dtype=np.float64)
+    elif hasattr(model, "coherence"):
+        coh = np.asarray(model.coherence(n), dtype=np.float64)
+    else:
+        coh = np.full(k, np.nan)
+
+    excl = np.asarray(_exclusivity(model, n=n), dtype=np.float64)
+    frex_words = frex(model, n=n)
+    vocab = list(model.vocabulary)
+    top_method = getattr(model, "top_words", None)
+
+    stab = np.full(k, np.nan)
+    if stability:
+        if texts is None:
+            raise ValueError("stability=True needs texts (the documents) to resample")
+        factory = model_factory or (lambda s: type(model)(num_topics=k, seed=s))
+        bs = bootstrap_stability(ref, reference=model, n_boot=n_boot, topn=n,
+                                 seed=seed, model_factory=factory)
+        stab = np.asarray(bs["stability"], dtype=np.float64)
+
+    def words_for(t):
+        if callable(top_method):
+            try:
+                return [w for w, _ in top_method(n, topic=t)]
+            except Exception:
+                pass
+        return [vocab[i] for i in np.argsort(phi[t])[::-1][:n]]
+
+    rows = []
+    for t in range(k):
+        rows.append({
+            "topic": t,
+            "label": names[t] if t < len(names) else f"topic_{t}",
+            "size": int(sizes[t]) if t < len(sizes) else 0,
+            "prevalence": float(prevalence[t]),
+            "coherence": float(coh[t]) if t < len(coh) else float("nan"),
+            "exclusivity": float(excl[t]) if t < len(excl) else float("nan"),
+            "stability": float(stab[t]),
+            "top_words": " ".join(words_for(t)),
+            "frex": " ".join(w for w, _ in frex_words[t]),
+        })
+    try:
+        import pandas as pd
+
+        return pd.DataFrame(rows).set_index("topic")
+    except ImportError:
+        return rows
+
+
+def _transform_theta(model, docs, seed):
+    fn = getattr(model, "transform", None)
+    if not callable(fn):
+        raise ValueError(
+            f"{type(model).__name__} has no transform(); perplexity needs a generative "
+            "model that can infer topics for held-out documents"
+        )
+    try:
+        return np.asarray(fn(docs, seed=seed), dtype=np.float64)
+    except TypeError:
+        pass
+    try:
+        return np.asarray(fn(docs), dtype=np.float64)
+    except TypeError as exc:
+        raise ValueError(
+            f"{type(model).__name__}.transform needs more than documents (e.g. "
+            "embeddings), so it has no document likelihood. Held-out perplexity is for "
+            "the generative models (LDA, DMR, CTM, STM, HDP, ...); use coherence or "
+            "topic_diversity to compare clustering / embedding models."
+        ) from exc
+
+
+def perplexity(model, held_out, *, seed=0):
+    """Document-completion held-out perplexity for a generative model.
+
+    For each held-out document, half its tokens (even positions) estimate the
+    document's topic mixture through the model's ``transform``, and the other half
+    (odd positions) are scored under that mixture, ``p(w) = sum_k theta_k *
+    topic_word[k, w]``. Returns ``exp(-sum log p / N_eval)``; lower is better.
+
+    Because the scored tokens are held out from the mixture estimate, this does not
+    trivially fall as ``K`` grows the way in-sample likelihood does, so it is a fair
+    quantity to compare across ``K`` when justifying a topic count. It works for any
+    model with a generative ``transform(documents)`` and a ``topic_word``
+    distribution (LDA, DMR, CTM, STM, HDP, keyATM, ...). The embedding-cluster
+    models have no document likelihood; compare those with coherence or diversity.
+
+    (``LDA`` additionally offers the more rigorous Wallach et al. left-to-right
+    estimator as ``LDA.perplexity`` / ``LDA.evaluate``.)
+
+    Parameters
+    ----------
+    model : a fitted generative model.
+    held_out : documents the model was not trained on (token lists or a ``Corpus``).
+    seed : RNG seed for the Gibbs ``transform`` (ignored by the variational models).
+    """
+    if type(model).__name__ in ("BERTopic", "Top2Vec"):
+        raise ValueError(
+            f"{type(model).__name__} defines topics by class-based TF-IDF over "
+            "document clusters, not a generative word distribution, so it has no "
+            "held-out perplexity. Compare clustering models with coherence or "
+            "topic_diversity instead."
+        )
+    if hasattr(held_out, "documents"):
+        held_out = held_out.documents()
+    phi = _as_topic_word(model)
+    if phi.shape[0] == 0:
+        raise ValueError("the model has no topics (empty topic_word)")
+    vocab = {w: i for i, w in enumerate(model.vocabulary)}
+
+    est, ev = [], []
+    for d in held_out:
+        d = list(d)
+        if len(d) < 2:
+            continue
+        est.append(d[0::2])
+        ev.append(d[1::2])
+    if not est:
+        raise ValueError("need held-out documents with at least 2 tokens each")
+
+    theta = _transform_theta(model, est, seed)
+    logp, n = 0.0, 0
+    for i, evdoc in enumerate(ev):
+        ids = [vocab[w] for w in evdoc if w in vocab]
+        if not ids:
+            continue
+        pw = np.clip(theta[i] @ phi[:, ids], 1e-12, None)
+        logp += float(np.log(pw).sum())
+        n += len(ids)
+    if n == 0:
+        raise ValueError("none of the held-out tokens were in the model vocabulary")
+    return float(np.exp(-logp / n))
+
+
 # ---------------------------------------------------------------------------
 # labelTopics: prob / FREX / lift / score
 # ---------------------------------------------------------------------------
@@ -821,11 +1015,12 @@ def quality_frontier(model, *, n=10, texts=None, coherence_type="u_mass", plot=F
 def bootstrap_stability(
     docs,
     *,
-    k,
+    k=None,
     n_boot=20,
     topn=10,
     seed=0,
     model_factory=None,
+    reference=None,
     **fit_kwargs,
 ):
     """Flag fragile topics by refitting on bootstrap resamples of the corpus.
@@ -843,16 +1038,21 @@ def bootstrap_stability(
     Parameters
     ----------
     docs : the corpus (``list[list[str]]`` or a ``Corpus``).
-    k : number of topics.
+    k : number of topics. Required unless ``reference`` is given (then taken from
+        it).
     n_boot : number of bootstrap resamples.
     model_factory : ``callable(seed) -> unfitted model``. Defaults to
         ``LDA(num_topics=k, seed=seed)``. Use it to bootstrap any model.
+    reference : an already-fitted model to measure the stability *of*. When given,
+        the resample topics are matched back to it (rather than to a fresh
+        full-corpus fit), so the per-topic stability lines up with that model's
+        topic indices. ``model_factory`` should rebuild the same model type.
     fit_kwargs : forwarded to each model's ``fit`` (e.g. ``iterations=500``).
 
     Returns
     -------
     dict with ``topic`` (indices), ``stability`` (per-topic mean Jaccard in
-    ``[0, 1]``), ``mean`` (overall), and ``reference`` (the full-corpus model).
+    ``[0, 1]``), ``mean`` (overall), and ``reference`` (the reference model).
     """
     from . import LDA  # local import to avoid a cycle at module load
 
@@ -862,6 +1062,10 @@ def bootstrap_stability(
     D = len(docs)
     if D < 2:
         raise ValueError("need at least two documents to resample")
+    if k is None:
+        if reference is None:
+            raise ValueError("pass k (number of topics) or a fitted reference model")
+        k = int(reference.num_topics)
     factory = model_factory or (lambda s: LDA(num_topics=k, seed=s))
 
     def top_word_sets(model):
@@ -870,8 +1074,11 @@ def bootstrap_stability(
         return [set(vocab[i] for i in np.argsort(phi[t])[::-1][:topn])
                 for t in range(phi.shape[0])]
 
-    ref = factory(seed)
-    ref.fit(docs, **fit_kwargs)
+    if reference is not None:
+        ref = reference
+    else:
+        ref = factory(seed)
+        ref.fit(docs, **fit_kwargs)
     ref_sets = top_word_sets(ref)
     K = len(ref_sets)
 
@@ -904,6 +1111,8 @@ def bootstrap_stability(
 
 
 __all__ = [
+    "diagnostics",
+    "perplexity",
     "frex",
     "label_topics",
     "topic_correlation",

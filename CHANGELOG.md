@@ -6,6 +6,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `topica.diagnostics(model, texts)` — a one-call per-topic table (coherence,
+  exclusivity, FREX, size, prevalence, top words, and optional bootstrap
+  stability) as a pandas DataFrame, consolidating the scattered quality
+  functions. It reads a model's analysis surface, so it works for every model
+  and sidesteps the model-vs-matrix first-argument friction.
+- `topica.perplexity(model, held_out)` — model-agnostic document-completion
+  held-out perplexity (infer each held-out document's mixture from half its
+  tokens, score the other half), a K-comparable signal for justifying a topic
+  count across the generative models. (`LDA` keeps its rigorous left-to-right
+  estimator as `LDA.perplexity` / `LDA.evaluate`.)
+- `bootstrap_stability(..., reference=model)` measures stability of an
+  already-fitted model's topics (matching resamples back to it) rather than a
+  fresh full-corpus fit.
+
+### Changed
+
+- The post-hoc analysis module moved from `topica.diagnostics` to
+  `topica.validation`, freeing the verb-like `diagnostics` name for the new
+  one-call function. Its helpers stay importable (`from topica import
+  validation`) and every function remains available top-level (`topica.frex`,
+  `topica.coherence`, …).
+
 ## [0.8.0] - 2026-06-06
 
 ### Added

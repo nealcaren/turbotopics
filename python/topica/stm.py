@@ -491,7 +491,7 @@ def _normal_ppf(q: float) -> float:
 # also exported at the package top level. They are re-exported here so existing
 # ``topica.stm.<name>`` calls keep working.
 # ---------------------------------------------------------------------------
-from .diagnostics import (  # noqa: E402,F401
+from .validation import (  # noqa: E402,F401
     frex,
     label_topics,
     topic_correlation,

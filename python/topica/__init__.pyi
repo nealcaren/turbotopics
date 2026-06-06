@@ -109,7 +109,29 @@ def document_intrusion(
     ...
 
 
-# General, model-agnostic post-hoc analyses (also in topica.diagnostics).
+# General, model-agnostic post-hoc analyses (also in topica.validation).
+def diagnostics(
+    model: Any,
+    texts: Any = None,
+    *,
+    n: int = 10,
+    coherence_type: str | None = None,
+    stability: bool = False,
+    n_boot: int = 20,
+    model_factory: Any = None,
+    seed: int = 0,
+) -> Any:
+    """One per-topic diagnostics table (coherence/exclusivity/FREX/size/stability)
+    as a pandas DataFrame, or a list of row dicts when pandas is absent."""
+    ...
+
+
+def perplexity(model: Any, held_out: Any, *, seed: int = 0) -> float:
+    """Document-completion held-out perplexity for a generative model (lower is
+    better), a K-comparable signal for justifying a topic count."""
+    ...
+
+
 def frex(topic_word: Any, vocabulary: Sequence[str] | None = None, *, w: float = 0.5, n: int = 10) -> list:
     """FREX (frequency-exclusivity) top words per topic. Accepts a model or a (K, V) array."""
     ...

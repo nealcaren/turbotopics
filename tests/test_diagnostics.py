@@ -4,7 +4,7 @@ alignment / stability utilities (topica.stm)."""
 import numpy as np
 import pytest
 
-from topica import LDA, stm, diagnostics
+from topica import LDA, stm, validation as diagnostics
 
 
 @pytest.fixture(scope="module")

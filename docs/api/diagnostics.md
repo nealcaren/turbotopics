@@ -2,8 +2,14 @@
 
 Model-agnostic quality, interpretation, and validation tools. They take any
 fitted model's `topic_word` / `doc_topic` (or raw arrays), so they work the same
-across every model family. All are available at the top level (`topica.<name>`) and
-in `topica.diagnostics`.
+across every model family. All are available at the top level (`topica.<name>`)
+and in the `topica.validation` module.
+
+## One-call table
+
+::: topica.diagnostics
+
+::: topica.perplexity
 
 ## Quality
 

@@ -241,7 +241,7 @@ def _match_to_reference(ref_sets, boot_sets):
     the match is ambiguous (e.g. topics that split/merge, or a reference whose
     topics are not distinct) even when the Jaccard itself looks high, so it is the
     honest flag for unstable alignment."""
-    from .diagnostics import _hungarian
+    from .validation import _hungarian
 
     k, kb = len(ref_sets), len(boot_sets)
     jac = np.zeros((k, kb))

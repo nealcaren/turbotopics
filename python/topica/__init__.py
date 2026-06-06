@@ -108,7 +108,7 @@ def summary(model, topn=8):
 from . import stm  # noqa: E402  (stm imports names defined above)
 from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
 from . import effects  # noqa: E402  (model-neutral prevalence analysis)
-from . import diagnostics  # noqa: E402
+from . import validation  # noqa: E402  (post-hoc topic diagnostics surface)
 from .effects import (  # noqa: E402  general, work on any model's theta
     estimate_effect,
     by_strata,
@@ -126,7 +126,9 @@ from .coherence import (  # noqa: E402
     word_intrusion,
     document_intrusion,
 )
-from .diagnostics import (  # noqa: E402  general, model-agnostic post-hoc analyses
+from .validation import (  # noqa: E402  general, model-agnostic post-hoc analyses
+    diagnostics,
+    perplexity,
     frex,
     label_topics,
     topic_table,
@@ -265,6 +267,7 @@ __all__ = [
     "design_matrix",
     "summary",
     "diagnostics",
+    "perplexity",
     "keywords",
     "preprocess",
     "learn_phrases",

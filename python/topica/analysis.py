@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import diagnostics as _diagnostics
+from . import validation as _diagnostics
 from . import effects as _effects
 
 
