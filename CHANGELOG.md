@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-06
+
 ### Added
 
 - `BERTopic` and `Top2Vec` accept `clusterer="kmeans"` / `"agglomerative"` with
