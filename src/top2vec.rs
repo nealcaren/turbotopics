@@ -26,6 +26,7 @@ use crate::{cluster, reduce, represent};
 /// A fitted Top2Vec model. The fields are the surface this whole branch shares:
 /// `topic_word` (K x V) and `doc_topic` (D x K) match every other topica model,
 /// and `topic_vectors` (K x E) is the embedding-native addition.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Top2VecModel {
     /// Number of topics discovered (clusters found by HDBSCAN).
     pub num_topics: usize,

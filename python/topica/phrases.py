@@ -356,9 +356,63 @@ def export_phrases(phrases: Phrases) -> List[Tuple[str, float]]:
     )
 
 
+def add_ngrams(docs, ngram_range=(1, 2), min_df=1, sep="_"):
+    """Expand pre-tokenized documents with contiguous n-grams.
+
+    The mechanical, exhaustive counterpart to :func:`learn_phrases`: rather than
+    keeping only statistically significant collocations, it emits *every*
+    contiguous n-gram, mirroring scikit-learn's
+    ``CountVectorizer(ngram_range=..., min_df=...)``. For each document and each
+    ``n`` in ``range(min_n, max_n + 1)`` it adds the joined n-grams (e.g.
+    ``"machine_learning"``), then drops terms occurring in fewer than ``min_df``
+    documents. Use it before fitting an embedding model so its class-based TF-IDF
+    topic words can include bigrams.
+
+    Parameters
+    ----------
+    docs : list of token lists.
+    ngram_range : ``(min_n, max_n)``. ``(1, 2)`` keeps unigrams and adds bigrams;
+        ``(2, 2)`` is bigrams only.
+    min_df : drop terms appearing in fewer than this many documents (an integer
+        document-frequency cut, as in scikit-learn). ``1`` keeps everything.
+    sep : the string joining the words of an n-gram.
+
+    Returns
+    -------
+    New token lists (one per input document; an emptied document stays as an empty
+    list, so the result stays aligned with any per-document embeddings).
+    """
+    lo, hi = ngram_range
+    if lo < 1 or hi < lo:
+        raise ValueError("ngram_range must be (min_n, max_n) with 1 <= min_n <= max_n")
+
+    expanded = []
+    for d in docs:
+        d = list(d)
+        toks = []
+        for n in range(lo, hi + 1):
+            if n == 1:
+                toks.extend(d)
+            else:
+                toks.extend(sep.join(d[i:i + n]) for i in range(len(d) - n + 1))
+        expanded.append(toks)
+
+    if min_df <= 1:
+        return expanded
+
+    from collections import Counter
+
+    df = Counter()
+    for toks in expanded:
+        df.update(set(toks))
+    keep = {t for t, c in df.items() if c >= min_df}
+    return [[t for t in toks if t in keep] for toks in expanded]
+
+
 __all__ = [
     "Phrases",
     "learn_phrases",
     "apply_phrases",
     "export_phrases",
+    "add_ngrams",
 ]

@@ -38,3 +38,5 @@ lists), keeping document metadata aligned to the rows that survive pruning.
 ::: topica.learn_phrases
 
 ::: topica.apply_phrases
+
+::: topica.add_ngrams

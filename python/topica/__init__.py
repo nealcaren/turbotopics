@@ -183,7 +183,7 @@ from .embedding import (  # noqa: E402
 )
 from .preprocess import split_documents  # noqa: E402
 from .stopwords import ENGLISH_STOPWORDS  # noqa: E402
-from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
+from .phrases import learn_phrases, apply_phrases, add_ngrams, Phrases  # noqa: E402
 from .frames import from_dataframe, align  # noqa: E402
 from .formulas import design_matrix  # noqa: E402
 
@@ -272,6 +272,7 @@ __all__ = [
     "preprocess",
     "learn_phrases",
     "apply_phrases",
+    "add_ngrams",
     "Phrases",
     "DEFAULT_TOKEN_REGEX",
     "__version__",

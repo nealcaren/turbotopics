@@ -264,6 +264,30 @@ every other model: `topic_word` (`num_topics × vocab`), `doc_topic`
 `vocabulary`, and `labels`. The embedding-native additions are `topic_vectors`
 and `topic_neighbors` (Top2Vec) and `approximate_distribution` (BERTopic).
 
+They also `save`/`load` like every other model, which is the way to keep a good
+UMAP discovery fit (the discovery is stochastic, the prediction is not):
+
+```python
+model.save("topics.tt")
+model = topica.BERTopic.load("topics.tt")   # reload, then transform() forever
+```
+
+## Richer topic words: n-grams
+
+The c-TF-IDF topic words are over the tokens you pass in, so bigrams are a
+preprocessing choice. `topica.add_ngrams` adds them (the mechanical analog of
+scikit-learn's `CountVectorizer(ngram_range=..., min_df=...)`), keeping every
+document so the rows stay aligned with the embeddings:
+
+```python
+docs = [topica.tokenize(t, stopwords=topica.ENGLISH_STOPWORDS) for t in texts]
+docs = topica.add_ngrams(docs, ngram_range=(1, 2), min_df=5)   # unigrams + bigrams
+model.fit(docs, doc_emb)        # topic words can now read "machine_learning"
+```
+
+For statistically-selected phrases instead of every bigram, use
+[`learn_phrases`](../guides/preprocessing.md).
+
 ## Tuning and notes
 
 - `min_cluster_size` is the main dial: larger gives fewer, broader topics; smaller

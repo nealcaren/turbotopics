@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `save` / `load` for the embedding-cluster models (`BERTopic`, `Top2Vec`), so a
+  discovered fit can be frozen and reloaded — the way to keep a good (stochastic)
+  UMAP discovery fit, since the prediction phase is deterministic. The loaded
+  model's `transform` reproduces the original.
+- `topica.add_ngrams(docs, ngram_range=(1, 2), min_df=...)` — expand pre-tokenized
+  documents with contiguous n-grams (the mechanical analog of scikit-learn's
+  `CountVectorizer(ngram_range=, min_df=)`), so an embedding model's c-TF-IDF topic
+  words can include bigrams. Keeps every document, so it stays aligned with
+  per-document embeddings. The exhaustive complement to `learn_phrases`.
 - `reducer="umap"` now ships in the wheel for `BERTopic` / `Top2Vec` (opt-in at
   runtime, no special build). PCA stays the default. The UMAP discovery fit is not
   reproducible (the `umap-rs` optimizer's negative sampling is unseeded) and emits

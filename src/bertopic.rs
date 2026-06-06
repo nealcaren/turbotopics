@@ -21,6 +21,7 @@ use crate::{cluster, reduce, represent};
 /// A fitted BERTopic model. Exposes the branch's shared surface: `topic_word`
 /// (K x V, normalized c-TF-IDF), `doc_topic` (D x K, the approximate
 /// distribution), plus the hard `labels` (`-1` is noise).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BertopicModel {
     pub num_topics: usize,
     pub labels: Vec<i64>,

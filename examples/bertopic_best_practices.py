@@ -12,27 +12,28 @@ Run it (e.g. in Colab):
     python bertopic_best_practices.py
 
 What maps cleanly:
+  - CountVectorizer(ngram_range, min_df)      -> topica.add_ngrams(docs, ...)
   - UMAP + HDBSCAN + class-based TF-IDF      -> topica.BERTopic(reducer="umap", ...)
   - get_topic_info()                          -> topica.diagnostics(model, texts)
   - get_topic(i)                              -> model.top_words(n, topic=i)
   - set_topic_labels(...)                     -> topica.set_topic_labels(model, ...)
   - approximate_distribution(window, stride)  -> model.approximate_distribution(...)
   - reduce_outliers(...)                      -> model.reduce_outliers()
+  - save(...) / load(...)                      -> model.save(path) / BERTopic.load(path)
   - transform(new_docs)                       -> model.transform(new_docs)
 
 Where topica differs, on purpose:
   - **Tokenization.** BERTopic tokenizes raw strings internally (CountVectorizer);
-    topica takes pre-tokenized documents, so we call topica.tokenize first. (Bigrams
-    / ngram_range are not modeled: topica's c-TF-IDF is over unigrams.)
+    topica takes pre-tokenized documents, so we call topica.tokenize first and
+    topica.add_ngrams for the bigrams + min_df.
   - **Reproducibility.** UMAP has no random_state equivalent here; the discovery fit
     is stochastic (topica warns). The *prediction* phase (transform) is
-    deterministic. Use reducer="pca" for a fully reproducible fit.
+    deterministic. Use reducer="pca" for a fully reproducible fit, or save the fit.
   - **Representations.** Instead of KeyBERT / MMR / PartOfSpeech, topica reports FREX
     (frequency-exclusivity) words — the defensible label for publication — and, with
     the optional `topica[llm]` extra, LLM labels via topica.llm_topic_labels.
   - **Visualization.** topica ships a static composite figure, topica.plot_report,
     rather than the interactive plotly views.
-  - **Serialization.** save/load for the embedding models is not yet available.
 """
 
 import numpy as np
@@ -55,8 +56,9 @@ def main():
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     embeddings = embedding_model.encode(abstracts, show_progress_bar=True)
 
-    # --- Tokenize (topica is pre-tokenized; drop English stopwords) -------
+    # --- Tokenize + n-grams (CountVectorizer(stop_words, min_df=2, ngram_range=(1,2))) ---
     docs = [topica.tokenize(a, stopwords=topica.ENGLISH_STOPWORDS) for a in abstracts]
+    docs = topica.add_ngrams(docs, ngram_range=(1, 2), min_df=2)
 
     # --- Reduce (UMAP) + cluster (HDBSCAN) + represent (c-TF-IDF) ---------
     topic_model = topica.BERTopic(
@@ -98,8 +100,13 @@ def main():
     fig.savefig("topica_report.png", dpi=150, bbox_inches="tight")
     print("wrote topica_report.png")
 
+    # --- Serialization: freeze the (stochastic UMAP) discovery fit -------
+    # save -> load -> predict, so a good fit is reusable without refitting.
+    topic_model.save("my_topica_model.tt")
+    loaded_model = topica.BERTopic.load("my_topica_model.tt")
+
     # --- Inference on new documents --------------------------------------
-    new_theta = topic_model.transform(docs[:100])
+    new_theta = loaded_model.transform(docs[:100])
     print("inference doc-topic matrix:", new_theta.shape)
 
 

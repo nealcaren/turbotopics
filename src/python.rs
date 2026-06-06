@@ -6469,6 +6469,23 @@ pub struct Top2Vec {
     docs: Vec<Vec<u32>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Top2VecState {
+    n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
+    min_cluster_size: usize,
+    min_samples: usize,
+    clusterer: String,
+    num_clusters: Option<usize>,
+    seed: u64,
+    fitted: bool,
+    has_word_vectors: bool,
+    model: Option<top2vec::Top2VecModel>,
+    id_to_word: Vec<String>,
+    docs: Vec<Vec<u32>>,
+}
+
 impl Top2Vec {
     fn fitted_model(&self) -> PyResult<&top2vec::Top2VecModel> {
         self.model
@@ -6790,6 +6807,49 @@ impl Top2Vec {
         Ok(before - m.labels.iter().filter(|&&l| l < 0).count())
     }
 
+    /// Save the fitted model to `path` (topica's binary format), so a discovered
+    /// fit can be reloaded and reused without refitting (useful with the stochastic
+    /// `reducer="umap"` discovery).
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.fitted_model()?;
+        write_state(path, &Top2VecState {
+            n_components: self.n_components,
+            use_umap: self.use_umap,
+            n_neighbors: self.n_neighbors,
+            min_cluster_size: self.min_cluster_size,
+            min_samples: self.min_samples,
+            clusterer: self.clusterer.clone(),
+            num_clusters: self.num_clusters,
+            seed: self.seed,
+            fitted: self.fitted,
+            has_word_vectors: self.has_word_vectors,
+            model: self.model.clone(),
+            id_to_word: self.id_to_word.clone(),
+            docs: self.docs.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: Top2VecState = read_state(path)?;
+        Ok(Top2Vec {
+            n_components: s.n_components,
+            use_umap: s.use_umap,
+            n_neighbors: s.n_neighbors,
+            min_cluster_size: s.min_cluster_size,
+            min_samples: s.min_samples,
+            clusterer: s.clusterer,
+            num_clusters: s.num_clusters,
+            seed: s.seed,
+            fitted: s.fitted,
+            has_word_vectors: s.has_word_vectors,
+            model: s.model,
+            id_to_word: s.id_to_word,
+            docs: s.docs,
+        })
+    }
+
     fn __repr__(&self) -> String {
         let k = self.model.as_ref().map_or(0, |m| m.num_topics);
         format!("Top2Vec(fitted={}, num_topics={})", self.fitted, k)
@@ -6810,6 +6870,27 @@ impl Top2Vec {
 /// matrix (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
 pub struct BERTopic {
+    n_components: usize,
+    use_umap: bool,
+    n_neighbors: usize,
+    min_cluster_size: usize,
+    min_samples: usize,
+    nr_topics: Option<usize>,
+    window: usize,
+    stride: usize,
+    bm25: bool,
+    reduce_frequent: bool,
+    clusterer: String,
+    num_clusters: Option<usize>,
+    seed: u64,
+    fitted: bool,
+    model: Option<bertopic::BertopicModel>,
+    id_to_word: Vec<String>,
+    docs: Vec<Vec<u32>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BertopicState {
     n_components: usize,
     use_umap: bool,
     n_neighbors: usize,
@@ -7069,6 +7150,57 @@ impl BERTopic {
         let before = m.labels.iter().filter(|&&l| l < 0).count();
         m.reduce_outliers(&self.docs, vocab, b25, rf, win, st);
         Ok(before - m.labels.iter().filter(|&&l| l < 0).count())
+    }
+
+    /// Save the fitted model to `path` (topica's binary format), so a discovered
+    /// fit can be reloaded and reused without refitting (useful with the stochastic
+    /// `reducer="umap"` discovery).
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.fitted_model()?;
+        write_state(path, &BertopicState {
+            n_components: self.n_components,
+            use_umap: self.use_umap,
+            n_neighbors: self.n_neighbors,
+            min_cluster_size: self.min_cluster_size,
+            min_samples: self.min_samples,
+            nr_topics: self.nr_topics,
+            window: self.window,
+            stride: self.stride,
+            bm25: self.bm25,
+            reduce_frequent: self.reduce_frequent,
+            clusterer: self.clusterer.clone(),
+            num_clusters: self.num_clusters,
+            seed: self.seed,
+            fitted: self.fitted,
+            model: self.model.clone(),
+            id_to_word: self.id_to_word.clone(),
+            docs: self.docs.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: BertopicState = read_state(path)?;
+        Ok(BERTopic {
+            n_components: s.n_components,
+            use_umap: s.use_umap,
+            n_neighbors: s.n_neighbors,
+            min_cluster_size: s.min_cluster_size,
+            min_samples: s.min_samples,
+            nr_topics: s.nr_topics,
+            window: s.window,
+            stride: s.stride,
+            bm25: s.bm25,
+            reduce_frequent: s.reduce_frequent,
+            clusterer: s.clusterer,
+            num_clusters: s.num_clusters,
+            seed: s.seed,
+            fitted: s.fitted,
+            model: s.model,
+            id_to_word: s.id_to_word,
+            docs: s.docs,
+        })
     }
 
     fn __repr__(&self) -> String {
