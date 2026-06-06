@@ -53,7 +53,8 @@ texts = [
 doc_emb = topica.llm_embed(texts, model="sentence-transformers/all-MiniLM-L6-v2")
 
 docs = [topica.tokenize(t, stopwords=topica.ENGLISH_STOPWORDS) for t in texts]
-model = topica.BERTopic(min_cluster_size=2, seed=1).fit(docs, doc_emb)
+model = topica.BERTopic(min_cluster_size=2, seed=1)
+model.fit(docs, doc_emb)
 print(topica.report(model))
 ```
 
