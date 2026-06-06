@@ -40,6 +40,13 @@ installed, so they are optional locally but run when the tooling is present.
   reference implementation exists, a statistical-parity check under `parity/`.
 - User-facing prose (README, docs, docstrings) is concrete and free of filler.
 
+## Adding a model or a model feature
+
+For the step-by-step version of either task, including the analysis-surface
+contract a new model must satisfy and the testing and validation expectations,
+see the implementer's playbook in
+[`CONTRIBUTING-MODELS.md`](CONTRIBUTING-MODELS.md).
+
 ## Pull requests
 
 - Branch from `main`, keep commits focused, and describe what the change does.
