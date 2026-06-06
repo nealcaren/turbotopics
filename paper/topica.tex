@@ -504,15 +504,31 @@ effects = stm.estimate_effect(draws, X, feature_names=names)
 \end{CodeInput}
 \end{CodeChunk}
 
-%% TODO(figure): generate paper/fig_poliblog_effect.pdf with
-%% topica.viz.effect_plot(model, corpus, X=X) on the real poliblog corpus and
-%% insert here. Caption: per-topic difference in prevalence between conservative
-%% and liberal blogs, 95% method-of-composition intervals.
+\begin{figure}[t!]
+\centering
+\includegraphics[width=0.82\textwidth]{fig_poliblog_effect}
+\caption{The results figure produced by the code above, on 2{,}000 posts and a
+2{,}612-word vocabulary. Each row is one of $K=15$ topics, labeled by its top
+three FREX words \citep{bischof2012frex}, ordered by the estimated difference in
+prevalence between conservative and liberal blogs, with 95\% method-of-composition
+intervals. Topics whose interval excludes zero are partisan; those that straddle
+it are discussed at similar rates on both sides.}
+\label{fig:poliblog}
+\end{figure}
 
-The fit recovers the substantive pattern the \pkg{stm} vignette documents: topics
-that distinguish the two sides of the campaign load differently by blog rating,
-and the differences carry method-of-composition intervals that separate them from
-zero. The full, runnable version of this example, with the figure, is in the
+The fit recovers the partisan division the \pkg{stm} poliblog analysis documents
+(Figure~\ref{fig:poliblog}). Conservative blogs disproportionately discuss the
+Reverend Wright and Bill Ayers attacks on Obama
+($+0.046$, 95\% CI $[0.034, 0.057]$), media coverage and bias ($+0.043$,
+$[0.027, 0.059]$), and Israel ($+0.056$, $[0.044, 0.068]$); liberal blogs
+disproportionately discuss McCain ($-0.084$, $[-0.094, -0.074]$) and the Bush
+administration and torture ($-0.065$, $[-0.077, -0.053]$). Topics such as the
+economy and abortion straddle zero, discussed at similar rates on both sides. The
+intervals come from the method of composition, so they reflect the uncertainty in
+estimating $\theta$, not only sampling variation in the regression. The full,
+runnable version of this analysis, including the choice of $K$ and the
+clustered-by-blog standard errors, is the script that produced this figure
+(\code{paper/make\_figures.py}) and the corresponding worked example in the
 package documentation.
 
 %% ===========================================================================
