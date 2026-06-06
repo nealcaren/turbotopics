@@ -12,3 +12,6 @@ jss.cls
 jss.bst
 jsslogo.jpg
 fig_*.pdf
+
+# arXiv submission tarball (regenerate with make_arxiv.sh)
+arxiv-submission.tar.gz

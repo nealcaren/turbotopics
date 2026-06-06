@@ -1,0 +1,74 @@
+# arXiv submission
+
+Build the self-contained tarball:
+
+```bash
+VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python paper/make_figures.py  # the figure
+bash paper/make_arxiv.sh                                                  # the tarball
+```
+
+This produces `paper/arxiv-submission.tar.gz` containing exactly:
+
+- `topica.tex` — the manuscript, switched to `\documentclass[article,nojss]{jss}`
+  (preprint mode: no JSS masthead or logo, so no `jsslogo.jpg` is needed)
+- `topica.bbl` — the compiled bibliography, so arXiv does not run BibTeX
+- `jss.cls`, `jss.bst` — bundled so the build does not depend on arXiv carrying
+  the `jss` package (it does, but bundling is belt-and-suspenders)
+- `fig_poliblog_effect.pdf` — the worked-example figure
+
+The script compiles the assembled tarball in isolation before packing it, so what
+ships is what was verified. Upload the tarball directly to arXiv (do not unpack).
+
+## Submission form metadata
+
+**Title:** topica: Fast, Reproducible, Reference-Validated Topic Modeling for the
+Social Sciences in Python
+
+**Authors:** Neal Caren (University of North Carolina at Chapel Hill)
+
+**Primary category:** cs.CL (Computation and Language)
+**Cross-list:** stat.CO (Computation), stat.ME (Methodology)
+
+  Rationale: the audience is computational social science and text-as-data, which
+  reads cs.CL; stat.CO is the natural home for a statistical-software paper aimed at
+  JSS, and stat.ME catches the methods-minded readers. If you would rather lead with
+  the software-paper framing, make stat.CO primary and cs.CL the cross-list.
+
+**License:** CC BY 4.0 (recommended; permissive, matches the Apache-2.0 software).
+The arXiv non-exclusive license is the fallback if a target journal forbids CC BY.
+
+**Comments field:** 13 pages, 1 figure. Software: https://github.com/nealcaren/topica
+
+**Abstract (plain text for the web form):**
+
+Topic modeling is now a standard tool for social scientists who work with text, but
+the models they need are scattered across incompatible software: the structural
+topic model lives in R, the fastest collapsed-Gibbs sampler lives in Java, the
+keyword-assisted and embedding-based models live in separate Python repositories,
+and none of them share a data format, a diagnostic suite, or a guarantee that a fit
+can be reproduced. We present topica, a Python library that brings more than a dozen
+topic models behind one NumPy-native interface, running on a parallel Rust core.
+Every model exposes the same shape, so the same coherence, exclusivity, stability,
+and covariate-effect tools apply across all of them, and classical and
+embedding-based models can be compared on one corpus without leaving the session.
+The variational models are deterministic to the bit, including when multithreaded,
+and the sampling models are reproducible from a fixed seed, which makes "refit and
+check that the result holds" a real test rather than a hope. Each model is validated
+against its reference implementation: the collapsed-Gibbs sampler reproduces
+MALLET's output bit-for-bit, the keyword-assisted model matches the R keyATM
+package, and the structural topic model recovers the substantive conclusions of the
+stm vignettes with honest uncertainty from the method of composition. On matched
+iterations topica fits these models from three to twenty-two times faster than the
+reference implementations. We describe the design, the model family, and a
+principled analysis workflow built around the premise that the researcher, not the
+software, owns the theoretical decisions that make a topic-model study credible.
+
+## Notes
+
+- The committed `topica.tex` keeps the full JSS class (`[article]{jss}`) for the
+  journal submission; `make_arxiv.sh` switches it to `nojss` only inside the tarball,
+  so the journal version is untouched.
+- For the eventual JSS submission (not arXiv), use the full-class build, which needs
+  the real `jsslogo.jpg` from https://www.jstatsoft.org/style.
+- Before posting: re-verify Table 1 against current tool releases and consider a
+  final read-through (the two open TODOs in `README.md`).

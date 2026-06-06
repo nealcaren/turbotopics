@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Build a self-contained arXiv submission tarball for the topica paper.
+#
+#   1. Switches the document class to [article,nojss] (preprint look, no JSS
+#      masthead or logo, so jsslogo.jpg is not needed).
+#   2. Generates the .bbl and ships it, so arXiv does not need to run bibtex.
+#   3. Bundles jss.cls and jss.bst (arXiv's TeXLive has the jss package, but
+#      bundling guarantees the build) and the worked-example figure.
+#   4. Compiles the assembled submission in isolation to prove it is
+#      self-contained, then tars it.
+#
+# Prereq: run `make_figures.py` first to produce fig_poliblog_effect.pdf.
+# Usage:  bash paper/make_arxiv.sh
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+OUT="$HERE/arxiv-submission.tar.gz"
+STAGE="$(mktemp -d /private/tmp/topica-arxiv.XXXXXX)"
+trap 'rm -rf "$STAGE"' EXIT
+
+# --- locate jss.cls / jss.bst (kpsewhich, else R's bundled texmf) -----------
+find_tex() {
+  local f; f="$(kpsewhich "$1" 2>/dev/null || true)"
+  [ -n "$f" ] || f="$(find /Library/Frameworks/R.framework /usr/local/texlive \
+                        -name "$1" 2>/dev/null | head -1)"
+  [ -n "$f" ] || { echo "ERROR: $1 not found (install the jss package)"; exit 1; }
+  echo "$f"
+}
+JSS_CLS="$(find_tex jss.cls)"
+JSS_BST="$(find_tex jss.bst)"
+
+[ -f "$HERE/fig_poliblog_effect.pdf" ] || {
+  echo "ERROR: fig_poliblog_effect.pdf missing. Run: python paper/make_figures.py"; exit 1; }
+
+# --- build the .bbl from the nojss variant ----------------------------------
+BUILD="$STAGE/build"; mkdir -p "$BUILD"
+sed 's/\\documentclass\[article\]{jss}/\\documentclass[article,nojss]{jss}/' \
+  "$HERE/topica.tex" > "$BUILD/topica.tex"
+cp "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" "$HERE/fig_poliblog_effect.pdf" "$BUILD/"
+( cd "$BUILD"
+  export TEXINPUTS=".:" BSTINPUTS=".:" BIBINPUTS=".:"
+  pdflatex -interaction=nonstopmode topica.tex >/dev/null
+  bibtex topica >/dev/null
+  pdflatex -interaction=nonstopmode topica.tex >/dev/null
+  pdflatex -interaction=nonstopmode topica.tex >/dev/null )
+
+# --- assemble the submission (tex + bbl + class/style + figure) -------------
+SUB="$STAGE/submission"; mkdir -p "$SUB"
+cp "$BUILD/topica.tex" "$BUILD/topica.bbl" "$JSS_CLS" "$JSS_BST" \
+   "$HERE/fig_poliblog_effect.pdf" "$SUB/"
+
+# --- prove it compiles in isolation (no .bib, bibtex not run) ---------------
+( cd "$SUB"
+  export TEXINPUTS=".:" BSTINPUTS=".:"
+  pdflatex -interaction=nonstopmode topica.tex >/dev/null
+  pdflatex -interaction=nonstopmode topica.tex > /tmp/arxiv_compile.log 2>&1 )
+if grep -qiE "Citation .* undefined|LaTeX Error|Undefined control" /tmp/arxiv_compile.log; then
+  echo "ERROR: isolated compile had problems; see /tmp/arxiv_compile.log"; exit 1
+fi
+
+tar czf "$OUT" -C "$SUB" topica.tex topica.bbl jss.cls jss.bst fig_poliblog_effect.pdf
+echo "wrote $OUT"
+echo "contents:"; tar tzf "$OUT" | sed 's/^/  /'
+echo "pages: $(pdfinfo "$SUB/topica.pdf" 2>/dev/null | awk '/Pages/{print $2}')"
