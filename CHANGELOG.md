@@ -6,8 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-06
+
 ### Added
 
+- `AGENTS.md` — a working guide for LLM agents (Claude Code, Cursor, …) helping a
+  social scientist run topica. It maps the API onto the text-analysis workflow
+  (question → corpus → choose K → fit → validate → measure effects → report) with
+  explicit handoffs, and draws the line on what the researcher owns (the question,
+  K, topic labels, covariate choice, whether a result matters) versus what topica
+  and the agent supply (mechanics, honest diagnostics, refusal to fabricate
+  uncertainty).
 - `topica.viz` — a manuscript-first visualization toolkit (the honest successor to
   pyLDAvis). Each view is a panel with `.to_frame()` (the numbers, always),
   `.to_png()` (matplotlib, for papers), and `.to_html()` (Altair, for the
