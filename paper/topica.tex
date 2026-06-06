@@ -85,15 +85,15 @@ package, and the embedding-based models \citep{grootendorst2022bertopic,
 angelov2020top2vec} are separate \proglang{Python} repositories again. Each tool
 defines its own document format, returns topics in its own structure, and
 computes its own subset of diagnostics, if any. A study that compares two model
-families therefore spans two languages and three data conventions, and the
-gluing-together is left to the analyst.
+families therefore spans two languages and three data conventions, leaving the
+analyst to glue the pieces together by hand.
 
 Three problems follow from this fragmentation. First, comparison is expensive:
 asking whether the structural topic model and a clustering of embeddings find
 the same themes in a corpus means running two pipelines that do not speak to each
 other and aligning the output by hand. Second, diagnostics are uneven: coherence
 and exclusivity are built into some tools and absent from others, so the standard
-of evidence a result is held to depends on which package produced it. Third, and
+of evidence depends on which package produced the result. Third, and
 most consequential for cumulative social science, reproducibility is not
 guaranteed. Several reference implementations do not fix all sources of
 randomness, so the same script on the same data can return different topics on a
@@ -164,20 +164,26 @@ one cell pays a translation cost at every boundary.
 
 \begin{table}[t!]
 \centering
-\caption{Topic-modeling software and the social-science feature matrix. ``Effect
-SEs'' marks built-in covariate-effect estimation with uncertainty; ``Determinism''
-marks a documented guarantee that a fit reproduces from a seed.}
+\caption{Topic-modeling software and the social-science feature matrix, as of the
+current released versions. ``STM/content'' is a full structural topic model with
+content covariates; \emph{partial} marks a prevalence-only covariate model
+(Dirichlet-multinomial regression or its keyword analogue), which does not let the
+topic-word distribution vary by covariate. ``Effect SEs'' marks built-in
+covariate-effect estimation with uncertainty. ``Determinism'' marks the documented
+reproducibility guarantee: \emph{seed} reproduces from a fixed seed,
+\emph{partial} has a non-seedable stage (UMAP in \pkg{BERTopic}), and a check marks
+\pkg{topica}'s bit-for-bit variational fits.}
 \label{tab:compare}
 \small
 \begin{tabular}{lccccccc}
 \toprule
  & Language & Classical & STM/content & Short-text & Embedding & Effect SEs & Determinism \\
 \midrule
-\pkg{MALLET}    & \proglang{Java}    & \checkmark & --         & --         & --         & --         & seed \\
-\pkg{gensim}    & \proglang{Python}  & \checkmark & --         & --         & partial    & --         & seed \\
+\pkg{MALLET}    & \proglang{Java}    & \checkmark & partial    & --         & --         & --         & seed \\
+\pkg{gensim}    & \proglang{Python}  & \checkmark & --         & --         & --         & --         & seed \\
 \pkg{tomotopy}  & \proglang{Python}/\proglang{C++} & \checkmark & partial & \checkmark & --      & --         & seed \\
 \pkg{stm}       & \proglang{R}       & \checkmark & \checkmark & --         & --         & \checkmark & seed \\
-\pkg{keyATM}    & \proglang{R}       & \checkmark & --         & --         & --         & --         & seed \\
+\pkg{keyATM}    & \proglang{R}       & \checkmark & partial    & --         & --         & \checkmark & seed \\
 \pkg{BERTopic}  & \proglang{Python}  & --         & --         & \checkmark & \checkmark & --         & partial \\
 \midrule
 \pkg{topica}    & \proglang{Python}/\proglang{Rust} & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
@@ -222,7 +228,7 @@ model.top_words(10)     # the ten highest-probability words per topic
 \end{CodeChunk}
 
 Because the diagnostics consume only \code{topic\_word} and \code{doc\_topic},
-they are written once and apply to every model. \code{topica.coherence},
+we write them once and they apply to every model. \code{topica.coherence},
 \code{topica.exclusivity}, \code{topica.estimate\_effect}, and the rest do not
 know or care which model produced the matrices they are given. This is what makes
 cross-model comparison free: an LDA fit and a clustering of embeddings present
@@ -231,7 +237,7 @@ and align their topics with the same tools.
 
 \subsection{Determinism as a constraint}
 
-Reproducibility is treated as a property to be engineered, not hoped for. The
+We engineer reproducibility rather than hope for it. The
 variational models (the correlated and structural topic models, the dynamic topic
 model, and supervised LDA) produce bit-for-bit identical fits on repeated runs,
 including when the variational E-step is parallelized across cores, because the
@@ -314,8 +320,9 @@ information-theoretic token weighting, and the change-point hidden Markov model
 
 The interface in Section~\ref{sec:design} supports a workflow that mirrors how a
 careful text-analysis study is built, with the researcher making the
-substantive calls and \pkg{topica} supplying the mechanics. We walk the workflow
-here because the division of labor is part of the design, not an afterthought.
+substantive calls and \pkg{topica} supplying the mechanics. The division of labor
+between researcher and software is part of the design, so we walk the workflow to
+show where each one decides.
 
 \subsection{Build a defensible corpus}
 
@@ -473,7 +480,7 @@ built around the sampler, not raw LDA throughput.
 \section{Worked example}\label{sec:example}
 %% ===========================================================================
 
-We close the exposition with an end-to-end analysis to show that the workflow of
+An end-to-end analysis shows that the workflow of
 Section~\ref{sec:workflow} produces a publishable result, not toy output. The
 example reproduces the political-blog analysis from the \pkg{stm} literature
 \citep{roberts2016model}: a corpus of weblog posts from the 2008 \proglang{U.S.}
