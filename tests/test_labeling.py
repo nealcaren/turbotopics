@@ -172,3 +172,37 @@ def test_llm_embed_cache_embeds_once(tmp_path, monkeypatch):
     # Different texts miss the cache and recompute.
     topica.llm_embed(["alpha", "beta", "delta"], model="x", cache=cache)
     assert calls["n"] == 2
+
+
+def test_llm_backend_passes_explicit_key(monkeypatch):
+    import sys
+    import types
+
+    seen = {}
+
+    class _Resp:
+        def text(self):
+            return "LABEL"
+
+    class _Model:
+        def __init__(self):
+            self.key = None
+
+        def prompt(self, prompt, **kw):
+            seen["key_at_call"] = self.key
+            return _Resp()
+
+    obj = _Model()
+    fake = types.ModuleType("llm")
+    fake.get_model = lambda name: obj
+    monkeypatch.setitem(sys.modules, "llm", fake)
+
+    # Explicit key is set on the model; default (None) leaves llm to resolve it.
+    call = topica.llm_backend("gpt-4o-mini", key="sk-test-123")
+    assert obj.key == "sk-test-123"
+    assert call("hi") == "LABEL"
+    assert seen["key_at_call"] == "sk-test-123"
+
+    obj.key = None
+    topica.llm_backend("gpt-4o-mini")  # no key -> untouched, llm resolves from env
+    assert obj.key is None

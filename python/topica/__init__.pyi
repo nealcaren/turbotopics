@@ -242,10 +242,16 @@ def topic_label_prompts(
 
 
 def llm_backend(
-    model: str = "gpt-4o-mini", *, system: str | None = None, **options: Any
+    model: str = "gpt-4o-mini",
+    *,
+    key: str | None = None,
+    system: str | None = None,
+    **options: Any,
 ) -> Callable[[str], str]:
     """A str -> str callable backed by the `llm` library, for llm_topic_labels'
-    call= argument. Requires the optional `llm` package."""
+    call= argument. The key defaults to llm's resolution (stored key or
+    OPENAI_API_KEY etc.); pass `key` to override. Requires the optional `llm`
+    package."""
     ...
 
 

@@ -190,7 +190,7 @@ def load_embeddings(path, *, with_meta=False):
         return emb, meta
 
 
-def llm_embed(texts, model="text-embedding-3-small", *, batch=True, cache=None):
+def llm_embed(texts, model="text-embedding-3-small", *, key=None, batch=True, cache=None):
     """Embed ``texts`` with the `llm` library's embedding models, as a dense
     ``(n, dim)`` float array.
 
@@ -202,6 +202,10 @@ def llm_embed(texts, model="text-embedding-3-small", *, batch=True, cache=None):
     model such as ``"sentence-transformers/all-MiniLM-L6-v2"`` via the
     ``llm-sentence-transformers`` plugin (no API, runs offline). Pass document
     texts for document embeddings, or the vocabulary for word embeddings.
+
+    By default the API key (for hosted embedders) is resolved by ``llm`` itself: a
+    stored ``llm keys`` value, else the provider's environment variable
+    (``OPENAI_API_KEY`` for OpenAI). Pass ``key`` to override it explicitly.
 
     Embeddings are costly, so pass ``cache=path`` to embed once and reuse: if the
     file exists and was saved for the same ``texts``, it is loaded and no model is
@@ -228,6 +232,8 @@ def llm_embed(texts, model="text-embedding-3-small", *, batch=True, cache=None):
             '(pip install llm, or pip install "topica[llm]").'
         ) from e
     em = _llm.get_embedding_model(model)
+    if key is not None:
+        em.key = key
     vecs = list(em.embed_multi(items)) if batch else [em.embed(t) for t in items]
     arr = np.asarray(vecs, dtype=float)
     if cache is not None:

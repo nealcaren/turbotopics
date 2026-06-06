@@ -60,14 +60,17 @@ def topic_label_prompts(model, texts=None, *, n_words=12, n_docs=3, max_chars=30
     return prompts
 
 
-def llm_backend(model="gpt-4o-mini", *, system=None, **options):
+def llm_backend(model="gpt-4o-mini", *, key=None, system=None, **options):
     """A ``str -> str`` callable backed by the `llm` library, for the ``call=``
     argument of :func:`llm_topic_labels`.
 
     ``model`` names any model ``llm`` can reach — OpenAI, Anthropic, or local
-    models through plugins such as ``llm-ollama``. ``options`` pass through to
-    ``llm`` (e.g. ``temperature=0`` for reproducible labels where the provider
-    supports it). Requires the optional ``llm`` package (``pip install llm`` or
+    models through plugins such as ``llm-ollama``. By default the API key is
+    resolved by ``llm`` itself: a stored ``llm keys`` value, else the provider's
+    environment variable (``OPENAI_API_KEY`` for OpenAI). Pass ``key`` to override
+    that with an explicit key. ``options`` pass through to ``llm`` (e.g.
+    ``temperature=0`` for reproducible labels where the provider supports it).
+    Requires the optional ``llm`` package (``pip install llm`` or
     ``pip install "topica[llm]"``).
     """
     try:
@@ -78,6 +81,8 @@ def llm_backend(model="gpt-4o-mini", *, system=None, **options):
             '(pip install llm, or pip install "topica[llm]").'
         ) from e
     obj = _llm.get_model(model)
+    if key is not None:
+        obj.key = key
 
     def call(prompt: str) -> str:
         return obj.prompt(prompt, system=system, **options).text().strip()

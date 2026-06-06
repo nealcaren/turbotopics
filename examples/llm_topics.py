@@ -2,14 +2,15 @@
 
 Uses topica.llm_embed to produce document embeddings (cached so the corpus is
 embedded once), fits FASTopic, labels the topics with an LLM, and writes a
-plot_report figure. Reproducible with a local embedder and a local labeling model,
-so no API key is required:
+plot_report figure.
 
-    pip install "topica[llm,viz]" llm-sentence-transformers llm-ollama
+    pip install "topica[llm,viz]" llm-sentence-transformers
     python examples/llm_topics.py
 
-Swap the model names for OpenAI ("text-embedding-3-small", "gpt-4o-mini") if you
-prefer the hosted versions.
+The embedder is a local sentence-transformers model (offline, no key). The labeler
+defaults to OpenAI gpt-4o-mini, whose key is read from OPENAI_API_KEY (or pass
+key=... to llm_backend). For a fully local, key-free run, install llm-ollama and
+set LABEL_MODEL to a pulled model such as "llama3.2".
 """
 
 import csv
@@ -23,7 +24,7 @@ CRISIS = os.path.join(ROOT, "examples", "dubois_crisis.csv")
 STOP = os.path.join(ROOT, "examples", "english-stoplist.txt")
 
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # local, offline
-LABEL_MODEL = "llama3.2"                                 # local via llm-ollama
+LABEL_MODEL = "gpt-4o-mini"                             # OpenAI; key from OPENAI_API_KEY
 
 
 def main():
