@@ -113,6 +113,31 @@ def test_dashboard_picks_panels_and_exports(covariate_lda):
     assert d.to_png() is not None
 
 
+def test_term_overlay_only_in_prob_mode(covariate_lda):
+    m = covariate_lda[0]
+    prob = viz.term_barchart(m, topic=0, mode="prob", n=4).to_frame()
+    frex = viz.term_barchart(m, topic=0, mode="frex", n=4).to_frame()
+    assert "corpus_weight" in prob.columns          # the overlay is meaningful here
+    assert "corpus_weight" not in frex.columns        # ...and dropped where it is not
+
+
+def test_topic_similarity_is_a_valid_metric(covariate_lda):
+    ts = viz.topic_similarity(covariate_lda[0])
+    d = ts._dist
+    assert np.allclose(d, d.T)                         # symmetric
+    assert np.allclose(np.diag(d), 0.0)                # zero diagonal
+    assert (d >= -1e-9).all()
+
+
+def test_dashboard_png_is_vector_for_pdf(covariate_lda, tmp_path):
+    m, corpus, x, texts = covariate_lda
+    d = viz.dashboard(m, texts, corpus=corpus, X=x[:, None])
+    p = tmp_path / "report.pdf"
+    d.to_png(str(p))
+    # a real vector PDF embeds fonts/text operators, not one giant image
+    assert b"/Font" in p.read_bytes()
+
+
 # --- interactive build (skips if altair absent) ----------------------------
 
 def test_interactive_browser():

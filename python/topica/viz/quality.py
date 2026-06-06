@@ -6,7 +6,7 @@ adds the ``.to_frame()`` data export and a clean publication figure.
 
 from __future__ import annotations
 
-from .base import Panel, _require
+from .base import Panel
 from .capability import capabilities
 
 
@@ -44,15 +44,14 @@ class CoherenceFrontier(Panel):
             "prevalence": q["prevalence"],
         })
 
-    def _figure(self, *, ax=None, figsize=(6.0, 5.0)):
-        plt = _require("matplotlib.pyplot", "viz")
+    def _figsize(self):
+        return (6.0, 5.0)
+
+    def _draw(self, fig):
         import numpy as np
 
         df = self.to_frame()
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-        else:
-            fig = ax.figure
+        ax = fig.subplots()
         sizes = 40 + 360 * (df["prevalence"] / max(df["prevalence"].max(), 1e-9))
         ax.scatter(df["coherence"], df["exclusivity"], s=sizes,
                    color="#4C72B0", alpha=0.75, edgecolor="white", linewidth=0.6)
@@ -61,10 +60,17 @@ class CoherenceFrontier(Panel):
                         fontsize=7, ha="center", va="center", color="white")
         ax.set_xlabel(f"Semantic coherence ({self.metric})")
         ax.set_ylabel("Exclusivity")
-        ax.set_title(self.title + " (size ∝ prevalence)")
         ax.ticklabel_format(useOffset=False, style="plain")
-        fig.tight_layout()
-        return fig
+        # Exclusivity often saturates near 1; auto-zoom then makes a 0.001 spread
+        # look dramatic. Give headroom and flag it when the spread is tiny.
+        ex = np.asarray(df["exclusivity"], dtype=float)
+        lo, hi = float(ex.min()), float(ex.max())
+        note = ""
+        if hi - lo < 0.02 and hi > 0.9:
+            pad = max((hi - lo), 1e-3)
+            ax.set_ylim(lo - 3 * pad, min(1.0 + pad, 1.001))
+            note = f"  (exclusivity all near 1: {lo:.3f}–{hi:.3f})"
+        ax.set_title(self.title + " (size ∝ prevalence)" + note, fontsize=10)
 
 
 class SearchK(Panel):
@@ -83,11 +89,12 @@ class SearchK(Panel):
 
         return pd.DataFrame(self._rows)
 
-    def _figure(self, *, figsize=(6.5, 4.5)):
-        plt = _require("matplotlib.pyplot", "viz")
+    def _figsize(self):
+        return (6.5, 4.5)
 
+    def _draw(self, fig):
         df = self.to_frame().sort_values("k")
-        fig, ax = plt.subplots(figsize=figsize)
+        ax = fig.subplots()
         ax.plot(df["k"], df["coherence"], "-o", color="#4C72B0", label="coherence")
         ax.set_xlabel("K (number of topics)")
         ax.set_ylabel("coherence", color="#4C72B0")
@@ -103,6 +110,5 @@ class SearchK(Panel):
             ax3.set_ylabel("held-out perplexity", color="#55A868")
             ax3.tick_params(axis="y", labelcolor="#55A868")
         metric = self._rows[0].get("coherence_metric", "u_mass")
-        ax.set_title(f"{self.title} (coherence = {metric}; higher coherence/exclusivity, lower perplexity)")
-        fig.tight_layout()
-        return fig
+        ax.set_title(f"{self.title} (coherence = {metric}; higher coherence/exclusivity, lower perplexity)",
+                     fontsize=10)

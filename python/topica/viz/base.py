@@ -39,9 +39,23 @@ class Panel:
         """The numbers behind the picture, as a pandas DataFrame."""
         raise NotImplementedError
 
-    def _figure(self, **kwargs):
-        """Build and return a matplotlib ``Figure``."""
+    def _draw(self, fig, **kwargs):
+        """Draw the panel into the given matplotlib ``Figure`` or ``SubFigure``.
+        Must create its own axes inside ``fig`` (so the panel composes into a
+        dashboard's subfigure and stays vector). Does not call ``tight_layout``."""
         raise NotImplementedError
+
+    def _figsize(self):
+        """The standalone figure size (width, height) in inches."""
+        return (6.0, 4.5)
+
+    def _figure(self, *, figsize=None, **kwargs):
+        """Build a standalone ``Figure`` around ``_draw``."""
+        plt = _require("matplotlib.pyplot", "viz")
+        fig = plt.figure(figsize=figsize or self._figsize())
+        self._draw(fig, **kwargs)
+        fig.tight_layout()
+        return fig
 
     def _altair(self, **kwargs):
         raise NotImplementedError(
@@ -51,7 +65,8 @@ class Panel:
     # --- the public renderers -----------------------------------------------
     def to_png(self, path: str | None = None, *, dpi: int = 150, **kwargs):
         """Render to matplotlib. Returns the ``Figure``; also saves to ``path``
-        (``.png`` / ``.pdf`` / ``.svg`` by extension) when given."""
+        (``.png`` / ``.pdf`` / ``.svg`` by extension) when given. Vector formats
+        (``.pdf`` / ``.svg``) stay vector with selectable text."""
         fig = self._figure(**kwargs)
         if path is not None:
             fig.savefig(path, dpi=dpi, bbox_inches="tight")

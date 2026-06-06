@@ -43,29 +43,31 @@ class Dashboard:
         """A dict of ``{panel_name: DataFrame}``."""
         return {name: p.to_frame() for name, p in self.panels.items()}
 
-    def _png_bytes(self, panel, **kw):
-        fig = panel._figure(**kw)
+    def _order(self):
+        return [k for k in ("effect", "frontier", "similarity", "terms") if k in self.panels]
+
+    def _png_bytes(self, panel, *, fmt="png"):
+        plt = _require("matplotlib.pyplot", "viz")
+        fig = panel._figure()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
-        _require("matplotlib.pyplot", "viz").close(fig)
+        fig.savefig(buf, format=fmt, dpi=150, bbox_inches="tight")
+        plt.close(fig)
         return buf.getvalue()
 
     def to_png(self, path: str | None = None, *, dpi: int = 150):
-        """Stack the static panels vertically into one matplotlib figure."""
+        """Compose the static panels into one figure with real subfigures, so the
+        result stays vector (selectable text) for ``.pdf`` / ``.svg`` output."""
         plt = _require("matplotlib.pyplot", "viz")
-        import matplotlib.image as mpimg
 
-        order = [k for k in ("effect", "frontier", "similarity", "terms") if k in self.panels]
-        imgs = [mpimg.imread(io.BytesIO(self._png_bytes(self.panels[k]))) for k in order]
-        heights = [im.shape[0] for im in imgs]
-        widths = [im.shape[1] for im in imgs]
-        w = max(widths)
-        fig = plt.figure(figsize=(w / 150, sum(heights) / 150))
-        gs = fig.add_gridspec(len(imgs), 1, height_ratios=heights, hspace=0.04)
-        for i, im in enumerate(imgs):
-            ax = fig.add_subplot(gs[i])
-            ax.imshow(im)
-            ax.axis("off")
+        panels = [self.panels[k] for k in self._order()]
+        heights = [p._figsize()[1] for p in panels]
+        width = max(p._figsize()[0] for p in panels)
+        fig = plt.figure(figsize=(width, sum(heights)), constrained_layout=True)
+        subfigs = fig.subfigures(len(panels), 1, height_ratios=heights)
+        if len(panels) == 1:
+            subfigs = [subfigs]
+        for sf, panel in zip(subfigs, panels):
+            panel._draw(sf)
         if path is not None:
             fig.savefig(path, dpi=dpi, bbox_inches="tight")
         return fig
@@ -74,7 +76,7 @@ class Dashboard:
         """A self-contained HTML report: the interactive term/heatmap browser plus
         the static panels embedded as images."""
         chart = term_topic_browser(self.model, n=n, mode=mode)
-        chart_html = chart.to_html()
+        chart_html = chart.to_html(fullhtml=False)  # an embed fragment, not a full doc
         blocks = []
         for name in ("effect", "frontier"):
             if name in self.panels:

@@ -65,11 +65,17 @@ class TermBarchart(Panel):
         self.mode = mode
         self.n = n
         self._words = _scored_words(model, self.topic, mode, n, self.cap)
-        # corpus-frequency overlay: the topic-averaged weight of each shown word
-        phi = _topic_word(model)
-        vocab = {w: i for i, w in enumerate(model.vocabulary)}
-        marg = phi.mean(axis=0)
-        self._overlay = [float(marg[vocab[w]]) if w in vocab else 0.0 for w, _ in self._words]
+        # Corpus-frequency overlay: the prevalence-weighted marginal
+        # p(w) = sum_t p(t) p(w|t). Only meaningful in "prob" mode -- frex / lift /
+        # relevance live on a different (non-probability) scale, so an overlay of
+        # p(w) ~ 0.02 against frex in [0, 1] would be a meaningless sliver.
+        self._overlay = None
+        if mode == "prob":
+            phi = _topic_word(model)
+            vocab = {w: i for i, w in enumerate(model.vocabulary)}
+            theta = np.asarray(model.doc_topic, dtype=np.float64)
+            pw = theta.mean(axis=0) @ phi
+            self._overlay = [float(pw[vocab[w]]) if w in vocab else 0.0 for w, _ in self._words]
         self._inclusion = None
         if error_bars:
             from ..effects import standard_errors
@@ -84,37 +90,33 @@ class TermBarchart(Panel):
 
         rows = []
         for i, (w, val) in enumerate(self._words):
-            row = {"topic": self.topic, "rank": i, "word": w,
-                   "weight": val, "corpus_weight": self._overlay[i]}
+            row = {"topic": self.topic, "rank": i, "word": w, "weight": val}
+            if self._overlay is not None:
+                row["corpus_weight"] = self._overlay[i]
             if self._inclusion is not None and self._inclusion[i] is not None:
                 p, lo, hi = self._inclusion[i]
                 row.update(inclusion_prob=p, inclusion_low=lo, inclusion_high=hi)
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def _figure(self, *, figsize=None, ax=None):
-        plt = _require("matplotlib.pyplot", "viz")
+    def _figsize(self):
+        return (5.5, max(2.2, 0.34 * len(self._words) + 1.0))
 
+    def _draw(self, fig):
         words = [w for w, _ in self._words][::-1]
         vals = [v for _, v in self._words][::-1]
-        overlay = self._overlay[::-1]
         y = np.arange(len(words))
-        if figsize is None:
-            figsize = (5.5, max(2.2, 0.34 * len(words) + 1.0))
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-        else:
-            fig = ax.figure
+        ax = fig.subplots()
         ax.barh(y, vals, color=_DARK, height=0.7, label="in topic", zorder=2)
-        ax.barh(y, overlay, color=_LIGHT, height=0.7, label="corpus overall", zorder=1)
+        if self._overlay is not None:
+            ax.barh(y, self._overlay[::-1], color=_LIGHT, height=0.7,
+                    label="corpus overall", zorder=1)
+            ax.legend(fontsize=7, loc="lower right")
         ax.set_yticks(y)
         ax.set_yticklabels(words, fontsize=8)
         label = self.cap.word_weight_label if self.mode == "prob" else self.mode
         ax.set_xlabel(label)
-        ax.set_title(f"Topic {self.topic} — {self.mode}")
-        ax.legend(fontsize=7, loc="lower right")
-        fig.tight_layout()
-        return fig
+        ax.set_title(f"Topic {self.topic} — {self.mode}", fontsize=10)
 
 
 def _topic_distance(model, cap):
@@ -124,13 +126,17 @@ def _topic_distance(model, cap):
     k = phi.shape[0]
     if cap.prob_simplex_words:
         p = phi / np.clip(phi.sum(axis=1, keepdims=True), 1e-12, None)
+        # Vectorized over the inner pair: JS(p,q) = H(m) - (H(p)+H(q))/2, one numpy
+        # pass per row (O(K) Python iterations, not O(K^2) with a per-element KL).
+        ent = lambda a: -(a * np.log(np.clip(a, 1e-12, None))).sum(axis=-1)
+        h = ent(p)  # (K,) per-topic entropy
         d = np.zeros((k, k))
         for i in range(k):
-            for j in range(i + 1, k):
-                m = 0.5 * (p[i] + p[j])
-                kl = lambda a: np.sum(np.where(a > 0, a * np.log(np.clip(a / m, 1e-12, None)), 0.0))
-                js = 0.5 * kl(p[i]) + 0.5 * kl(p[j])
-                d[i, j] = d[j, i] = np.sqrt(max(js, 0.0))
+            m = 0.5 * (p[i] + p)            # (K, V)
+            js = ent(m) - 0.5 * (h[i] + h)  # (K,)
+            d[i] = np.sqrt(np.clip(js, 0.0, None))
+        d = 0.5 * (d + d.T)                 # symmetrize away float drift
+        np.fill_diagonal(d, 0.0)
         return d, "sqrt Jensen-Shannon"
     norm = phi / np.clip(np.linalg.norm(phi, axis=1, keepdims=True), 1e-12, None)
     d = 1.0 - norm @ norm.T
@@ -177,24 +183,21 @@ class TopicSimilarity(Panel):
         labels = [f'{t}: {self._labels[t] if t < len(self._labels) else t}' for t in order]
         return pd.DataFrame(sim[np.ix_(order, order)], index=labels, columns=labels)
 
-    def _figure(self, *, figsize=None):
-        plt = _require("matplotlib.pyplot", "viz")
+    def _figsize(self):
+        return (max(4.0, 0.4 * len(self._order) + 1.5),) * 2
 
+    def _draw(self, fig):
         order = self._order
         k = len(order)
         sim = (1.0 - self._dist)[np.ix_(order, order)]
-        if figsize is None:
-            figsize = (max(4.0, 0.4 * k + 1.5),) * 2
-        fig, ax = plt.subplots(figsize=figsize)
+        ax = fig.subplots()
         im = ax.imshow(sim, cmap="viridis", vmin=sim.min(), vmax=1.0)
         ax.set_xticks(range(k))
         ax.set_yticks(range(k))
         ax.set_xticklabels([str(t) for t in order], fontsize=7, rotation=90)
         ax.set_yticklabels([str(t) for t in order], fontsize=7)
-        ax.set_title(f"{self.title} (1 − {self.metric}, seriated)")
+        ax.set_title(f"{self.title} (1 − {self.metric}, seriated)", fontsize=10)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="similarity")
-        fig.tight_layout()
-        return fig
 
 
 def term_topic_browser(model, *, n=10, mode="prob"):

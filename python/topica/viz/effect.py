@@ -15,7 +15,7 @@ calls for:
 
 from __future__ import annotations
 
-from .base import Panel, _require
+from .base import Panel
 from .capability import capabilities
 
 _POSTERIOR_LABEL = {
@@ -50,9 +50,13 @@ class EffectPlot(Panel):
             )
             self.has_ci = False
             self.uncertainty = "none"
+            degenerate = "" if self.cap.soft_theta else (
+                " — and on near-degenerate (hard cluster) theta, so even the points "
+                "may mislead"
+            )
             self.note = (
-                f"{self.cap.name} has no theta posterior; showing point estimates. "
-                "Pass method='bootstrap' for intervals."
+                f"{self.cap.name} has no theta posterior; showing point estimates"
+                f"{degenerate}. Pass method='bootstrap' for intervals."
             )
         else:
             effects = standard_errors(
@@ -105,17 +109,17 @@ class EffectPlot(Panel):
             })
         return pd.DataFrame(rows)
 
-    def _figure(self, *, figsize=None, sort=True):
+    def _figsize(self):
+        return (6.5, max(2.5, 0.42 * len(self._effects) + 1.2))
+
+    def _draw(self, fig, *, sort=True):
         import numpy as np
 
-        plt = _require("matplotlib.pyplot", "viz")
         df = self.to_frame()
         if sort:
             df = df.sort_values("coef")
         k = len(df)
-        if figsize is None:
-            figsize = (6.5, max(2.5, 0.42 * k + 1.2))
-        fig, ax = plt.subplots(figsize=figsize)
+        ax = fig.subplots()
         y = np.arange(k)
         for i, (_, r) in enumerate(df.iterrows()):
             color = "#C44E52" if r["coef"] >= 0 else "#4C72B0"
@@ -136,6 +140,4 @@ class EffectPlot(Panel):
         unc = _POSTERIOR_LABEL.get(self.uncertainty, self.uncertainty)
         title = f"{self.title}\n{pct}% CI — {unc}" if self.has_ci else \
             f"{self.title}\npoint estimates ({self.note})"
-        ax.set_title(title, fontsize=10)
-        fig.tight_layout()
-        return fig
+        ax.set_title(title, fontsize=9)
