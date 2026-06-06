@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .coherence import _as_topic_word, _as_doc_topic
+from .coherence import _as_topic_word, _as_doc_topic, _vocabulary_of
 
 # ---------------------------------------------------------------------------
 # labelTopics: prob / FREX / lift / score
@@ -39,15 +39,19 @@ def _ecdf_ranks(x: np.ndarray) -> np.ndarray:
     return ranks / len(x)
 
 
-def frex(topic_word, vocabulary, *, w=0.5, n=10):
+def frex(topic_word, vocabulary=None, *, w=0.5, n=10):
     """FREX (FRequency–EXclusivity) top words per topic.
 
     For each topic, words are scored by the weighted harmonic mean of the ECDF
     rank of their probability (frequency) and the ECDF rank of their exclusivity
     ``φ_{t,v} / Σ_k φ_{k,v}`` — the same combination stm uses. ``w`` weights
     frequency vs exclusivity. Returns a list (per topic) of ``(word, frex)``.
+
+    `topic_word` is a fitted model (uses its ``topic_word`` and ``vocabulary``)
+    or a ``(K, V)`` array, in which case pass ``vocabulary``.
     """
-    phi = np.asarray(topic_word, dtype=np.float64)
+    vocabulary = _vocabulary_of(topic_word, vocabulary)
+    phi = _as_topic_word(topic_word)
     K, V = phi.shape
     col = phi.sum(axis=0)
     col[col == 0] = 1.0
@@ -64,13 +68,17 @@ def frex(topic_word, vocabulary, *, w=0.5, n=10):
     return results
 
 
-def label_topics(topic_word, vocabulary, *, n=10):
+def label_topics(topic_word, vocabulary=None, *, n=10):
     """stm-style topic labels: prob, FREX, lift, and score word lists per topic.
 
     Returns a list (per topic) of dicts with keys ``prob``, ``frex``, ``lift``,
     ``score``, each a list of ``(word, value)`` pairs.
+
+    `topic_word` is a fitted model (uses its ``topic_word`` and ``vocabulary``)
+    or a ``(K, V)`` array, in which case pass ``vocabulary``.
     """
-    phi = np.asarray(topic_word, dtype=np.float64)
+    vocabulary = _vocabulary_of(topic_word, vocabulary)
+    phi = _as_topic_word(topic_word)
     if phi.ndim != 2 or phi.shape[0] == 0:
         raise ValueError(
             "the model has no topics (empty topic_word). For BERTopic/Top2Vec this "
@@ -145,8 +153,10 @@ def topic_correlation(doc_topic, *, threshold=0.05):
     exceeds ``threshold`` become network edges. Returns a
     :class:`TopicCorrelation` with the correlation matrix, a 0/1 adjacency
     matrix (zero diagonal), and the edge list.
+
+    `doc_topic` is a fitted model (uses its ``doc_topic``) or a ``(D, K)`` array.
     """
-    theta = np.asarray(doc_topic, dtype=np.float64)
+    theta = _as_doc_topic(doc_topic)
     cor = np.corrcoef(theta.T)
     cor = np.nan_to_num(cor)
     K = cor.shape[0]
@@ -170,8 +180,10 @@ def find_thoughts(doc_topic, texts=None, *, topic, n=3):
 
     Returns a list of ``(doc_index, proportion, text)`` sorted by descending
     topic proportion; ``text`` is ``None`` when ``texts`` is not supplied.
+
+    `doc_topic` is a fitted model (uses its ``doc_topic``) or a ``(D, K)`` array.
     """
-    theta = np.asarray(doc_topic, dtype=np.float64)
+    theta = _as_doc_topic(doc_topic)
     if topic < 0 or topic >= theta.shape[1]:
         raise ValueError(f"topic {topic} out of range (num_topics={theta.shape[1]})")
     idx = np.argsort(theta[:, topic])[::-1][:n]
@@ -343,7 +355,7 @@ def _mean_exclusivity(topic_word, n: int) -> float:
 # LDAvis relevance + pyLDAvis export
 # ---------------------------------------------------------------------------
 
-def relevance(topic_word, vocabulary, *, topic=None, lam=0.6, n=10, term_frequency=None):
+def relevance(topic_word, vocabulary=None, *, topic=None, lam=0.6, n=10, term_frequency=None):
     """LDAvis *relevance* of words to topics (Sievert & Shirley 2014):
 
     ``relevance(w | t) = λ·log p(w|t) + (1-λ)·log[p(w|t) / p(w)]``
@@ -353,8 +365,12 @@ def relevance(topic_word, vocabulary, *, topic=None, lam=0.6, n=10, term_frequen
     (word counts in `vocabulary` order) for the empirical marginal, else the
     topic-averaged φ is used. Returns ``(word, relevance)`` lists per topic, or
     for one ``topic``.
+
+    `topic_word` is a fitted model (uses its ``topic_word`` and ``vocabulary``)
+    or a ``(K, V)`` array, in which case pass ``vocabulary``.
     """
-    phi = np.asarray(topic_word, dtype=np.float64)
+    vocabulary = _vocabulary_of(topic_word, vocabulary)
+    phi = _as_topic_word(topic_word)
     k, _ = phi.shape
     if term_frequency is not None:
         tf = np.asarray(term_frequency, dtype=np.float64)

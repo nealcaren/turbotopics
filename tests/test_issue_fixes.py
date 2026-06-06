@@ -96,6 +96,30 @@ def test_zero_num_topics_still_guarded():
         topica.LDA(0)
 
 
+def test_flexible_first_arg_accepts_model_or_matrix():
+    # #10: frex/relevance/label_topics/topic_correlation/find_thoughts accept a
+    # fitted model (the failing convention) as well as the raw matrix.
+    docs = [["cat", "dog", "pet", "vet"]] * 12 + [["star", "moon", "sky", "sun"]] * 12
+    m = topica.LDA(2, seed=1)
+    m.fit(docs, iterations=150)
+    texts = [" ".join(d) for d in docs]
+
+    # model-first (previously raised "float() argument ... not 'topica.LDA'")
+    assert topica.topic_correlation(m).cor.shape == (2, 2)
+    assert len(topica.find_thoughts(m, texts, topic=0)) == 3
+    assert len(topica.frex(m)) == 2
+    assert set(topica.label_topics(m)[0]) == {"prob", "frex", "lift", "score"}
+    assert len(topica.relevance(m, topic=0)) == m.topic_word.shape[1]  # capped at vocab
+
+    # matrix-first still works (backward compatible)
+    assert topica.topic_correlation(m.doc_topic).cor.shape == (2, 2)
+    assert len(topica.frex(m.topic_word, m.vocabulary)) == 2
+
+    # a bare matrix with no vocabulary gives a clear message, not a cryptic one
+    with pytest.raises(ValueError, match="vocabulary is required"):
+        topica.frex(m.topic_word)
+
+
 def test_search_k_labels_its_coherence_metric():
     # #14: search_k reports UMass; label it so its scale isn't confused with c_v.
     docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12

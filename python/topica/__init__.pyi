@@ -108,12 +108,12 @@ def document_intrusion(
 
 
 # General, model-agnostic post-hoc analyses (also in topica.diagnostics).
-def frex(topic_word: Any, vocabulary: Sequence[str], *, w: float = 0.5, n: int = 10) -> list:
-    """FREX (frequency-exclusivity) top words per topic."""
+def frex(topic_word: Any, vocabulary: Sequence[str] | None = None, *, w: float = 0.5, n: int = 10) -> list:
+    """FREX (frequency-exclusivity) top words per topic. Accepts a model or a (K, V) array."""
     ...
 
 
-def label_topics(topic_word: Any, vocabulary: Sequence[str], *, n: int = 10) -> list[dict]:
+def label_topics(topic_word: Any, vocabulary: Sequence[str] | None = None, *, n: int = 10) -> list[dict]:
     """Per-topic word lists with keys prob / frex / lift / score."""
     ...
 
@@ -135,7 +135,7 @@ def search_k(docs: Any, ks: Sequence[int], *, held_out: Any = None, **kwargs: An
 
 def relevance(
     topic_word: Any,
-    vocabulary: Sequence[str],
+    vocabulary: Sequence[str] | None = None,
     *,
     topic: int | None = None,
     lam: float = 0.6,
