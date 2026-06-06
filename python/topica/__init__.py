@@ -31,6 +31,19 @@ from ._topica import (
     __version__,
 )
 
+__citation__ = (
+    "Caren, N. (2026). topica: fast, all-purpose topic modeling for Python. "
+    "https://github.com/nealcaren/topica\n\n"
+    "@software{caren_topica,\n"
+    "  author = {Caren, Neal},\n"
+    "  title  = {topica: fast, all-purpose topic modeling for Python},\n"
+    "  year   = {2026},\n"
+    "  url    = {https://github.com/nealcaren/topica}\n"
+    "}\n\n"
+    "Please also cite the model(s) you use; see "
+    "https://nealcaren.github.io/topica/citing/."
+)
+
 
 def one_hot(values, *, drop_first=True, prefix=""):
     """One-hot encode a categorical covariate for use as DMR features.
@@ -242,4 +255,5 @@ __all__ = [
     "Phrases",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
+    "__citation__",
 ]

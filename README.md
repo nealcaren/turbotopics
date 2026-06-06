@@ -17,11 +17,11 @@ from topica import LDA
 model = LDA(num_topics=2, seed=42)
 model.fit([["cat", "dog", "fish"]] * 15 + [["planet", "star", "moon"]] * 15, iterations=1000)
 
-for i, words in enumerate(model.top_words(5)):
+for i, words in enumerate(model.top_words(3)):
     print(f"Topic {i}:", " ".join(w for w, _ in words))
 ```
 
-See the [getting-started guide](https://nealcaren.github.io/topica/getting-started/) and the [worked examples](https://nealcaren.github.io/topica/examples/dubois/) for end-to-end analyses.
+See the [getting-started guide](https://nealcaren.github.io/topica/getting-started/quickstart/) and the [worked examples](https://nealcaren.github.io/topica/examples/dubois/) for end-to-end analyses.
 
 ## Models
 

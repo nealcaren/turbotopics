@@ -317,6 +317,9 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
             ax.set_xlabel("Semantic coherence")
             ax.set_ylabel("Exclusivity")
             ax.set_title("Topic quality (size ∝ prevalence)")
+            # Exclusivity saturates near 1; stop matplotlib's offset notation
+            # (e.g. "1e-10+9.99e-1") from rendering on the axis.
+            ax.ticklabel_format(useOffset=False, style="plain")
         elif panel == "correlation":
             im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
             ax.set_title("Topic correlation")

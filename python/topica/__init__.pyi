@@ -47,6 +47,8 @@ from .embedding import (
     load_embeddings as load_embeddings,
 )
 
+__citation__: str
+
 def one_hot(
     values: Sequence[object],
     *,
@@ -315,4 +317,5 @@ __all__ = [
     "topic_label_prompts",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
+    "__citation__",
 ]
