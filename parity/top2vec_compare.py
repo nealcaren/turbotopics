@@ -99,7 +99,12 @@ def run(verbose: bool = True) -> dict:
     tv = topica.Top2Vec(n_components=5, min_cluster_size=min_cluster, seed=1)
     tv.fit(docs, doc_emb, word_embeddings=word_emb, vocabulary=vocab)
     tv_labels = np.array(tv.labels)
-    tv_words = [[w for w, _ in tv.top_words(BLOCK, topic=t)] for t in range(tv.num_topics)]
+    # Compare the class-based TF-IDF words (what BERTopic also reports); Top2Vec's
+    # default top_words is now the centroid view when word_embeddings are present.
+    tv_words = [
+        [w for w, _ in tv.top_words(BLOCK, topic=t, representation="c-tf-idf")]
+        for t in range(tv.num_topics)
+    ]
 
     # BERTopic: same embeddings, UMAP reducer, HDBSCAN with a fixed seed.
     umap_model = UMAP(n_neighbors=15, n_components=5, min_dist=0.0, metric="cosine", random_state=42)

@@ -127,6 +127,48 @@ def test_search_k_labels_its_coherence_metric():
     assert all(r["coherence_metric"] == "u_mass" for r in rows)
 
 
+def _planted_embeddings(seed=0):
+    rng = np.random.default_rng(seed)
+    vocab = [f"a{i}" for i in range(8)] + [f"b{i}" for i in range(8)]
+    word_emb = np.vstack([rng.normal([3, 0], 0.2, (8, 2)),
+                          rng.normal([-3, 0], 0.2, (8, 2))])
+    idx = {w: i for i, w in enumerate(vocab)}
+    docs = [[f"a{i}" for i in rng.integers(0, 8, 6)] for _ in range(30)] + \
+           [[f"b{i}" for i in rng.integers(0, 8, 6)] for _ in range(30)]
+    doc_emb = np.array([word_emb[[idx[w] for w in d]].mean(0) for d in docs])
+    doc_emb = doc_emb + rng.normal(0, 0.05, doc_emb.shape)
+    return docs, vocab, word_emb, doc_emb
+
+
+def test_top2vec_centroid_default_and_kwarg():
+    # #8: topic_neighbors(0, n=8) must not raise (topic is the first positional);
+    # and top_words defaults to the centroid view when word_embeddings are present,
+    # giving Top2Vec a headline distinct from BERTopic's c-TF-IDF.
+    docs, vocab, word_emb, doc_emb = _planted_embeddings()
+    tv = topica.Top2Vec(min_cluster_size=8, seed=1)
+    tv.fit(docs, doc_emb, word_embeddings=word_emb, vocabulary=vocab)
+
+    neigh = [w for w, _ in tv.topic_neighbors(0, n=4)]  # previously raised
+    assert len(neigh) == 4
+
+    centroid = [w for w, _ in tv.top_words(4, topic=0)]              # default
+    assert centroid == neigh                                        # centroid view
+    ctfidf = [w for w, _ in tv.top_words(4, topic=0, representation="c-tf-idf")]
+    assert isinstance(ctfidf, list)
+    assert tv.topic_word.shape[0] == tv.num_topics                  # matrix stays c-TF-IDF
+
+
+def test_top2vec_centroid_requires_word_vectors():
+    # #8: without word_embeddings, top_words falls back to c-TF-IDF and an explicit
+    # centroid request gives a clear error.
+    docs, _, _, doc_emb = _planted_embeddings()
+    tv = topica.Top2Vec(min_cluster_size=8, seed=1)
+    tv.fit(docs, doc_emb)
+    assert isinstance(tv.top_words(3, topic=0), list)  # c-TF-IDF default, no raise
+    with pytest.raises(ValueError, match="word_embeddings"):
+        tv.top_words(3, topic=0, representation="centroid")
+
+
 def test_report_is_callable():
     # #12: report(model) works as a one-call overview (alias for summary).
     assert callable(topica.report)

@@ -104,13 +104,19 @@ word_emb = embed(vocab)                          # (len(vocab), E)
 model = topica.Top2Vec(min_cluster_size=15, seed=1)
 model.fit(docs, doc_emb, word_embeddings=word_emb, vocabulary=vocab)
 
-model.topic_neighbors(8, topic=0)      # [(word, cosine), ...] nearest word vectors
-model.top_words(8, topic=0)            # [(word, weight), ...] class-TF-IDF
+model.top_words(8, topic=0)            # default: centroid view (nearest word vectors)
+model.topic_neighbors(0, n=8)          # same centroid words, as (word, cosine)
+model.top_words(8, topic=0, representation="c-tf-idf")  # the shared c-TF-IDF view
 model.topic_vectors                    # (num_topics, E) topic positions
 ```
 
-Without `word_embeddings` Top2Vec still fits and exposes `top_words` (c-TF-IDF);
-`topic_neighbors` is what the word vectors light up.
+Top2Vec and BERTopic share the class-based TF-IDF `topic_word` matrix, so given
+the same clusters their `topic_word` and `topic_table` match. Top2Vec's distinct
+view is the **centroid** representation, the vocabulary nearest the cluster
+centroid in embedding space. When you pass `word_embeddings`, `top_words` (and so
+`summary`) returns that by default; pass `representation="c-tf-idf"` for the
+shared view. Without `word_embeddings` Top2Vec still fits and `top_words` is
+c-TF-IDF.
 
 ## ETM
 

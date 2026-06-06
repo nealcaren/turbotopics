@@ -6393,6 +6393,13 @@ fn check_umap(use_umap: bool) -> PyResult<()> {
 /// per document; pass `word_embeddings` with the aligned `vocabulary` (same
 /// space) to also get `topic_neighbors`. The topic count is discovered, not set.
 ///
+/// `Top2Vec` and `BERTopic` share the class-based TF-IDF `topic_word` matrix, so
+/// their `topic_word` / `topic_table` are the same given the same clusters. What
+/// makes Top2Vec distinct is the **centroid** representation — the vocabulary
+/// nearest the cluster centroid in embedding space — which `top_words` returns by
+/// default when `word_embeddings` are present (pass `representation="c-tf-idf"`
+/// for the shared view, or read it from `topic_neighbors`).
+///
 /// No embedder of your own? `topica.llm_embed(texts, model=...)` builds the
 /// matrix (OpenAI, or offline `sentence-transformers`).
 #[pyclass(module = "topica")]
@@ -6581,22 +6588,74 @@ impl Top2Vec {
 
     /// Top `n` words of `topic` (or every topic when `topic` is None) by
     /// class-TF-IDF weight, as `(word, weight)` pairs.
-    #[pyo3(signature = (n=10, *, topic=None))]
+    /// Top words per topic. Top2Vec's distinctive view is the **centroid**
+    /// representation: the vocabulary words nearest the cluster centroid in
+    /// embedding space. When fit with `word_embeddings`, `top_words` returns that
+    /// by default (so `summary`/`top_words` show Top2Vec's identity, not just the
+    /// class-based TF-IDF it shares with `BERTopic`). Pass
+    /// `representation="c-tf-idf"` for the c-TF-IDF words, or `"centroid"`
+    /// explicitly. `topic_word` and `topic_table` always stay c-TF-IDF.
+    #[pyo3(signature = (n=10, *, topic=None, representation=None))]
     fn top_words<'py>(
         &self,
         py: Python<'py>,
         n: usize,
         topic: Option<usize>,
+        representation: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.fitted_model()?;
-        let phi = vecs_to_arr2(&m.topic_word);
-        topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
+        let rep = match representation {
+            Some(r) => r,
+            None if self.has_word_vectors => "centroid",
+            None => "c-tf-idf",
+        };
+        match rep {
+            "centroid" => {
+                if !self.has_word_vectors {
+                    return Err(PyValueError::new_err(
+                        "representation='centroid' requires fitting with word_embeddings (and vocabulary)",
+                    ));
+                }
+                let one = |t: usize| -> PyResult<Bound<'py, PyList>> {
+                    if t >= m.num_topics {
+                        return Err(PyValueError::new_err("topic out of range"));
+                    }
+                    let items: Vec<Bound<'py, PyTuple>> = m
+                        .topic_neighbors(n, t)
+                        .into_iter()
+                        .map(|(w, s)| {
+                            PyTuple::new_bound(
+                                py,
+                                &[self.id_to_word[w].clone().into_py(py), s.into_py(py)],
+                            )
+                        })
+                        .collect();
+                    Ok(PyList::new_bound(py, items))
+                };
+                match topic {
+                    Some(t) => Ok(one(t)?.into_any()),
+                    None => {
+                        let all: Vec<Bound<'py, PyList>> =
+                            (0..m.num_topics).map(one).collect::<PyResult<_>>()?;
+                        Ok(PyList::new_bound(py, all).into_any())
+                    }
+                }
+            }
+            "c-tf-idf" | "ctfidf" | "c_tf_idf" => {
+                let phi = vecs_to_arr2(&m.topic_word);
+                topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
+            }
+            other => Err(PyValueError::new_err(format!(
+                "representation must be 'centroid' or 'c-tf-idf', got {other:?}"
+            ))),
+        }
     }
 
     /// The `n` vocabulary words whose embeddings are nearest `topic`'s vector by
     /// cosine, as `(word, cosine)` pairs. Requires fitting with `word_embeddings`.
-    #[pyo3(signature = (n=10, *, topic))]
-    fn topic_neighbors(&self, n: usize, topic: usize) -> PyResult<Vec<(String, f64)>> {
+    /// `topic` is the first argument, so `topic_neighbors(0, n=8)` reads naturally.
+    #[pyo3(signature = (topic, *, n=10))]
+    fn topic_neighbors(&self, topic: usize, n: usize) -> PyResult<Vec<(String, f64)>> {
         let m = self.fitted_model()?;
         if !self.has_word_vectors {
             return Err(PyRuntimeError::new_err(
