@@ -48,6 +48,7 @@ from .embedding import (
 )
 
 __citation__: str
+ENGLISH_STOPWORDS: frozenset[str]
 
 def one_hot(
     values: Sequence[object],

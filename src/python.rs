@@ -558,6 +558,19 @@ impl Corpus {
         self.inner.id_to_word.clone()
     }
 
+    /// The corpus as token lists — one list of word strings per document, in the
+    /// pruned vocabulary and the kept-document order. The inverse of
+    /// ``from_documents``: use it to recover tokens for ``prepare_pyldavis``,
+    /// ``coherence``, or any function that wants ``list[list[str]]`` after you have
+    /// committed to a ``Corpus``.
+    fn documents(&self) -> Vec<Vec<String>> {
+        self.inner
+            .docs
+            .iter()
+            .map(|d| d.iter().map(|&w| self.inner.id_to_word[w as usize].clone()).collect())
+            .collect()
+    }
+
     /// Original document indices that survived pruning, parallel to the rows of
     /// this corpus. Use it to realign an external covariate array or DataFrame
     /// to the documents the corpus actually kept: ``X = X[corpus.kept_indices]``.
@@ -4710,13 +4723,24 @@ fn window_cooccurrence(
 fn tokenize(
     text: &str,
     lowercase: bool,
-    stopwords: Option<Vec<String>>,
+    stopwords: Option<&Bound<'_, PyAny>>,
     token_regex: Option<String>,
     min_length: usize,
 ) -> PyResult<Vec<String>> {
     let pattern = token_regex.unwrap_or_else(|| corpus::DEFAULT_TOKEN_REGEX.to_string());
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let stop: HashSet<String> = stopwords.unwrap_or_default().into_iter().collect();
+    // Accept any iterable of strings (list, tuple, set, frozenset) so a
+    // `ENGLISH_STOPWORDS` frozenset can be passed directly.
+    let stop: HashSet<String> = match stopwords {
+        Some(obj) => {
+            let mut s = HashSet::new();
+            for item in obj.iter()? {
+                s.insert(item?.extract::<String>()?);
+            }
+            s
+        }
+        None => HashSet::new(),
+    };
 
     let mut out = Vec::new();
     for m in re.find_iter(text) {
@@ -6457,6 +6481,13 @@ impl Top2Vec {
         let model = py.allow_threads(move || {
             top2vec::fit_top2vec(&corpus.docs, &doc_emb, &word_vecs, num_types, nc, uu, nn, mcs, ms, seed)
         });
+        if model.num_topics == 0 {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "Top2Vec: clustering found no clusters (num_topics=0). Lower \
+                 min_cluster_size, add data, or check the scale of your embeddings.",
+            ))?;
+        }
         self.model = Some(model);
         self.fitted = true;
         Ok(())
@@ -6726,6 +6757,13 @@ impl BERTopic {
                 &corpus.docs, &doc_emb, num_types, nc, uu, nn, mcs, ms, nr, win, st, b25, rf, seed,
             )
         });
+        if model.num_topics == 0 {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "BERTopic: clustering found no clusters (num_topics=0). Lower \
+                 min_cluster_size, add data, or check the scale of your embeddings.",
+            ))?;
+        }
         self.model = Some(model);
         self.fitted = true;
         Ok(())
@@ -7568,6 +7606,31 @@ impl KeyATM {
         }
         let num_topics = self.num_topics;
         let num_types = corpus.num_types();
+        // Warn about keywords absent from the (pruned) vocabulary: a "seeded"
+        // topic whose keywords were all dropped was never actually seeded, and
+        // pruning (rm_top / min_doc_freq) or a typo/stemming mismatch silently
+        // causes it.
+        {
+            let vocab: HashSet<&str> = corpus.id_to_word.iter().map(|s| s.as_str()).collect();
+            let mut notes: Vec<String> = Vec::new();
+            for (name, words) in self.key_names.iter().zip(self.keywords.iter()) {
+                let oov: Vec<&str> =
+                    words.iter().map(|w| w.as_str()).filter(|w| !vocab.contains(w)).collect();
+                if !oov.is_empty() {
+                    notes.push(format!(
+                        "'{}' ({} of {} not in vocabulary, ignored: {})",
+                        name, oov.len(), words.len(), oov.join(", ")
+                    ));
+                }
+            }
+            if !notes.is_empty() {
+                let warnings = py.import_bound("warnings")?;
+                warnings.call_method1(
+                    "warn",
+                    (format!("KeyATM: some keywords were dropped — {}", notes.join("; ")),),
+                )?;
+            }
+        }
         let keys = seed_word_ids(&self.keywords, &corpus.id_to_word, num_topics);
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);

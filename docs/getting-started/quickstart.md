@@ -3,6 +3,20 @@
 Every model takes pre-tokenized documents, a `list[list[str]]` or a
 [`Corpus`](../guides/preprocessing.md), and returns NumPy arrays.
 
+## Starting from raw text
+
+`tokenize` lowercases and splits, but does **not** drop stopwords — so on real
+English text every topic collapses to `the`, `and`, `of`. Pass the bundled
+`ENGLISH_STOPWORDS` (or prune the most frequent terms) so topics carry meaning:
+
+```python
+import topica
+
+docs = [topica.tokenize(t, stopwords=topica.ENGLISH_STOPWORDS) for t in texts]
+# or let the corpus drop the most common terms:
+corpus = topica.Corpus.from_documents(docs, min_doc_freq=5, rm_top=15)
+```
+
 ## Fit a model
 
 ```python

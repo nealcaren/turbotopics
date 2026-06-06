@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence, Union, overload
+from typing import Any, Iterable, Optional, Sequence, Union, overload
 import numpy
 import numpy.typing
 
@@ -12,12 +12,13 @@ def tokenize(
     text: str,
     *,
     lowercase: bool = True,
-    stopwords: list[str] | None = None,
+    stopwords: Iterable[str] | None = None,
     token_regex: str | None = None,
     min_length: int = 1,
 ) -> list[str]:
     """Tokenize a string with the corpus loader's regex; lowercase, drop short
-    tokens and stopwords. Convenience for building list[list[str]] input."""
+    tokens and stopwords. `stopwords` is any iterable of strings (list, set, or
+    `topica.ENGLISH_STOPWORDS`). Convenience for building list[list[str]] input."""
     ...
 
 
@@ -96,6 +97,10 @@ class Corpus:
     @property
     def vocabulary(self) -> list[str]:
         """Ordered list of vocabulary terms."""
+        ...
+    def documents(self) -> list[list[str]]:
+        """The corpus as token lists (one per document), the inverse of
+        from_documents."""
         ...
 
     @property

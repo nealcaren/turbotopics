@@ -167,6 +167,7 @@ from .embedding import (  # noqa: E402
     load_embeddings,
 )
 from .preprocess import split_documents  # noqa: E402
+from .stopwords import ENGLISH_STOPWORDS  # noqa: E402
 from .phrases import learn_phrases, apply_phrases, Phrases  # noqa: E402
 from .frames import from_dataframe, align  # noqa: E402
 from .formulas import design_matrix  # noqa: E402
@@ -243,6 +244,7 @@ __all__ = [
     "save_embeddings",
     "load_embeddings",
     "split_documents",
+    "ENGLISH_STOPWORDS",
     "from_dataframe",
     "align",
     "design_matrix",

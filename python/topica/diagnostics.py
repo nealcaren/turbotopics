@@ -71,6 +71,12 @@ def label_topics(topic_word, vocabulary, *, n=10):
     ``score``, each a list of ``(word, value)`` pairs.
     """
     phi = np.asarray(topic_word, dtype=np.float64)
+    if phi.ndim != 2 or phi.shape[0] == 0:
+        raise ValueError(
+            "the model has no topics (empty topic_word). For BERTopic/Top2Vec this "
+            "means clustering found no clusters — lower min_cluster_size, add data, "
+            "or check the scale of your embeddings."
+        )
     K, V = phi.shape
     marginal = phi.mean(axis=0)
     marginal_safe = np.where(marginal > 0, marginal, 1e-12)
@@ -394,6 +400,10 @@ def prepare_pyldavis(model, docs, **kwargs):
     ``pyLDAvis.prepare`` later. Extra ``kwargs`` go to ``pyLDAvis.prepare``
     (e.g. ``sort_topics=False``).
     """
+    # Accept a Corpus directly (recover its token lists), so a corpus built via
+    # from_dataframe does not need re-tokenizing from the original text.
+    if hasattr(docs, "documents") and callable(getattr(docs, "documents")):
+        docs = docs.documents()
     phi = np.asarray(model.topic_word, dtype=np.float64)
     theta = np.asarray(model.doc_topic, dtype=np.float64)
     vocab = list(model.vocabulary)
