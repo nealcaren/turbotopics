@@ -40,13 +40,21 @@ def main():
     model = topica.FASTopic(num_topics=10, epochs=200, seed=1)
     model.fit(docs, doc_emb)
 
-    # 3. Name the topics with an LLM (pin temperature for stable labels).
-    backend = topica.llm_backend(LABEL_MODEL, temperature=0)
-    labels = topica.llm_topic_labels(model, texts, call=backend, set_labels=True)
-    for t, label in enumerate(labels):
-        print(f"{t:2d}  {label}")
+    # 3. Name the topics with an LLM (pin temperature for stable labels). This is
+    # the one step that needs a labeling model; skip it gracefully if none is set
+    # up, in which case the report keeps topica's default top-word labels.
+    try:
+        backend = topica.llm_backend(LABEL_MODEL, temperature=0)
+        labels = topica.llm_topic_labels(model, texts, call=backend, set_labels=True)
+        for t, label in enumerate(labels):
+            print(f"{t:2d}  {label}")
+    except Exception as e:
+        print(f"[skipping LLM labels: {e}]")
+        print("Top words per topic:")
+        for t in range(model.num_topics):
+            print(f"{t:2d}  " + " ".join(w for w, _ in model.top_words(6, topic=t)))
 
-    # 4. A one-figure report, with the LLM labels flowing into it.
+    # 4. A one-figure report (with LLM labels if step 3 ran, default labels if not).
     fig = topica.plot_report(model, texts=docs, timestamps=decade, n=6,
                              title="Du Bois's Crisis essays")
     fig.savefig(os.path.join(HERE, "crisis_report.png"), dpi=110, bbox_inches="tight")

@@ -84,8 +84,12 @@ labels = topica.llm_topic_labels(model, texts, call=backend, set_labels=True)
 topica.topic_label_prompts(model, texts)[1]   # inspect exactly what the model saw
 ```
 
-The deterministic descriptors (`label_topics`: FREX / probability / lift) remain
-the defensible naming for publication; the LLM labels are the readable shorthand.
+This step needs a labeling model available through `llm` (a local one via
+`llm-ollama`, or a hosted one with an API key); the output labels are whatever
+your model returns. The deterministic descriptors (`label_topics`: FREX /
+probability / lift) remain the defensible naming for publication; the LLM labels
+are the readable shorthand. With `set_labels=True` they replace the default labels
+everywhere, including the report below.
 
 ## 5. Report
 
@@ -99,6 +103,10 @@ fig.savefig("crisis_report.png", dpi=200)
 words, the coherence-vs-exclusivity quality plot, the topic correlation heatmap,
 and topic shares across the 1910s, 1920s, and 1930s.](../images/llm_workflow_report.png)
 
-The time panel reads as intellectual history: the Africa / Pan-African topic (1)
-and the economic-cooperation topic (4) climb steadily from the 1910s to the
-1930s, tracking the arc of Du Bois's later writing.
+The figure above is the actual output of steps 1–3 and 5 (MiniLM embeddings, the
+FASTopic fit, real top words). It shows topica's **default** topic labels — each
+topic's top words — because the rendered figure was built without a labeling
+model; run step 4 with your own model to swap in readable names. The time panel
+reads as intellectual history: the Africa / Pan-African topic (1) and the
+economic-cooperation topic (4) climb steadily from the 1910s to the 1930s,
+tracking the arc of Du Bois's later writing.
