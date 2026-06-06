@@ -1,0 +1,14 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.pdf
+
+# JSS assets fetched at build time (see README.md); jsslogo is a local placeholder
+jss.cls
+jss.bst
+jsslogo.jpg
+fig_*.pdf
