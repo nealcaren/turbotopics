@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-06
+
 ### Added
 
 - `topica.standard_errors(model, corpus, of=..., method=...)` — one entry point
