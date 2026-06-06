@@ -8,6 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `topica.mmr(model, word_embeddings, diversity=...)` — maximal-marginal-relevance
+  top words: rerank a topic's candidate words to cut redundant near-synonyms,
+  balancing `topic_word` relevance against word-embedding similarity (BERTopic's
+  `MaximalMarginalRelevance`). Accepts a model or a `(K, V)` matrix.
 - `save` / `load` for the embedding-cluster models (`BERTopic`, `Top2Vec`), so a
   discovered fit can be frozen and reloaded — the way to keep a good (stochastic)
   UMAP discovery fit, since the prediction phase is deterministic. The loaded

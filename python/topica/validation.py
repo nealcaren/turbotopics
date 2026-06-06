@@ -262,6 +262,65 @@ def frex(topic_word, vocabulary=None, *, w=0.5, n=10):
     return results
 
 
+def mmr(topic_word, word_embeddings, vocabulary=None, *, n=10, diversity=0.3, n_candidates=None):
+    """Maximal-marginal-relevance top words, to cut redundant near-synonyms.
+
+    For each topic, take the top ``n_candidates`` words by ``topic_word`` weight
+    and greedily reselect ``n`` of them, each pick maximizing
+
+        ``(1 - diversity) * relevance(word) - diversity * max_cos(word, picked)``
+
+    where relevance is the (per-topic, max-normalized) ``topic_word`` weight and the
+    redundancy term is the cosine between word embeddings. ``diversity=0`` returns
+    the plain top words; higher trades relevance for variety, like BERTopic's
+    ``MaximalMarginalRelevance(diversity=...)``.
+
+    Parameters
+    ----------
+    topic_word : a fitted model (uses its ``topic_word`` and ``vocabulary``) or a
+        ``(K, V)`` array, in which case pass ``vocabulary``.
+    word_embeddings : a ``(V, E)`` matrix aligned to the vocabulary — the word
+        vectors (for Top2Vec, the ones you fit with; otherwise embed the vocabulary
+        with your embedding model, as BERTopic's MMR does internally).
+    n : words returned per topic.
+    diversity : in ``[0, 1]``; 0 is the plain top words, higher is more diverse.
+    n_candidates : how many top words to rerank (default ``max(5 * n, n)``).
+
+    Returns
+    -------
+    A list per topic of ``(word, topic_word_weight)`` pairs, like ``top_words``.
+    """
+    if not 0.0 <= diversity <= 1.0:
+        raise ValueError("diversity must be in [0, 1]")
+    vocabulary = _vocabulary_of(topic_word, vocabulary)
+    phi = _as_topic_word(topic_word)
+    k, v = phi.shape
+    emb = np.asarray(word_embeddings, dtype=np.float64)
+    if emb.shape[0] != v:
+        raise ValueError(
+            f"word_embeddings has {emb.shape[0]} rows but the vocabulary has {v}"
+        )
+    embn = emb / np.clip(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12, None)
+    n_cand = n_candidates or max(5 * n, n)
+
+    out = []
+    for t in range(k):
+        cand = np.argsort(phi[t])[::-1][: min(n_cand, v)]
+        rel = phi[t, cand].astype(np.float64)
+        rel = rel / (rel.max() if rel.max() > 0 else 1.0)
+        sims = embn[cand] @ embn[cand].T  # candidate-candidate cosine
+        picked = [0]                       # seed with the most relevant word
+        rest = list(range(1, len(cand)))
+        while rest and len(picked) < n:
+            scores = [(1.0 - diversity) * rel[r] - diversity * sims[r, picked].max()
+                      for r in rest]
+            best = rest[int(np.argmax(scores))]
+            picked.append(best)
+            rest.remove(best)
+        out.append([(vocabulary[cand[i]], float(phi[t, cand[i]])) for i in picked])
+    return out
+
+
 def label_topics(topic_word, vocabulary=None, *, n=10):
     """stm-style topic labels: prob, FREX, lift, and score word lists per topic.
 
@@ -1114,6 +1173,7 @@ __all__ = [
     "diagnostics",
     "perplexity",
     "frex",
+    "mmr",
     "label_topics",
     "topic_correlation",
     "TopicCorrelation",

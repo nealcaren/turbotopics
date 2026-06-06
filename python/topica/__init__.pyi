@@ -137,6 +137,20 @@ def frex(topic_word: Any, vocabulary: Sequence[str] | None = None, *, w: float =
     ...
 
 
+def mmr(
+    topic_word: Any,
+    word_embeddings: Any,
+    vocabulary: Sequence[str] | None = None,
+    *,
+    n: int = 10,
+    diversity: float = 0.3,
+    n_candidates: int | None = None,
+) -> list:
+    """Maximal-marginal-relevance top words: rerank to cut near-synonyms using word
+    embeddings (BERTopic's MaximalMarginalRelevance). Accepts a model or a (K, V) array."""
+    ...
+
+
 def label_topics(topic_word: Any, vocabulary: Sequence[str] | None = None, *, n: int = 10) -> list[dict]:
     """Per-topic word lists with keys prob / frex / lift / score."""
     ...

@@ -33,6 +33,8 @@ and in the `topica.validation` module.
 
 ::: topica.frex
 
+::: topica.mmr
+
 ::: topica.relevance
 
 ::: topica.find_thoughts

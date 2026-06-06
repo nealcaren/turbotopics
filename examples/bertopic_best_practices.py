@@ -13,6 +13,7 @@ Run it (e.g. in Colab):
 
 What maps cleanly:
   - CountVectorizer(ngram_range, min_df)      -> topica.add_ngrams(docs, ...)
+  - MaximalMarginalRelevance(diversity)       -> topica.mmr(model, word_embeddings, ...)
   - UMAP + HDBSCAN + class-based TF-IDF      -> topica.BERTopic(reducer="umap", ...)
   - get_topic_info()                          -> topica.diagnostics(model, texts)
   - get_topic(i)                              -> model.top_words(n, topic=i)
@@ -29,9 +30,10 @@ Where topica differs, on purpose:
   - **Reproducibility.** UMAP has no random_state equivalent here; the discovery fit
     is stochastic (topica warns). The *prediction* phase (transform) is
     deterministic. Use reducer="pca" for a fully reproducible fit, or save the fit.
-  - **Representations.** Instead of KeyBERT / MMR / PartOfSpeech, topica reports FREX
-    (frequency-exclusivity) words — the defensible label for publication — and, with
-    the optional `topica[llm]` extra, LLM labels via topica.llm_topic_labels.
+  - **Representations.** topica reports FREX (frequency-exclusivity) words — the
+    defensible label for publication — plus topica.mmr for diversity-aware words and,
+    with the optional `topica[llm]` extra, LLM labels via topica.llm_topic_labels.
+    KeyBERTInspired / PartOfSpeech have no direct equivalent.
   - **Visualization.** topica ships a static composite figure, topica.plot_report,
     rather than the interactive plotly views.
 """
@@ -76,9 +78,15 @@ def main():
     # --- get_topic(1) -> top words of a topic ----------------------------
     print("topic 1:", [w for w, _ in topic_model.top_words(10, topic=1)])
 
-    # --- Representations: FREX (always) + optional LLM labels ------------
-    # FREX words are already a column in `table`. For LLM labels (the tutorial's
-    # OpenAI representation), with the topica[llm] extra:
+    # --- Representations --------------------------------------------------
+    # FREX words are already a column in `table`. The tutorial's MMR
+    # (MaximalMarginalRelevance) maps to topica.mmr: rerank to cut near-synonyms,
+    # using word embeddings (embed the vocabulary with the same model).
+    vocab = list(topic_model.vocabulary)
+    word_embeddings = embedding_model.encode(vocab)
+    diverse = topica.mmr(topic_model, word_embeddings, n=10, diversity=0.3)
+    print("topic 1 (MMR):", [w for w, _ in diverse[1]])
+    # For LLM labels (the tutorial's OpenAI representation), with the topica[llm] extra:
     #   topica.llm_topic_labels(topic_model, abstracts,
     #                           llm_model="gpt-4o-mini", set_labels=True)
 
