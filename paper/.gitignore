@@ -7,10 +7,9 @@
 *.toc
 *.pdf
 
-# JSS assets fetched at build time (see README.md); jsslogo is a local placeholder
+# JSS class/style fetched at build time (see README.md)
 jss.cls
 jss.bst
-jsslogo.jpg
 fig_*.pdf
 
 # arXiv submission tarball (regenerate with make_arxiv.sh)

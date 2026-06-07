@@ -1,31 +1,30 @@
 # paper/
 
-A JSS-style software paper introducing topica, targeting arXiv (cs.CL / stat.CO)
-as the preprint and the *Journal of Statistical Software* as the eventual home.
+A software paper introducing topica. **arXiv-first**: the manuscript is the
+`nojss` preprint (clean article look, no journal masthead), built with the JSS
+class for its formatting and bibliography style. A JSS journal submission, if we
+make one later, is the same source with the `nojss` option removed.
 
 ## Files
 
-- `topica.tex` — the manuscript (JSS `article` class).
-- `topica.bib` — BibTeX, grounded in `docs/citing.md`.
+- `topica.tex` — the manuscript (`\documentclass[article,nojss]{jss}`).
+- `topica.bib` — BibTeX, grounded in `docs/citing.md`, with DOIs.
+- `make_figures.py` — regenerates the worked-example figure.
+- `make_arxiv.sh` — assembles the self-contained arXiv tarball.
+- `ARXIV.md` — submission metadata (categories, license, abstract).
 
 ## Building
 
-The paper uses the JSS document class. Download `jss.cls`, `jss.bst`, and
-`jsslogo.jpg` from <https://www.jstatsoft.org/style> and place them in this
-directory, then:
+Needs `jss.cls` and `jss.bst` (no `jsslogo.jpg`, since `nojss` drops the logo).
+Download them from <https://www.jstatsoft.org/style>; arXiv's TeXLive also carries
+the `jss` package. Then:
 
 ```bash
 cd paper
-pdflatex topica
-bibtex topica
-pdflatex topica
-pdflatex topica
+pdflatex topica && bibtex topica && pdflatex topica && pdflatex topica
 ```
 
-If you do not have `jss.cls` to hand, swap the first line of `topica.tex` for
-`\documentclass{article}` plus `\usepackage{hyperref}` and define the JSS macros
-(`\pkg`, `\proglang`, `\code`, `\fct`, `\Abstract`, `\Keywords`, `\Address`,
-`CodeChunk`/`CodeInput`) as no-ops or simple wrappers for a quick proof build.
+To produce the arXiv submission tarball directly, run `bash make_arxiv.sh`.
 
 ## Status
 
@@ -51,8 +50,6 @@ Open TODOs before submission:
    before submission, especially the "partial" marks.
 2. **Polish pass** with the writing-editor levels (sentence/word) once the section
    order is final.
-3. **Real JSS logo.** `jsslogo.jpg` here is a local placeholder so the proof build
-   completes; fetch the real asset from the JSS style page for submission.
 
 ## Conventions
 

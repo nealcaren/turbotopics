@@ -9,8 +9,8 @@ bash paper/make_arxiv.sh                                                  # the 
 
 This produces `paper/arxiv-submission.tar.gz` containing exactly:
 
-- `topica.tex` — the manuscript, switched to `\documentclass[article,nojss]{jss}`
-  (preprint mode: no JSS masthead or logo, so no `jsslogo.jpg` is needed)
+- `topica.tex` — the manuscript (already `\documentclass[article,nojss]{jss}`:
+  preprint mode, no JSS masthead or logo, so no `jsslogo.jpg` is needed)
 - `topica.bbl` — the compiled bibliography, so arXiv does not run BibTeX
 - `jss.cls`, `jss.bst` — bundled so the build does not depend on arXiv carrying
   the `jss` package (it does, but bundling is belt-and-suspenders)
@@ -65,10 +65,9 @@ software, owns the theoretical decisions that make a topic-model study credible.
 
 ## Notes
 
-- The committed `topica.tex` keeps the full JSS class (`[article]{jss}`) for the
-  journal submission; `make_arxiv.sh` switches it to `nojss` only inside the tarball,
-  so the journal version is untouched.
-- For the eventual JSS submission (not arXiv), use the full-class build, which needs
-  the real `jsslogo.jpg` from https://www.jstatsoft.org/style.
+- The committed `topica.tex` is the arXiv-first preprint (`[article,nojss]{jss}`).
+  For an eventual JSS journal submission, remove the `nojss` option, which restores
+  the masthead and then needs the real `jsslogo.jpg` from
+  https://www.jstatsoft.org/style.
 - Before posting: re-verify Table 1 against current tool releases and consider a
   final read-through (the two open TODOs in `README.md`).

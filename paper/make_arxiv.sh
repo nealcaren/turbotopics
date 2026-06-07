@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Build a self-contained arXiv submission tarball for the topica paper.
-#
-#   1. Switches the document class to [article,nojss] (preprint look, no JSS
-#      masthead or logo, so jsslogo.jpg is not needed).
-#   2. Generates the .bbl and ships it, so arXiv does not need to run bibtex.
-#   3. Bundles jss.cls and jss.bst (arXiv's TeXLive has the jss package, but
+# topica.tex is already the [article,nojss] preprint (no masthead/logo), so this
+# just:
+#   1. Generates the .bbl and ships it, so arXiv does not need to run bibtex.
+#   2. Bundles jss.cls and jss.bst (arXiv's TeXLive has the jss package, but
 #      bundling guarantees the build) and the worked-example figure.
-#   4. Compiles the assembled submission in isolation to prove it is
+#   3. Compiles the assembled submission in isolation to prove it is
 #      self-contained, then tars it.
 #
 # Prereq: run `make_figures.py` first to produce fig_poliblog_effect.pdf.
@@ -32,11 +31,10 @@ JSS_BST="$(find_tex jss.bst)"
 [ -f "$HERE/fig_poliblog_effect.pdf" ] || {
   echo "ERROR: fig_poliblog_effect.pdf missing. Run: python paper/make_figures.py"; exit 1; }
 
-# --- build the .bbl from the nojss variant ----------------------------------
+# --- build the .bbl ---------------------------------------------------------
 BUILD="$STAGE/build"; mkdir -p "$BUILD"
-sed 's/\\documentclass\[article\]{jss}/\\documentclass[article,nojss]{jss}/' \
-  "$HERE/topica.tex" > "$BUILD/topica.tex"
-cp "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" "$HERE/fig_poliblog_effect.pdf" "$BUILD/"
+cp "$HERE/topica.tex" "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" \
+   "$HERE/fig_poliblog_effect.pdf" "$BUILD/"
 ( cd "$BUILD"
   export TEXINPUTS=".:" BSTINPUTS=".:" BIBINPUTS=".:"
   pdflatex -interaction=nonstopmode topica.tex >/dev/null
