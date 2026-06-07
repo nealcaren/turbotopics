@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-07
+
 ### Added
 
 - `topica.viz` — four more panels, continuing the toolkit's deferred roadmap:
@@ -88,6 +90,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - The document map no longer prints a `seed=` for UMAP/t-SNE (neither fit is
   reproducible), and the docs no longer claim the interactive browser links a
   heatmap click to the barchart (it is a dropdown).
+
+### Fixed
+
+- Input validation hardened against adversarial edge cases:
+  - Non-finite float hyperparameters (`NaN`/`Inf` for `beta`, `alpha`,
+    `prior_variance`, `chain_variance`, `eta`, `alpha_sum`, and the rest) are now
+    rejected at construction instead of silently producing a `NaN` fit.
+  - A corpus with no words — all documents empty, or everything pruned by frequency
+    filtering — is rejected at fit instead of yielding a degenerate `(K, 0)` model.
+  - `coherence` / `topic_diversity` raise a clear error on a non-integer `topn` or a
+    raw `topic_word` matrix, and `coherence` errors on an empty reference corpus
+    instead of returning `NaN`.
+  - `frex` rejects frequency weights outside `[0, 1]`.
+- `coherence` / `topic_diversity` now accept any object satisfying the analysis
+  contract (`topic_word` + `vocabulary`): top words are derived from the matrix when
+  the model exposes no `top_words` method.
 
 ## [0.10.0] - 2026-06-06
 
