@@ -415,11 +415,36 @@ effects = stm.estimate_effect(draws, X, feature_names=names, cluster=source_id)
 The model-agnostic \code{topica.standard\_errors} extends this to any model and is
 explicit about the kind of uncertainty it reports. For a clustering of embeddings,
 which has no posterior over $\theta$, it declines to report confidence intervals
-and says so, rather than returning a number that looks like one. The accompanying
-\code{topica.viz} toolkit, an honest successor to \pkg{LDAvis}
-\citep{sievert2014ldavis}, carries the same discipline into the figures: it draws
-confidence bands only where a posterior exists and labels each topic-word weight
-for what it is.
+and says so, rather than returning a number that looks like one.
+
+\subsection{Visualization and reporting}
+
+The same contract drives a visualization layer, \code{topica.viz}, that turns a
+fitted model into publication figures. A single call to \code{topica.plot\_report}
+(or the interactive \code{dashboard}) assembles a composite report from
+\code{topic\_word} and \code{doc\_topic} alone, so the same report renders for
+every model in the family; Figure~\ref{fig:report} shows it for the poliblog
+\code{STM}. The toolkit is built to be an \emph{honest} successor to \pkg{LDAvis}
+\citep{sievert2014ldavis}: it draws confidence bands only where a posterior
+exists, labels each topic-word weight for what it is, reports a closure-corrected
+topic correlation rather than the spuriously strong raw version, flags \emph{dead}
+and near-duplicate topics, and refuses panels a model cannot honestly support---a
+clustering of embeddings with no posterior over $\theta$ gets no uncertainty
+ribbons. Interactive views render through \pkg{Plotly}, and
+\code{topica.prepare\_pyldavis} still feeds the original \pkg{LDAvis} when wanted.
+
+\begin{figure}[t!]
+\centering
+\includegraphics[width=\textwidth]{fig_poliblog_report}
+\caption{The one-call report \code{topica.plot\_report(model, texts, groups)} for
+the poliblog structural topic model ($K = 15$): topics ordered by prevalence with
+FREX labels, the coherence--exclusivity quality frontier (point area is
+prevalence), the topic-correlation matrix, and topic prevalence by blog rating.
+Every panel reads from the shared \code{topic\_word}\,/\,\code{doc\_topic} surface,
+so the same report renders for any model in Table~\ref{tab:models}. Reproduced by
+\code{paper/replication.py}.}
+\label{fig:report}
+\end{figure}
 
 %% ===========================================================================
 \section{Validation against reference implementations}\label{sec:validation}

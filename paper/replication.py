@@ -139,6 +139,16 @@ def effect_figure(docs, conservative):
     panel.to_png(out)
     print(f"  wrote {out}")
 
+    # The one-call report: a composite figure off the shared contract that shows
+    # the reporting layer (topics-by-prevalence, coherence/exclusivity, the
+    # honest correlation, and prevalence by group).
+    report = topica.plot_report(model, texts=docs, groups=conservative.ravel(),
+                                n=8, figsize=(11, 7),
+                                title="topica report: poliblog STM (K=15)")
+    report_out = os.path.join(HERE, "fig_poliblog_report.pdf")
+    report.savefig(report_out, bbox_inches="tight")
+    print(f"  wrote {report_out}")
+
     df = panel.to_frame().sort_values("coef")
     print("\n  Per-topic effect of conservative rating on prevalence:")
     for _, r in df.iterrows():

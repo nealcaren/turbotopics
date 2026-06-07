@@ -29,13 +29,15 @@ find_tex() {
 JSS_CLS="$(find_tex jss.cls)"
 JSS_BST="$(find_tex jss.bst)"
 
-[ -f "$HERE/fig_poliblog_effect.pdf" ] || {
-  echo "ERROR: fig_poliblog_effect.pdf missing. Run: python paper/replication.py --quick"; exit 1; }
+for fig in fig_poliblog_effect.pdf fig_poliblog_report.pdf; do
+  [ -f "$HERE/$fig" ] || {
+    echo "ERROR: $fig missing. Run: python paper/replication.py --quick"; exit 1; }
+done
 
 # --- build the .bbl ---------------------------------------------------------
 BUILD="$STAGE/build"; mkdir -p "$BUILD"
 cp "$HERE/topica.tex" "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" \
-   "$HERE/fig_poliblog_effect.pdf" "$BUILD/"
+   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$BUILD/"
 ( cd "$BUILD"
   export TEXINPUTS=".:" BSTINPUTS=".:" BIBINPUTS=".:"
   pdflatex -interaction=nonstopmode topica.tex >/dev/null
@@ -46,7 +48,7 @@ cp "$HERE/topica.tex" "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" \
 # --- assemble the submission (tex + bbl + class/style + figure) -------------
 SUB="$STAGE/submission"; mkdir -p "$SUB"
 cp "$BUILD/topica.tex" "$BUILD/topica.bbl" "$JSS_CLS" "$JSS_BST" \
-   "$HERE/fig_poliblog_effect.pdf" "$SUB/"
+   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$SUB/"
 
 # --- prove it compiles in isolation (no .bib, bibtex not run) ---------------
 ( cd "$SUB"
@@ -57,7 +59,8 @@ if grep -qiE "Citation .* undefined|LaTeX Error|Undefined control" /tmp/arxiv_co
   echo "ERROR: isolated compile had problems; see /tmp/arxiv_compile.log"; exit 1
 fi
 
-tar czf "$OUT" -C "$SUB" topica.tex topica.bbl jss.cls jss.bst fig_poliblog_effect.pdf
+tar czf "$OUT" -C "$SUB" topica.tex topica.bbl jss.cls jss.bst \
+  fig_poliblog_effect.pdf fig_poliblog_report.pdf
 echo "wrote $OUT"
 echo "contents:"; tar tzf "$OUT" | sed 's/^/  /'
 echo "pages: $(pdfinfo "$SUB/topica.pdf" 2>/dev/null | awk '/Pages/{print $2}')"
