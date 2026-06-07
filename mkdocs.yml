@@ -53,6 +53,11 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.arithmatex:
       generic: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 plugins:
   - search
@@ -91,7 +96,7 @@ nav:
       - Embedding topics: guides/embedding.md
       - Held-out inference: guides/transform.md
   - Benchmarks: benchmarks.md
-  - Publishing in a journal:
+  - Best-practice workflow:
       - Overview: publishing/index.md
       - 1. Build a defensible corpus: publishing/corpus.md
       - 2. Pick the right model: publishing/choosing-model.md

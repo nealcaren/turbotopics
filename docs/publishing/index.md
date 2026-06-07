@@ -1,4 +1,4 @@
-# Publishing in a social science journal
+# A best-practice workflow for publishable topic models
 
 The rest of this site shows **what topica can do**. This section is about
 what you **should** do if you want a topic-modeling analysis to survive peer
