@@ -8,7 +8,8 @@
 #   3. Compiles the assembled submission in isolation to prove it is
 #      self-contained, then tars it.
 #
-# Prereq: run `make_figures.py` first to produce fig_poliblog_effect.pdf.
+# Prereq: run `replication.py` first to produce fig_poliblog_effect.pdf
+# (e.g. `python paper/replication.py --quick`).
 # Usage:  bash paper/make_arxiv.sh
 set -euo pipefail
 
@@ -29,7 +30,7 @@ JSS_CLS="$(find_tex jss.cls)"
 JSS_BST="$(find_tex jss.bst)"
 
 [ -f "$HERE/fig_poliblog_effect.pdf" ] || {
-  echo "ERROR: fig_poliblog_effect.pdf missing. Run: python paper/make_figures.py"; exit 1; }
+  echo "ERROR: fig_poliblog_effect.pdf missing. Run: python paper/replication.py --quick"; exit 1; }
 
 # --- build the .bbl ---------------------------------------------------------
 BUILD="$STAGE/build"; mkdir -p "$BUILD"

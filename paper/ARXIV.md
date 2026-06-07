@@ -3,8 +3,8 @@
 Build the self-contained tarball:
 
 ```bash
-VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python paper/make_figures.py  # the figure
-bash paper/make_arxiv.sh                                                  # the tarball
+VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python paper/replication.py --quick  # the figure
+bash paper/make_arxiv.sh                                                         # the tarball
 ```
 
 This produces `paper/arxiv-submission.tar.gz` containing exactly:
