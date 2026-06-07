@@ -61,7 +61,7 @@ Model-agnostic: they work on any fitted model's `topic_word`/`doc_topic`:
 - **Labeling:** `label_topics` (prob / FREX / lift / score), `frex`, `relevance`, `find_thoughts`, `topic_table`, `summary`
 - **Validation:** `word_intrusion`, `document_intrusion`, `bootstrap_stability`, `search_k`
 - **Comparison:** `fighting_words` (weighted log-odds) for contrasting corpora
-- **`stm` toolkit:** `estimate_effect` (method of composition, **cluster-robust SEs**, GLM links), `posterior_theta_samples`, `spline`, `interaction`, `one_hot`, `topic_correlation`
+- **Covariate effects:** `estimate_effect` (method of composition, **cluster-robust SEs**, GLM links), `topic_correlation`, and the design helpers `spline` / `interaction` / `one_hot` (an `stm`-style API); `posterior_theta_samples` draws θ for the logistic-normal models (STM/CTM)
 - **Preprocessing:** `tokenize`, `learn_phrases` / `apply_phrases`, `split_documents`, the `Corpus` class
 
 See [diagnostics](https://nealcaren.github.io/topica/guides/diagnostics/) and [covariate effects](https://nealcaren.github.io/topica/guides/covariates/).
