@@ -68,13 +68,13 @@ See [diagnostics](https://nealcaren.github.io/topica/guides/diagnostics/) and [c
 
 ## Performance
 
-topica runs on a parallel Rust core. With multithreading it fits the standard models 2 to 11 times faster than the reference R and Java implementations, and it matches MALLET's hand-tuned Java sampler core for core. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
+topica runs on a parallel Rust core. It is several times faster than R `stm` — the single-threaded field standard — for the structural and other variational models, and it matches the hand-tuned compiled samplers core for core: parity with Java MALLET on plain LDA and with the C++ `keyATM` on keyword models. On the political-blog corpus (2,000 documents, fit time only, same iterations on both sides):
 
 | Model | Reference | topica speedup |
 |-------|-----------|----------------|
-| STM | R `stm` | **11×** |
-| LDA | Java MALLET | parity single-threaded, **2.5×** multithreaded |
-| keyATM | R `keyATM` | parity single-threaded, **2×** multithreaded |
+| STM | R `stm` | **3–6× single-threaded, ~10–22× multithreaded** |
+| LDA | Java MALLET | parity single-threaded, **~2×** multithreaded |
+| keyATM | R `keyATM` | parity single-threaded, **~2×** multithreaded |
 
 Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
 
@@ -93,7 +93,7 @@ Requires `numpy >= 1.21`. Use `--release` (the debug build is much slower).
 
 Topica stands on a generation of open topic-modeling research and code. Each entry below lists the reference, its authors and year, and the topica class(es) it underlies; the other models are Rust ports or reimplementations, validated against these reference implementations.
 
-- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) (Apache-2.0) and reproduces MALLET's `train` output bit-for-bit
+- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) (Apache-2.0), reproducing its `train` CLI byte-for-byte; against Java MALLET (a different RNG) it recovers the same topics (cosine 1.000)
 - [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley, 2019) — `STM`, `CTM`, `SAGE`: variational EM, `estimateEffect`, `searchK`, FREX, spectral initialization, and the method of composition
 - [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab, 2006–2007) — `CTM`, `DTM`, `HDP`: the CTM, Dynamic Topic Model, and HDP samplers
 - [**gensim**](https://github.com/piskvorky/gensim) (Řehůřek & Sojka, 2010) — `DTM`: coherence measures and the `LdaSeqModel` DTM reference

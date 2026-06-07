@@ -47,9 +47,11 @@ RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single core
 
 ## LDA: MALLET's algorithm without the JVM
 
-topica's LDA is MALLET's SparseLDA collapsed-Gibbs sampler, reproduced
-bit-for-bit (it matches MALLET's `train` output exactly). Against R, JVM MALLET,
-and pure-Python gensim, that is a large speedup with no JVM startup.
+topica's LDA binds RustMallet, David Mimno's Rust port of MALLET's SparseLDA
+collapsed-Gibbs sampler, and reproduces its `train` CLI byte-for-byte; against
+Java MALLET (a different RNG) it recovers the same topics (cosine 1.000). On fit
+time it is roughly at parity with Java MALLET — and adds no JVM startup, unlike
+the JVM samplers or pure-Python gensim.
 
 Against [tomotopy](https://github.com/bab2min/tomotopy), a C++/SIMD library in
 the same performance tier, plain LDA is a wash, and which one wins depends on
