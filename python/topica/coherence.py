@@ -41,12 +41,28 @@ _VALID = ("u_mass", "c_uci", "c_npmi", "c_v")
 def _extract_topics(topics, topn):
     """Normalize `topics` to a list of word lists, truncated to `topn`.
 
-    Accepts a fitted model (its ``top_words(topn)`` is read), a list of word
+    Accepts a fitted model (its ``top_words(topn)`` is read; if absent, the top
+    words are derived from ``topic_word`` + ``vocabulary``), a list of word
     lists, or a list of ``(word, prob)`` lists.
     """
     if hasattr(topics, "top_words") and not isinstance(topics, (list, tuple)):
         rows = topics.top_words(topn)
         return [[w for w, _ in row] for row in rows]
+    # A model exposing the analysis contract (topic_word + vocabulary) but no
+    # top_words: derive the top words from the matrix, so any conforming model
+    # works with coherence/topic_diversity.
+    if (hasattr(topics, "topic_word") and hasattr(topics, "vocabulary")
+            and not isinstance(topics, (list, tuple, np.ndarray))):
+        phi = np.asarray(topics.topic_word, dtype=np.float64)
+        vocab = list(topics.vocabulary)
+        n = topn or phi.shape[1]
+        return [[vocab[i] for i in np.argsort(row)[::-1][:n]] for row in phi]
+    if isinstance(topics, np.ndarray):
+        raise ValueError(
+            "topics must be a fitted model or a list of word lists, not a raw "
+            "topic_word matrix; for a (K, V) matrix pass it through "
+            "label_topics(topic_word, vocabulary) or frex(topic_word, vocabulary) first."
+        )
     out = []
     for row in topics:
         words = [item[0] if isinstance(item, (tuple, list)) else item for item in row]
@@ -305,6 +321,10 @@ def coherence(topics, texts, *, coherence_type="c_v", topn=10, window_size=None,
     ct = coherence_type.lower()
     if ct not in _VALID:
         raise ValueError(f"coherence_type must be one of {_VALID}, got {coherence_type!r}")
+    if not isinstance(topn, (int, np.integer)) or topn < 1:
+        raise ValueError(f"topn must be a positive integer, got {topn!r}")
+    if len(texts) == 0:
+        raise ValueError("texts is empty; pass the reference corpus as list[list[str]]")
     tops = _extract_topics(topics, topn)
     texts = [list(d) for d in texts]
     relevant = sorted({w for t in tops for w in t})
@@ -331,6 +351,8 @@ def topic_diversity(topics, topn=25):
 
     `topics` is a fitted model or a list of word lists.
     """
+    if not isinstance(topn, (int, np.integer)) or topn < 1:
+        raise ValueError(f"topn must be a positive integer, got {topn!r}")
     tops = _extract_topics(topics, topn)
     seen = set()
     total = 0

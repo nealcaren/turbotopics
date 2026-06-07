@@ -244,6 +244,10 @@ def frex(topic_word, vocabulary=None, *, w=0.5, n=10):
     `topic_word` is a fitted model (uses its ``topic_word`` and ``vocabulary``)
     or a ``(K, V)`` array, in which case pass ``vocabulary``.
     """
+    if not (0.0 <= w <= 1.0):
+        raise ValueError(f"w (frequency weight) must be in [0, 1], got {w!r}")
+    if not isinstance(n, (int, np.integer)) or n < 1:
+        raise ValueError(f"n must be a positive integer, got {n!r}")
     vocabulary = _vocabulary_of(topic_word, vocabulary)
     phi = _as_topic_word(topic_word)
     K, V = phi.shape

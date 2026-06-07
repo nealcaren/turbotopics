@@ -103,3 +103,29 @@ class TestDiversity:
         m.fit(docs, iterations=300)
         d = topica.topic_diversity(m, topn=3)
         assert 0.0 < d <= 1.0
+
+
+class TestAnalysisContract:
+    """Any object exposing the analysis contract -- ``topic_word`` /
+    ``doc_topic`` / ``vocabulary`` -- works with the model-agnostic diagnostics,
+    even without a ``top_words`` method. This pins the extensibility guarantee:
+    a foreign model that presents the two matrices inherits the stack for free.
+    """
+
+    def test_duck_typed_model_works_without_top_words(self):
+        docs = [["cat", "dog", "pet"]] * 30 + [["star", "moon", "sky"]] * 30
+        m = LDA(num_topics=2, seed=1)
+        m.fit(docs, iterations=300)
+
+        class Contract:  # the four members, NO top_words
+            topic_word = m.topic_word
+            doc_topic = m.doc_topic
+            vocabulary = m.vocabulary
+
+        c = Contract()
+        # coherence / topic_diversity derive top words from topic_word + vocabulary
+        np.testing.assert_allclose(
+            topica.coherence(c, docs), topica.coherence(m, docs)
+        )
+        assert topica.topic_diversity(c) == topica.topic_diversity(m)
+        np.testing.assert_allclose(topica.exclusivity(c), topica.exclusivity(m))
