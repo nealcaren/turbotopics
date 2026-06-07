@@ -3,15 +3,15 @@
 A **term barchart** (top words with named weighting modes, gated by the model's
 capability descriptor) and a **seriated topic-similarity heatmap** (K x K, ordered
 by hierarchical clustering) -- all pairwise relationships at full fidelity, with no
-spurious 2-D metric plane. The interactive build links the two: click a topic in
-the heatmap and the barchart follows.
+spurious 2-D metric plane. The interactive build pairs the two: the seriated heatmap
+for the overview and a dropdown to pick a topic and read its top words.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from .base import Panel, _require
+from .base import SEQ_CMAP, Panel, _require
 from .capability import capabilities
 
 _DARK = "#4C72B0"
@@ -20,7 +20,14 @@ _LIGHT = "#C7D3E8"
 
 def _topic_word(model):
     from ..coherence import _as_topic_word
-    return _as_topic_word(model)
+    phi = _as_topic_word(model)
+    if phi.ndim == 3:
+        # A content-covariate model (SAGE) exposes a (K, G, V) per-group array; the
+        # group-agnostic panels use the group-averaged marginal. (The per-group
+        # wording lives in the dedicated content_covariate panel.)
+        marg = getattr(model, "topic_word_marginal", None)
+        phi = np.asarray(marg, dtype=np.float64) if marg is not None else phi.mean(axis=1)
+    return phi
 
 
 def _scored_words(model, topic, mode, n, cap):
@@ -32,22 +39,25 @@ def _scored_words(model, topic, mode, n, cap):
             f"mode={mode!r} is not valid for {cap.name} (its topic_word is "
             f"{cap.word_weight_label}); available modes: {cap.word_modes}"
         )
+    # Use the 2-D (marginal) topic-word everywhere, so a content model's 3-D
+    # topic_word (SAGE) does not reach frex/relevance/label_topics, which assume
+    # (K, V). _topic_word collapses to the group-averaged marginal.
     phi = _topic_word(model)
     vocab = list(model.vocabulary)
     if mode == "prob":
         idx = np.argsort(phi[topic])[::-1][:n]
         return [(vocab[i], float(phi[topic, i])) for i in idx]
     if mode == "frex":
-        return frex(model, n=n)[topic]
+        return frex(phi, vocab, n=n)[topic]
     if mode == "relevance":
-        return relevance(model, topic=topic, n=n)
+        return relevance(phi, vocab, topic=topic, n=n)
     if mode == "lift":
         marg = np.clip(phi.mean(axis=0), 1e-12, None)
         lift = phi[topic] / marg
         idx = np.argsort(lift)[::-1][:n]
         return [(vocab[i], float(lift[i])) for i in idx]
     if mode == "score":
-        return label_topics(model, n=n)[topic]["score"]
+        return label_topics(phi, vocab, n=n)[topic]["score"]
     raise ValueError(f"unknown mode {mode!r}")
 
 
@@ -191,67 +201,64 @@ class TopicSimilarity(Panel):
         k = len(order)
         sim = (1.0 - self._dist)[np.ix_(order, order)]
         ax = fig.subplots()
-        im = ax.imshow(sim, cmap="viridis", vmin=sim.min(), vmax=1.0)
+        # Anchor the scale at 0 so color encodes the absolute similarity level: an
+        # all-0.9 block must read as uniformly high, not get contrast-stretched.
+        im = ax.imshow(sim, cmap=SEQ_CMAP, vmin=0.0, vmax=1.0)
         ax.set_xticks(range(k))
         ax.set_yticks(range(k))
         ax.set_xticklabels([str(t) for t in order], fontsize=7, rotation=90)
         ax.set_yticklabels([str(t) for t in order], fontsize=7)
         ax.set_title(f"{self.title} (1 − {self.metric}, seriated)", fontsize=10)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="similarity")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=f"1 − {self.metric}")
 
 
 def term_topic_browser(model, *, n=10, mode="prob"):
-    """An interactive (Altair) linked term browser + topic-similarity heatmap:
-    click a topic in the heatmap and the term barchart follows. Returns an Altair
-    chart; ``.save("page.html")`` writes a self-contained page. Needs
-    ``topica[viz-interactive]``."""
-    alt = _require("altair", "viz-interactive")
-    import pandas as pd
+    """An interactive (Plotly) term browser + topic-similarity heatmap: the seriated
+    K x K heatmap for the overview, and a dropdown to pick a topic and read its top
+    words. Returns a Plotly ``Figure``; ``.write_html("page.html")`` (or this
+    function's ``.to_html``) writes a self-contained page. Needs
+    ``topica[viz]``."""
+    go = _require("plotly.graph_objects", "viz")
+    from plotly.subplots import make_subplots
 
     cap = capabilities(model)
     sim_panel = TopicSimilarity(model)
     order = sim_panel._order
-    sim = 1.0 - sim_panel._dist
+    sim = (1.0 - sim_panel._dist)[np.ix_(order, order)]
+    tick = [str(t) for t in order]
 
-    sim_rows = [
-        {"i": int(a), "j": int(b), "similarity": float(sim[a, b]),
-         "i_ord": order.index(a), "j_ord": order.index(b)}
-        for a in order for b in order
-    ]
-    sim_df = pd.DataFrame(sim_rows)
+    topics = list(range(_topic_word(model).shape[0]))
+    weight_label = cap.word_weight_label if mode == "prob" else mode
 
-    term_rows = []
-    for t in range(_topic_word(model).shape[0]):
-        for rank, (w, val) in enumerate(_scored_words(model, t, mode, n, cap)):
-            term_rows.append({"topic": int(t), "word": w, "weight": float(val), "rank": rank})
-    term_df = pd.DataFrame(term_rows)
-
-    sel = alt.selection_point(fields=["i"], value=int(order[0]), on="click", empty=False)
-    heat = (
-        alt.Chart(sim_df, title="Topic similarity (click a row)")
-        .mark_rect()
-        .encode(
-            x=alt.X("i_ord:O", title="topic", axis=alt.Axis(labelExpr="")),
-            y=alt.Y("j_ord:O", title="topic", axis=alt.Axis(labelExpr="")),
-            color=alt.Color("similarity:Q", scale=alt.Scale(scheme="viridis")),
-            tooltip=["i", "j", alt.Tooltip("similarity:Q", format=".2f")],
-            opacity=alt.condition(sel, alt.value(1.0), alt.value(0.65)),
+    fig = make_subplots(
+        rows=1, cols=2, column_widths=[0.55, 0.45], horizontal_spacing=0.12,
+        subplot_titles=("Topic similarity (seriated)", f"Top words ({mode})"),
+    )
+    fig.add_trace(
+        go.Heatmap(z=sim, x=tick, y=tick, colorscale="Viridis", colorbar=dict(title="sim", x=0.46)),
+        row=1, col=1,
+    )
+    # One horizontal bar trace per topic; the dropdown toggles which is visible.
+    for t in topics:
+        words = _scored_words(model, t, mode, n, cap)
+        ws = [w for w, _ in words][::-1]
+        vs = [v for _, v in words][::-1]
+        fig.add_trace(
+            go.Bar(x=vs, y=ws, orientation="h", marker_color=_DARK,
+                   visible=(t == topics[0]), name=f"topic {t}", showlegend=False),
+            row=1, col=2,
         )
-        .add_params(sel)
-        .properties(width=320, height=320)
+    buttons = []
+    for i, t in enumerate(topics):
+        vis = [True] + [j == i for j in range(len(topics))]  # heatmap + the chosen bar
+        buttons.append(dict(label=f"topic {t}", method="update", args=[{"visible": vis}]))
+    fig.update_layout(
+        title=f"{cap.name}: topics and their words",
+        updatemenus=[dict(buttons=buttons, x=1.0, xanchor="right", y=1.16, yanchor="top",
+                          showactive=True)],
+        height=420, width=820, bargap=0.25,
     )
-    bars = (
-        alt.Chart(term_df, title=f"Top words ({mode})")
-        .mark_bar(color=_DARK)
-        .encode(
-            x=alt.X("weight:Q", title=cap.word_weight_label if mode == "prob" else mode),
-            y=alt.Y("word:N", sort=alt.EncodingSortField(field="weight", order="descending"),
-                    title=None),
-            tooltip=["word", alt.Tooltip("weight:Q", format=".4f")],
-        )
-        .transform_filter(sel)
-        .properties(width=260, height=320)
-    )
-    return alt.hconcat(heat, bars).resolve_scale(y="independent").properties(
-        title=f"{cap.name}: topics and their words"
-    )
+    fig.update_xaxes(title_text="topic", row=1, col=1)
+    fig.update_yaxes(title_text="topic", autorange="reversed", row=1, col=1)
+    fig.update_xaxes(title_text=weight_label, row=1, col=2)
+    return fig

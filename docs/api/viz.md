@@ -18,4 +18,18 @@ descriptor. See the [Visualization guide](../guides/visualization.md).
 
 ::: topica.viz.topic_similarity
 
+::: topica.viz.topic_health
+
+::: topica.viz.prevalence_heatmap
+
+::: topica.viz.topics_over_time
+
+::: topica.viz.topic_correlation
+
+::: topica.viz.document_map
+
+::: topica.viz.document_inspector
+
+::: topica.viz.content_covariate
+
 ::: topica.viz.term_topic_browser

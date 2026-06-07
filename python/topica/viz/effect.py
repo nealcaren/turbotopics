@@ -121,8 +121,12 @@ class EffectPlot(Panel):
         k = len(df)
         ax = fig.subplots()
         y = np.arange(k)
+        # A single neutral color: position relative to the zero line already encodes
+        # sign, so recoloring by sign would be redundant, colorblind-fragile, and
+        # (for political-text results) value-laden. Reliability is what we encode:
+        # a solid marker + band for reliable estimates, an open marker for ghosted.
+        color = "#4C72B0"
         for i, (_, r) in enumerate(df.iterrows()):
-            color = "#C44E52" if r["coef"] >= 0 else "#4C72B0"
             draw_band = self.has_ci and r["reliable"]
             if draw_band:
                 ax.plot([r["ci_low"], r["ci_high"]], [i, i], color=color, lw=2.2, alpha=0.85,

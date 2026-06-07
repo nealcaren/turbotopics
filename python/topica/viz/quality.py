@@ -52,9 +52,18 @@ class CoherenceFrontier(Panel):
 
         df = self.to_frame()
         ax = fig.subplots()
-        sizes = 40 + 360 * (df["prevalence"] / max(df["prevalence"].max(), 1e-9))
+        pmax = max(df["prevalence"].max(), 1e-9)
+        size_of = lambda frac: 40 + 360 * frac
+        sizes = size_of(df["prevalence"] / pmax)
         ax.scatter(df["coherence"], df["exclusivity"], s=sizes,
                    color="#4C72B0", alpha=0.75, edgecolor="white", linewidth=0.6)
+        # A size legend so "size ∝ prevalence" is readable, not just asserted.
+        handles = [ax.scatter([], [], s=size_of(f), color="#4C72B0", alpha=0.6,
+                              edgecolor="white", linewidth=0.6, label=f"{f * pmax:.2g}")
+                   for f in (0.25, 0.5, 1.0)]
+        ax.legend(handles=handles, title="prevalence", fontsize=6, title_fontsize=7,
+                  loc="lower right", labelspacing=1.4, borderpad=0.9, frameon=True,
+                  handletextpad=1.0)
         for _, r in df.iterrows():
             ax.annotate(str(int(r["topic"])), (r["coherence"], r["exclusivity"]),
                         fontsize=7, ha="center", va="center", color="white")
@@ -89,26 +98,29 @@ class SearchK(Panel):
 
         return pd.DataFrame(self._rows)
 
+    def _metrics(self, df):
+        """The metric rows to facet: (column, label, marker), perplexity only if present."""
+        rows = [("coherence", "coherence (higher better)", "-o"),
+                ("exclusivity", "exclusivity (higher better)", "-s")]
+        if "perplexity" in df.columns and df["perplexity"].notna().any():
+            rows.append(("perplexity", "held-out perplexity (lower better)", "-^"))
+        return rows
+
     def _figsize(self):
-        return (6.5, 4.5)
+        n = len(self._metrics(self.to_frame()))
+        return (6.0, 1.6 * n + 0.6)
 
     def _draw(self, fig):
+        # Faceted small multiples sharing the K axis, one metric per panel: a triple
+        # twin-y axis can't be read (three arbitrary scales, one gridline set).
         df = self.to_frame().sort_values("k")
-        ax = fig.subplots()
-        ax.plot(df["k"], df["coherence"], "-o", color="#4C72B0", label="coherence")
-        ax.set_xlabel("K (number of topics)")
-        ax.set_ylabel("coherence", color="#4C72B0")
-        ax.tick_params(axis="y", labelcolor="#4C72B0")
-        ax2 = ax.twinx()
-        ax2.plot(df["k"], df["exclusivity"], "-s", color="#C44E52", label="exclusivity")
-        ax2.set_ylabel("exclusivity", color="#C44E52")
-        ax2.tick_params(axis="y", labelcolor="#C44E52")
-        if "perplexity" in df.columns and df["perplexity"].notna().any():
-            ax3 = ax.twinx()
-            ax3.spines["right"].set_position(("axes", 1.12))
-            ax3.plot(df["k"], df["perplexity"], "-^", color="#55A868", label="perplexity")
-            ax3.set_ylabel("held-out perplexity", color="#55A868")
-            ax3.tick_params(axis="y", labelcolor="#55A868")
+        metrics = self._metrics(df)
+        axes = fig.subplots(len(metrics), 1, sharex=True, squeeze=False)[:, 0]
+        for ax, (col, label, marker) in zip(axes, metrics):
+            ax.plot(df["k"], df[col], marker, color="#4C72B0")
+            ax.set_ylabel(label, fontsize=8)
+            ax.tick_params(labelsize=7)
+            ax.grid(True, alpha=0.3)
+        axes[-1].set_xlabel("K (number of topics)")
         metric = self._rows[0].get("coherence_metric", "u_mass")
-        ax.set_title(f"{self.title} (coherence = {metric}; higher coherence/exclusivity, lower perplexity)",
-                     fontsize=10)
+        axes[0].set_title(f"{self.title} (coherence = {metric})", fontsize=10)

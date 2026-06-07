@@ -27,6 +27,7 @@ from ._topica import (
     HLDA,
     Corpus,
     tokenize,
+    project,
     DEFAULT_TOKEN_REGEX,
     __version__,
 )
@@ -210,6 +211,7 @@ __all__ = [
     "HLDA",
     "Corpus",
     "tokenize",
+    "project",
     "one_hot",
     "stm",
     "keyatm",

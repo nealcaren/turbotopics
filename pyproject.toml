@@ -41,12 +41,15 @@ polars = ["polars>=0.20"]
 # local, torch-free path runs through ollama (both chat and embedding models).
 # Local sentence-transformer embeddings additionally need `llm-sentence-transformers`.
 llm = ["llm>=0.13", "llm-ollama"]
-# Static publication figures (topica.viz). pandas backs every panel's .to_frame();
-# scipy seriates the topic-similarity heatmap (it degrades gracefully if absent).
-viz = ["matplotlib>=3.4", "pandas>=1.3", "scipy>=1.7"]
-# The interactive subset (topica.viz term/heatmap browser, dashboard .to_html()).
-viz-interactive = ["altair>=5"]
-test = ["pytest>=7", "pandas>=1.3", "formulaic>=0.6", "matplotlib>=3.4", "scipy>=1.7", "altair>=5"]
+# The visualization toolkit (topica.viz), static and interactive in one extra:
+# matplotlib for .to_png(), pandas for every panel's .to_frame(), scipy to seriate
+# the similarity heatmap (degrades gracefully if absent), and plotly (WebGL) as the
+# single interactive .to_html() backend.
+viz = ["matplotlib>=3.4", "pandas>=1.3", "scipy>=1.7", "plotly>=5"]
+# Everything, for a one-shot install.
+all = ["formulaic>=0.6", "pandas>=1.3", "polars>=0.20", "llm>=0.13", "llm-ollama",
+       "matplotlib>=3.4", "scipy>=1.7", "plotly>=5"]
+test = ["pytest>=7", "pandas>=1.3", "formulaic>=0.6", "matplotlib>=3.4", "scipy>=1.7", "plotly>=5"]
 
 [tool.maturin]
 # Mixed Rust/Python layout: pure-Python wrapper in python/, compiled ext as topica._topica.

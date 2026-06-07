@@ -6,6 +6,89 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `topica.viz` — four more panels, continuing the toolkit's deferred roadmap:
+  - `topic_health` — flags **dead** topics (expected mass share below
+    `min_mass_frac`) and **near-duplicate** topics (φ-cosine above `dup_threshold`),
+    off the same `topic_sizes` / topic-word surfaces the rest of the toolkit uses.
+    Essential for honest reporting and for HDP, which returns many near-zero-mass
+    topics by construction.
+  - `prevalence_heatmap` — a groups × topics heatmap of mean topic prevalence
+    (`by_strata`), with method-of-composition intervals in `.to_frame()` when a
+    corpus and `nsims` are given.
+  - `topics_over_time` — per-topic prevalence trajectories as small multiples (the
+    readable replacement for a streamgraph), with optional method-of-composition CI
+    ribbons.
+  - `topic_correlation` — the honest, closure-corrected correlation layer
+    (`clr` / `partial` / η-space `eta` / labeled-biased `raw`), drawn as a
+    zero-centered diverging heatmap; refused for hard/degenerate-θ cluster models.
+  - `dashboard()` now assembles these by introspection: topic-health always, the
+    group heatmap with `groups=`, the time small-multiples with `timestamps=`, and
+    the correlation layer for soft-θ models.
+- `topica.project(data, n_components=2, method=...)` — a numpy-native projection
+  primitive backed by topica's own Rust core: `"pca"` (default, deterministic,
+  distance-faithful), `"umap"` (`umap-rs`), or `"tsne"` (new **`bhtsne`** Barnes-Hut
+  reducer, pure Rust). UMAP and t-SNE warn that they are non-metric and not
+  reproducible. No Python UMAP/sklearn dependency.
+- `topica.viz.document_map` — the deferred 4th panel: a 2-D projection of the
+  *document* cloud (a supplement figure). Coordinates come from the document
+  embeddings you pass, or, for a count/soft-θ model, the clr-transformed θ simplex;
+  a hard-θ cluster model with no embeddings is refused. PCA reports variance
+  explained; UMAP/t-SNE carry the non-metric caveat and the seed. Density via alpha
+  clouds / hexbin (never convex hulls), Okabe–Ito palette for small K else
+  gray-all + `highlight_topic=`, a separate `-1` outlier layer, and stratified
+  subsampling with a "showing N of D" badge. `dashboard(..., doc_embeddings=)` adds
+  it.
+- `topica.viz.document_inspector` — read one document the way the model read it: its
+  θ mixture, its words shaded by attributed topic (`argmax_t p(t | w, d)` from θ and
+  φ, so it needs no per-token assignments), and the `find_thoughts` neighbors of its
+  dominant topic. Refused for hard/degenerate-θ cluster models.
+- `topica.viz.content_covariate` — for an STM/SAGE content model, one topic's wording
+  across covariate groups as a words × groups `p(w | topic, group)` heatmap (the
+  union of each group's top words), surfacing the per-group distribution instead of a
+  reference snapshot. `.contrast(...)` wraps the model's `word_contrast`. Refused for
+  a model fit without a content covariate.
+- `dashboard()` adds the content-wording panel for content models, and the inspector
+  when `inspect_doc=` is given. The generic panels now collapse a content model's
+  per-group (K, G, V) topic-word to its marginal, and the dashboard assembles every
+  panel best-effort (a model that cannot support one is skipped, not fatal).
+
+### Changed
+
+- The interactive (`.to_html()`) backend is now **Plotly only**; the Altair
+  dependency is dropped. `term_topic_browser` (a seriated heatmap plus a topic
+  dropdown) and the dashboard report render with Plotly (WebGL), the same stack as
+  the document map.
+- Packaging simplified: the static `viz` and interactive `viz-interactive` extras
+  are **merged into one `viz` extra** (matplotlib, pandas, scipy, plotly), and a new
+  **`all`** extra installs everything in one shot. The base install stays
+  `numpy`-only.
+- `viz` design polish (from two independent expert reviews): the topic-similarity
+  heatmap anchors its color scale at 0 (no contrast-stretch) and labels the colorbar
+  `1 − <metric>`; the covariate effect plot drops sign-coded red/blue for a single
+  neutral color (position already encodes sign); heatmaps share `SEQ`/`DIV` colormap
+  constants; the coherence frontier gains a prevalence size legend; `topics_over_time`
+  shares its y-axis by default; `search_k` is faceted (one metric per panel) instead
+  of a triple twin-axis.
+
+### Fixed
+
+- CTM/STM expose `topic_covariance` (the fitted logistic-normal prior Σ over η,
+  shape (K−1, K−1)), and `viz.topic_correlation(model, method="eta")` now uses it —
+  the model's own covariance rather than an empirical re-correlation of η posterior
+  means, which it had been mislabeling as "the model's covariance."
+- `viz.term_barchart` FREX / relevance / score modes no longer crash on a SAGE
+  content model (they now route through the group-averaged marginal, as `prob`/`lift`
+  already did); the descriptor advertised these modes but they raised.
+- `viz.dashboard` records skipped panels in `.skipped` and warns, instead of
+  silently swallowing every failure (so a real error is visible, not indistinguishable
+  from "not applicable").
+- `find_thoughts` uses `argpartition` for the top-n (O(D)) rather than a full sort.
+- The document map no longer prints a `seed=` for UMAP/t-SNE (neither fit is
+  reproducible), and the docs no longer claim the interactive browser links a
+  heatmap click to the barchart (it is a dropdown).
+
 ## [0.10.0] - 2026-06-06
 
 ### Added

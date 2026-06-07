@@ -49,6 +49,11 @@ ndarray = { version = "0.17", optional = true }
 # (same version as petal-clustering). Behind the `umap` feature so the default
 # embedding build keeps the BLAS-free randomized-PCA reducer.
 umap-rs = { version = "0.4", optional = true }
+# Barnes-Hut t-SNE (frjnn/bhtsne): pure Rust, rayon-parallel, BLAS-free. Behind
+# the `tsne` feature; the shipped wheel enables it so `viz.document_map` and
+# `topica.project` offer method="tsne". The fit is stochastic (bhtsne exposes no
+# seed), so it is the non-reproducible neighbor-preserving option, like UMAP.
+bhtsne = { version = "0.5", optional = true }
 # rayon parallelizes the variational E-step (ctm.rs) and the LDA sweep
 # (python.rs); kept non-optional so the parallel path compiles and is exercised
 # by the default `cargo test` build, not only under the `python` feature.
@@ -59,13 +64,16 @@ rayon = "1"
 # `python` implies `embeddings` (so the bindings expose the embedding models) and
 # `umap` (so the shipped wheel offers `reducer="umap"`); both also build/test
 # standalone (`cargo test --features embeddings`).
-python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings", "umap"]
+python = ["dep:pyo3", "dep:numpy", "dep:flate2", "pyo3/extension-module", "embeddings", "umap", "tsne"]
 # The embedding-native model branch (clustering pipeline + numerical models).
 embeddings = ["dep:petal-clustering", "dep:ndarray"]
 # Faithful UMAP reducer for the embedding models. PCA stays the default reducer;
 # UMAP's discovery fit is stochastic (the umap-rs optimizer's negative sampling is
 # unseeded), while the transform / prediction phase is deterministic regardless.
 umap = ["embeddings", "dep:umap-rs"]
+# Barnes-Hut t-SNE projection (frjnn/bhtsne), exposed via `topica.project` and the
+# `viz.document_map` panel. Independent of the embedding models, so it stands alone.
+tsne = ["dep:bhtsne"]
 
 # Whole-program optimization for the shipped wheels and CLI binaries.
 # lto + a single codegen unit let the optimizer inline across the sampler's

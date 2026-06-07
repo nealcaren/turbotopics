@@ -439,7 +439,12 @@ def find_thoughts(doc_topic, texts=None, *, topic, n=3):
     theta = _as_doc_topic(doc_topic)
     if topic < 0 or topic >= theta.shape[1]:
         raise ValueError(f"topic {topic} out of range (num_topics={theta.shape[1]})")
-    idx = np.argsort(theta[:, topic])[::-1][:n]
+    col = theta[:, topic]
+    # argpartition for the top-n (O(D)) then sort just those n, rather than a full
+    # O(D log D) argsort of every document.
+    n_eff = min(n, col.shape[0])
+    part = np.argpartition(col, -n_eff)[-n_eff:]
+    idx = part[np.argsort(col[part])[::-1]]
     out = []
     for i in idx:
         text = texts[i] if texts is not None else None

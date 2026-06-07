@@ -273,6 +273,14 @@ struct HldaState {
 /// `corpus::load_text_file`, minus the regex tokenisation/lowercasing — the
 /// caller owns tokenisation here.
 #[allow(clippy::too_many_arguments)]
+/// True iff `x` is finite and strictly positive. Used to validate float
+/// hyperparameters: a plain `x <= 0.0` check lets NaN/Inf through and silently
+/// corrupts the fit, so constructors route positivity checks through this.
+#[inline]
+fn finite_pos(x: f64) -> bool {
+    x.is_finite() && x > 0.0
+}
+
 fn build_corpus_from_docs(
     docs_in: Vec<Vec<String>>,
     doc_names_in: Option<Vec<String>>,
@@ -338,6 +346,11 @@ fn build_corpus_from_docs(
     let doc_labels: Vec<String> = doc_labels_in.unwrap_or_else(|| vec![String::new(); n]);
 
     let num_types = id_to_word.len();
+    if num_types == 0 {
+        return Err(PyValueError::new_err(
+            "corpus has no words after tokenization (all documents are empty)",
+        ));
+    }
     let num_docs = docs.len();
 
     let mut doc_freqs = vec![0u32; num_types];
@@ -427,6 +440,11 @@ fn build_corpus_from_docs(
         }
     }
 
+    if new_id_to_word.is_empty() {
+        return Err(PyValueError::new_err(
+            "corpus has no words after frequency filtering (min_doc_freq / rm_top too aggressive)",
+        ));
+    }
     let corpus = corpus::Corpus {
         id_to_word: new_id_to_word,
         docs: final_docs,
@@ -836,8 +854,15 @@ impl LDA {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
         }
-        if beta <= 0.0 {
+        if !finite_pos(beta) {
             return Err(PyValueError::new_err("beta must be > 0"));
+        }
+        if let Some(a) = alpha_sum {
+            if !finite_pos(a) {
+                return Err(PyValueError::new_err(
+                    "alpha_sum must be a positive, finite number",
+                ));
+            }
         }
         let light = match sampler {
             "sparse" | "mallet" => false,
@@ -2507,10 +2532,10 @@ impl DMR {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
         }
-        if beta <= 0.0 {
+        if !finite_pos(beta) {
             return Err(PyValueError::new_err("beta must be > 0"));
         }
-        if prior_variance <= 0.0 {
+        if !finite_pos(prior_variance) {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
         Ok(DMR {
@@ -2990,10 +3015,10 @@ impl LabeledLDA {
     #[new]
     #[pyo3(signature = (*, alpha=0.1, beta=0.01, seed=42))]
     fn new(alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
-        if alpha <= 0.0 {
+        if !finite_pos(alpha) {
             return Err(PyValueError::new_err("alpha must be > 0"));
         }
-        if beta <= 0.0 {
+        if !finite_pos(beta) {
             return Err(PyValueError::new_err("beta must be > 0"));
         }
         Ok(LabeledLDA {
@@ -3392,7 +3417,7 @@ impl SAGE {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
         }
-        if prior_variance <= 0.0 {
+        if !finite_pos(prior_variance) {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
         Ok(SAGE {
@@ -4064,6 +4089,24 @@ impl CTM {
         Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
+    /// The fitted logistic-normal prior covariance Σ over η, shape
+    /// ``(num_topics-1, num_topics-1)`` (the last topic is the softmax reference,
+    /// so it is dropped). This is the model's own topic covariance — unlike
+    /// :attr:`topic_correlation`, which is an across-document θ correlation.
+    #[getter]
+    fn topic_covariance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let km1 = self.num_topics.saturating_sub(1);
+        if self.sigma.len() != km1 * km1 {
+            return Err(PyRuntimeError::new_err(
+                "this model was fit before topic_covariance was stored; refit to use it",
+            ));
+        }
+        let arr = Array2::from_shape_vec((km1, km1), self.sigma.clone())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(arr.to_pyarray_bound(py))
+    }
+
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
@@ -4533,6 +4576,24 @@ impl STM {
         Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
+    /// The fitted logistic-normal prior covariance Σ over η, shape
+    /// ``(num_topics-1, num_topics-1)`` (the last topic is the softmax reference,
+    /// so it is dropped). This is the model's own topic covariance — unlike
+    /// :attr:`topic_correlation`, which is an across-document θ correlation.
+    #[getter]
+    fn topic_covariance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let km1 = self.num_topics.saturating_sub(1);
+        if self.sigma.len() != km1 * km1 {
+            return Err(PyRuntimeError::new_err(
+                "this model was fit before topic_covariance was stored; refit to use it",
+            ));
+        }
+        let arr = Array2::from_shape_vec((km1, km1), self.sigma.clone())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(arr.to_pyarray_bound(py))
+    }
+
     /// Prevalence coefficients γ, shape ``(num_features, num_topics-1)`` — how
     /// each covariate (row 0 is the intercept) shifts each topic's log-prior.
     /// The last topic is the softmax reference. For inference, prefer
@@ -4770,6 +4831,84 @@ fn window_cooccurrence(
     py.allow_threads(move || coh::cooccurrence(&docs, num_relevant, &pairs, window))
 }
 
+/// Warn that a neighbor-preserving projection (UMAP / t-SNE) distorts global
+/// geometry and is not reproducible across runs, so PCA stays the honest default.
+fn warn_stochastic(py: Python<'_>, method: &str) -> PyResult<()> {
+    let warnings = py.import_bound("warnings")?;
+    warnings.call_method1(
+        "warn",
+        (format!(
+            "method='{method}' preserves local neighborhoods but distorts global \
+             geometry (between-cluster distances and cluster sizes are not meaningful) \
+             and is not reproducible across runs. Use method='pca' for a deterministic, \
+             distance-faithful projection."
+        ),),
+    )?;
+    Ok(())
+}
+
+/// Project a high-dimensional array to a low-dimensional layout (for plotting or
+/// clustering). `method` is "pca" (default, deterministic, distance-faithful),
+/// "umap", or "tsne"; the latter two preserve local neighborhoods but distort
+/// global geometry and are not reproducible (a warning is issued). `data` is a 2D
+/// float array or a list of float lists. Returns an `(n_rows, n_components)` array.
+#[pyfunction]
+#[pyo3(signature = (data, n_components=2, *, method="pca", n_neighbors=15, perplexity=30.0, seed=0))]
+fn project<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    n_components: usize,
+    method: &str,
+    n_neighbors: usize,
+    perplexity: f64,
+    seed: u64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let rows = parse_features(data)?;
+    match method {
+        "pca" => {}
+        "umap" => {
+            if !crate::reduce::umap_available() {
+                return Err(PyRuntimeError::new_err(
+                    "method='umap' is not available in this build; rebuild with the \
+                     `umap` feature, or use method='pca' (the default)",
+                ));
+            }
+            warn_stochastic(py, "umap")?;
+        }
+        "tsne" => {
+            if !crate::reduce::tsne_available() {
+                return Err(PyRuntimeError::new_err(
+                    "method='tsne' is not available in this build; rebuild with the \
+                     `tsne` feature, or use method='pca' (the default)",
+                ));
+            }
+            warn_stochastic(py, "tsne")?;
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown method {other:?}; expected 'pca', 'umap', or 'tsne'"
+            )));
+        }
+    }
+    if n_components == 0 {
+        return Err(PyValueError::new_err("n_components must be >= 1"));
+    }
+    let n = rows.len();
+    let method = method.to_string(); // own it so the GIL can be released
+    let out = py.allow_threads(move || {
+        crate::reduce::project(&rows, n_components, &method, n_neighbors, perplexity, 0.5, 1000, seed)
+    });
+    let mut arr = Array2::<f64>::zeros((n, n_components));
+    for (i, r) in out.iter().enumerate() {
+        for (j, &v) in r.iter().enumerate() {
+            if j < n_components {
+                arr[[i, j]] = v;
+            }
+        }
+    }
+    Ok(arr.to_pyarray_bound(py))
+}
+
 /// Tokenize a string the way the corpus loader does: find regex tokens,
 /// optionally lowercase, drop short tokens and stopwords. Handy for building
 /// `list[list[str]]` input outside of `Corpus.from_text_file`.
@@ -4867,10 +5006,10 @@ impl HDP {
     #[new]
     #[pyo3(signature = (*, alpha=1.0, gamma=1.0, eta=0.01, seed=42, resample_conc=true))]
     fn new(alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool) -> PyResult<Self> {
-        if alpha <= 0.0 || gamma <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(gamma) {
             return Err(PyValueError::new_err("alpha and gamma must be > 0"));
         }
-        if eta <= 0.0 {
+        if !finite_pos(eta) {
             return Err(PyValueError::new_err("eta must be > 0"));
         }
         Ok(HDP {
@@ -5182,7 +5321,7 @@ impl DTM {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
-        if alpha <= 0.0 || chain_variance <= 0.0 || obs_variance <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(chain_variance) || !finite_pos(obs_variance) {
             return Err(PyValueError::new_err(
                 "alpha, chain_variance, obs_variance must be > 0",
             ));
@@ -5489,7 +5628,7 @@ impl SupervisedLDA {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
-        if alpha <= 0.0 {
+        if !finite_pos(alpha) {
             return Err(PyValueError::new_err("alpha must be > 0"));
         }
         Ok(SupervisedLDA {
@@ -5800,7 +5939,7 @@ impl PT {
         if num_pseudo < 1 {
             return Err(PyValueError::new_err("num_pseudo must be >= 1"));
         }
-        if alpha <= 0.0 || beta <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) {
             return Err(PyValueError::new_err("alpha and beta must be > 0"));
         }
         Ok(PT {
@@ -5947,7 +6086,7 @@ impl GSDMM {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics (max clusters) must be >= 2"));
         }
-        if alpha <= 0.0 || beta <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) {
             return Err(PyValueError::new_err("alpha and beta must be > 0"));
         }
         Ok(GSDMM {
@@ -6209,7 +6348,7 @@ impl SeededLDA {
         seed: u64,
     ) -> PyResult<Self> {
         let (names, words) = parse_seed_dict(seed_words)?;
-        if alpha <= 0.0 || beta <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) {
             return Err(PyValueError::new_err("alpha and beta must be > 0"));
         }
         if names.len() + residual < 2 {
@@ -7339,7 +7478,7 @@ impl ETM {
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
-        if prior_variance <= 0.0 {
+        if !finite_pos(prior_variance) {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
         if inference != "em" && inference != "vae" {
@@ -7837,7 +7976,7 @@ impl KeyATM {
         }
         // Default to R keyATM's base prior 1/K.
         let alpha = alpha.unwrap_or(1.0 / k as f64);
-        if alpha <= 0.0 || beta <= 0.0 || beta_keyword <= 0.0 || gamma1 <= 0.0 || gamma2 <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) || !finite_pos(beta_keyword) || !finite_pos(gamma1) || !finite_pos(gamma2) {
             return Err(PyValueError::new_err("alpha, beta, beta_keyword, gamma1, gamma2 must be > 0"));
         }
         Ok(KeyATM {
@@ -7863,7 +8002,7 @@ impl KeyATM {
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
-        if alpha <= 0.0 || beta <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) {
             return Err(PyValueError::new_err("alpha and beta must be > 0"));
         }
         Ok(KeyATM {
@@ -8366,7 +8505,7 @@ impl PA {
         if num_super < 1 || num_sub < 2 {
             return Err(PyValueError::new_err("num_super must be >= 1 and num_sub >= 2"));
         }
-        if alpha <= 0.0 || beta <= 0.0 {
+        if !finite_pos(alpha) || !finite_pos(beta) {
             return Err(PyValueError::new_err("alpha and beta must be > 0"));
         }
         Ok(PA {
@@ -8531,7 +8670,7 @@ impl HLDA {
         if depth < 2 {
             return Err(PyValueError::new_err("depth must be >= 2"));
         }
-        if gamma <= 0.0 || eta <= 0.0 || alpha <= 0.0 {
+        if !finite_pos(gamma) || !finite_pos(eta) || !finite_pos(alpha) {
             return Err(PyValueError::new_err("gamma, eta, alpha must be > 0"));
         }
         Ok(HLDA {
@@ -8694,6 +8833,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Corpus>()?;
     m.add_function(wrap_pyfunction!(tokenize, m)?)?;
     m.add_function(wrap_pyfunction!(window_cooccurrence, m)?)?;
+    m.add_function(wrap_pyfunction!(project, m)?)?;
     m.add("DEFAULT_TOKEN_REGEX", corpus::DEFAULT_TOKEN_REGEX)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

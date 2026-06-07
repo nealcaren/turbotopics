@@ -18,11 +18,12 @@ Every view is a **panel** with three renderers:
   available; this is your reproducibility and reviewer-armor.
 - `.to_png(path)` — a matplotlib figure (PNG / PDF / SVG by extension). The
   publication renderer.
-- `.to_html(path)` — an interactive (Altair) build, for the few views interaction
-  genuinely helps. Needs the `topica[viz-interactive]` extra.
+- `.to_html(path)` — an interactive (Plotly) build, for the few views interaction
+  genuinely helps. Needs the `topica[viz]` extra.
 
-Install the static stack with `pip install topica[viz]` (matplotlib, pandas,
-scipy) and the interactive subset with `pip install topica[viz-interactive]`.
+Install the toolkit with `pip install topica[viz]` (matplotlib, pandas, scipy,
+and plotly for the interactive `.to_html()` builds), or `pip install topica[all]`
+for everything.
 
 ## Honest by capability
 
@@ -73,12 +74,125 @@ probability topics, cosine for c-TF-IDF), paired with a term barchart:
 viz.topic_similarity(model).to_png("similarity.png")
 viz.term_barchart(model, topic=3, mode="frex", error_bars=True).to_png("terms.png")
 
-# interactive: click a topic in the heatmap, the barchart follows
+# interactive: the seriated heatmap for the overview, a dropdown to read a topic's words
 viz.term_topic_browser(model).to_html("explore.html")
 ```
 
 `error_bars=True` adds top-word inclusion-probability bars (a bootstrap, so it is
 off by default).
+
+## Topic health: dead and duplicate topics
+
+Two failure modes the headline table hides — topics with near-zero mass, and pairs
+of topics whose word distributions are near-identical. Both are routine (HDP returns
+many near-zero-mass topics by construction) and both are things a reviewer expects
+you to have checked:
+
+```python
+h = viz.topic_health(model, min_mass_frac=0.01, dup_threshold=0.9)
+h.to_png("health.png")    # mass-share bars, dead and duplicate flagged
+h.to_frame()              # mass / hard_count / nearest_topic / nearest_cosine / flag
+h.duplicates()            # [(a, b, cosine), ...] near-duplicate pairs
+```
+
+## Prevalence across groups and over time
+
+A groups × topics heatmap, and per-topic prevalence trajectories as small multiples
+(the readable replacement for a streamgraph). Pass `corpus=` and `nsims=` to widen
+the estimates by the method of composition:
+
+```python
+viz.prevalence_heatmap(model, groups=meta["region"]).to_png("by_region.png")
+
+viz.topics_over_time(model, timestamps=meta["year"]).to_png("over_time.png")
+# CI ribbons (method of composition), Gibbs models need the corpus for theta draws
+viz.topics_over_time(model, meta["year"], corpus=corpus, nsims=50).to_png("over_time_ci.png")
+```
+
+## Topic correlation, honestly
+
+Raw across-document θ correlation is compositionally biased: the sum-to-one
+constraint forces a spurious negative correlation (about −1/(K−1) even under
+independence). `topic_correlation` offers the closure-corrected alternatives,
+drawn as a zero-centered diverging heatmap:
+
+```python
+viz.topic_correlation(model, method="clr").to_png("corr.png")       # default, closure-corrected
+viz.topic_correlation(model, method="partial").to_png("partial.png")  # others held fixed
+viz.topic_correlation(model, method="eta").to_png("eta.png")        # CTM/STM logistic-normal Σ
+viz.topic_correlation(model, method="raw")    # the biased estimate, labeled as such
+```
+
+It is refused for hard/degenerate-θ cluster models, where topic correlation is not
+meaningful — use the topic-similarity heatmap there instead.
+
+## The document map
+
+A 2-D projection of the *document* cloud (a supplement figure), to see whether the
+documents separate the way the topics claim. The projection runs in topica's own
+Rust core — there is no Python UMAP/sklearn dependency:
+
+```python
+# count / soft-theta model: projects the clr-transformed theta simplex
+viz.document_map(model, method="pca").to_png("map.png")
+
+# embedding model: pass the doc embeddings you fit with (models do not retain them)
+viz.document_map(bertopic, doc_embeddings=emb, method="umap").to_png("map.png")
+
+# interactive WebGL scatter (Plotly), colored by dominant topic
+viz.document_map(model, doc_embeddings=emb).to_html("map.html")
+```
+
+The same projection is available as a standalone primitive, `topica.project`:
+
+```python
+xy = topica.project(embeddings, n_components=2, method="pca")   # or "umap" / "tsne"
+```
+
+`method="pca"` (default) is deterministic and distance-faithful; the title reports
+the fraction of variance the two axes carry. `method="umap"` and `method="tsne"`
+preserve local neighborhoods but distort global geometry (between-cluster distances
+and cluster sizes are not meaningful) and are not reproducible across runs — the
+panel says so and displays the seed, and `project` warns. Density is shown with
+alpha clouds / hexbin, never convex hulls. Past eight topics the default grays
+everything; pass `highlight_topic=` to color one. Large corpora are
+stratified-subsampled (by dominant topic, including `-1`) with a "showing N of D"
+badge. A hard-θ cluster model with no embeddings is refused.
+
+## The document inspector
+
+Read one document the way the model read it: its θ mixture, its words shaded by the
+topic each is most attributed to (`argmax_t p(t | w, d)`, computed from θ and φ), and
+the documents most associated with its dominant topic:
+
+```python
+di = viz.document_inspector(model, texts, doc=12)
+di.to_png("doc12.png")
+di.to_frame()     # per-token: word / in_vocab / dominant_topic / p_topic
+di.theta          # the document's topic proportions
+di.neighbors      # find_thoughts for the dominant topic
+```
+
+It is refused for hard/degenerate-θ cluster models, where a per-token mixed-
+membership attribution is not meaningful.
+
+## Content covariate: how a topic is worded by group
+
+For an STM or SAGE **content** model, the same topic is phrased differently across a
+document covariate (party, decade, outlet). Rather than collapse to a reference
+snapshot, this panel shows `p(w | topic, group)` for the union of each group's top
+words as a words × groups heatmap:
+
+```python
+cc = viz.content_covariate(stm_or_sage, topic=3, n=10)
+cc.to_png("topic3_by_group.png")
+cc.to_frame()                       # group / word / prob / in_group_top
+cc.matrix()                         # words × groups wide table
+cc.contrast(model, "dem", "rep")    # words most distinguishing the two groups
+```
+
+It is refused for a model fit without a content covariate (a prevalence-only STM, or
+any non-content model).
 
 ## One-call report
 
@@ -86,8 +200,14 @@ off by default).
 applicable panels:
 
 ```python
-report = viz.dashboard(model, texts, corpus=corpus, formula="~ year", data=meta)
+report = viz.dashboard(model, texts, corpus=corpus, formula="~ year", data=meta,
+                       groups=meta["region"], timestamps=meta["year"])
 report.to_html("report.html")    # interactive browser + static panels, self-contained
 report.to_png("report.png")      # the static panels stacked
 report.to_frame()                # {panel_name: DataFrame}
 ```
+
+The topic-similarity heatmap, term barchart, and topic-health panels are always
+included; the coherence frontier (with `texts`), effect plot (with a design), group
+heatmap (with `groups`), time small-multiples (with `timestamps`), and the honest
+correlation layer (for soft-θ models) are added by introspecting what you pass.

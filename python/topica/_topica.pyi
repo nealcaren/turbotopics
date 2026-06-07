@@ -22,6 +22,27 @@ def tokenize(
     ...
 
 
+def project(
+    data: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+    n_components: int = 2,
+    *,
+    method: str = "pca",
+    n_neighbors: int = 15,
+    perplexity: float = 30.0,
+    seed: int = 0,
+) -> numpy.typing.NDArray[numpy.float64]:
+    """Project a high-dimensional array to `n_components` for plotting or clustering.
+
+    `method` is "pca" (default, deterministic, distance-faithful), "umap", or
+    "tsne". UMAP and t-SNE preserve local neighborhoods but distort global geometry
+    (between-cluster distances and cluster sizes are not meaningful) and are not
+    reproducible across runs (a warning is issued); PCA is the honest default.
+    `data` is a 2D float array or a list of float lists. Returns an
+    `(n_rows, n_components)` array.
+    """
+    ...
+
+
 def window_cooccurrence(
     docs: list[list[int]],
     num_relevant: int,
@@ -301,6 +322,12 @@ class CTM:
         """Variational posterior covariances nu, shape (num_docs, K-1, K-1)."""
         ...
     @property
+    def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The fitted logistic-normal prior covariance Sigma over eta, shape
+        (K-1, K-1); the last topic is the softmax reference. The model's own topic
+        covariance (cf. topic_correlation, an across-document theta correlation)."""
+        ...
+    @property
     def vocabulary(self) -> list[str]: ...
     @property
     def doc_names(self) -> list[str]: ...
@@ -392,6 +419,12 @@ class STM:
     @property
     def eta_cov(self) -> numpy.typing.NDArray[numpy.float64]:
         """Variational posterior covariances nu, shape (num_docs, K-1, K-1)."""
+        ...
+    @property
+    def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The fitted logistic-normal prior covariance Sigma over eta, shape
+        (K-1, K-1); the last topic is the softmax reference. The model's own topic
+        covariance (cf. topic_correlation, an across-document theta correlation)."""
         ...
     @property
     def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:

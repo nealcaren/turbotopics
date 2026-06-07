@@ -118,6 +118,104 @@ pub fn umap(data: &[Vec<f64>], n_components: usize, n_neighbors: usize, seed: u6
     (0..n).map(|i| (0..n_components).map(|c| emb[[i, c]] as f64).collect()).collect()
 }
 
+/// Whether the Barnes-Hut t-SNE reducer is compiled in (the `tsne` feature).
+pub fn tsne_available() -> bool {
+    cfg!(feature = "tsne")
+}
+
+/// Project `data` onto `n_components` with Barnes-Hut t-SNE (the `bhtsne` crate).
+/// t-SNE pulls apart local neighborhoods for a legible 2-D scatter, at the price of
+/// distorting global geometry (between-cluster distances and cluster sizes are not
+/// meaningful). `theta` is the Barnes-Hut speed/accuracy knob (0 runs the exact
+/// O(n^2) algorithm); `perplexity` is clamped so that `3 * perplexity < n`. The fit
+/// is stochastic -- bhtsne exposes no seed -- so the layout is not reproducible
+/// across runs. Tiny inputs (n < 4) fall back to PCA. Only built under `tsne`.
+#[cfg(feature = "tsne")]
+pub fn tsne(
+    data: &[Vec<f64>],
+    n_components: usize,
+    perplexity: f64,
+    theta: f64,
+    epochs: usize,
+    seed: u64,
+) -> Vec<Vec<f64>> {
+    let n = data.len();
+    if n == 0 || n_components == 0 {
+        return vec![Vec::new(); n];
+    }
+    if n < 4 {
+        // t-SNE's neighborhood estimate is degenerate at this size; PCA is honest.
+        return pca(data, n_components, seed);
+    }
+    // bhtsne computes 3 * perplexity neighbors, so perplexity must stay below n/3.
+    let max_perp = ((n as f64 - 1.0) / 3.0).floor().max(1.0);
+    let perp = perplexity.clamp(1.0, max_perp) as f32;
+
+    let owned: Vec<Vec<f32>> = data
+        .iter()
+        .map(|r| r.iter().map(|&v| v as f32).collect())
+        .collect();
+    let samples: Vec<&[f32]> = owned.iter().map(|r| r.as_slice()).collect();
+    let metric = |a: &&[f32], b: &&[f32]| -> f32 {
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum::<f32>().sqrt()
+    };
+
+    let mut t = bhtsne::tSNE::new(&samples);
+    t.embedding_dim(n_components as u8)
+        .perplexity(perp)
+        .epochs(epochs.max(1));
+    if theta <= 0.0 {
+        t.exact(metric);
+    } else {
+        t.barnes_hut(theta as f32, metric);
+    }
+    let flat = t.embedding(); // row-major Vec<f32>, length n * n_components
+    (0..n)
+        .map(|i| (0..n_components).map(|c| flat[i * n_components + c] as f64).collect())
+        .collect()
+}
+
+/// Project `data` onto `n_components` by a named `method`: `"pca"` (default,
+/// deterministic), `"umap"`, or `"tsne"`. UMAP and t-SNE fall back to PCA when their
+/// feature is not compiled in; callers that expose them should gate on
+/// `umap_available` / `tsne_available` first and surface a clear error instead.
+pub fn project(
+    data: &[Vec<f64>],
+    n_components: usize,
+    method: &str,
+    n_neighbors: usize,
+    perplexity: f64,
+    theta: f64,
+    epochs: usize,
+    seed: u64,
+) -> Vec<Vec<f64>> {
+    match method {
+        "umap" => {
+            #[cfg(feature = "umap")]
+            {
+                return umap(data, n_components, n_neighbors, seed);
+            }
+            #[cfg(not(feature = "umap"))]
+            {
+                let _ = n_neighbors;
+                pca(data, n_components, seed)
+            }
+        }
+        "tsne" => {
+            #[cfg(feature = "tsne")]
+            {
+                return tsne(data, n_components, perplexity, theta, epochs, seed);
+            }
+            #[cfg(not(feature = "tsne"))]
+            {
+                let _ = (perplexity, theta, epochs);
+                pca(data, n_components, seed)
+            }
+        }
+        _ => pca(data, n_components, seed),
+    }
+}
+
 /// Project `data` (`n_rows × n_features`, each row a sample) onto its top
 /// `n_components` principal components and return the scores (`n_rows ×
 /// n_components`).
@@ -644,5 +742,72 @@ mod umap_tests {
         // fully disconnected kNN graph (which cleanly separated blobs produce)
         // poorly; separation is validated on real connected embeddings instead.
         let _ = truth;
+    }
+}
+
+#[cfg(all(test, feature = "tsne"))]
+mod tsne_tests {
+    use super::*;
+
+    // t-SNE of three well-separated blobs into 2-D should keep each point closer to
+    // its own blob's centroid than to the others' (local neighborhoods preserved).
+    #[test]
+    fn tsne_separates_blobs() {
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let dim = 10;
+        let mut data = Vec::new();
+        let mut truth = Vec::new();
+        for c in 0..3 {
+            let mut center = vec![0.0; dim];
+            center[c] = 20.0;
+            for _ in 0..30 {
+                let row: Vec<f64> =
+                    (0..dim).map(|t| center[t] + (rng.gen::<f64>() - 0.5) * 4.0).collect();
+                data.push(row);
+                truth.push(c);
+            }
+        }
+        let emb = tsne(&data, 2, 30.0, 0.5, 500, 0);
+        assert_eq!(emb.len(), data.len());
+        assert_eq!(emb[0].len(), 2);
+        assert!(emb.iter().all(|r| r.iter().all(|v| v.is_finite())), "embedding has NaN");
+        // Per-blob 2-D centroids, then check each point is nearest its own.
+        let mut cents = vec![[0.0f64; 2]; 3];
+        let mut counts = vec![0.0f64; 3];
+        for (i, &c) in truth.iter().enumerate() {
+            cents[c][0] += emb[i][0];
+            cents[c][1] += emb[i][1];
+            counts[c] += 1.0;
+        }
+        for c in 0..3 {
+            cents[c][0] /= counts[c];
+            cents[c][1] /= counts[c];
+        }
+        let mut correct = 0;
+        for (i, &c) in truth.iter().enumerate() {
+            let nearest = (0..3)
+                .min_by(|&a, &b| {
+                    let da = (emb[i][0] - cents[a][0]).powi(2) + (emb[i][1] - cents[a][1]).powi(2);
+                    let db = (emb[i][0] - cents[b][0]).powi(2) + (emb[i][1] - cents[b][1]).powi(2);
+                    da.partial_cmp(&db).unwrap()
+                })
+                .unwrap();
+            if nearest == c {
+                correct += 1;
+            }
+        }
+        // Allow a few stragglers; the embedding is stochastic and unseeded.
+        assert!(correct as f64 / truth.len() as f64 > 0.9, "t-SNE did not separate blobs");
+    }
+
+    // The dispatcher routes "tsne" to the t-SNE reducer and yields finite 2-D points.
+    #[test]
+    fn project_routes_tsne() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let data: Vec<Vec<f64>> =
+            (0..20).map(|_| (0..6).map(|_| rng.gen::<f64>()).collect()).collect();
+        let emb = project(&data, 2, "tsne", 15, 30.0, 0.5, 250, 0);
+        assert_eq!(emb.len(), 20);
+        assert!(emb.iter().all(|r| r.len() == 2 && r.iter().all(|v| v.is_finite())));
     }
 }
