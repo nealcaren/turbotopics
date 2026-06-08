@@ -1309,6 +1309,10 @@ class SeededLDA:
     @property
     def num_topics(self) -> int: ...
     @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+    @property
     def topic_names(self) -> list[str]:
         """The seed names you gave, then 'residual_1' ... for unseeded topics."""
         ...
@@ -1770,6 +1774,12 @@ class KeyATM:
     @property
     def keyword_rate(self) -> numpy.typing.NDArray[numpy.float64]:
         """Per-topic keyword switch rate (0 for regular topics)."""
+        ...
+    @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The document-topic Dirichlet prior alpha, shape (num_topics,). Base model:
+        the estimated asymmetric prior; covariate/dynamic models fall back to the
+        symmetric base value."""
         ...
     @property
     def time_prevalence(self) -> numpy.typing.NDArray[numpy.float64]:
