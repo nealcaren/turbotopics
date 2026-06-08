@@ -210,6 +210,12 @@ class DMR:
         ...
 
     @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The baseline document-topic Dirichlet prior alpha, shape (num_topics,):
+        exp(lambda_intercept), the per-topic prior at covariates = 0."""
+        ...
+
+    @property
     def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
         """Learned prevalence weights gamma, shape (num_topics, num_features).
         Column 0 is the intercept; positive entries raise that topic's
@@ -680,6 +686,10 @@ class SupervisedLDA:
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+    @property
     def coefficients(self) -> numpy.typing.NDArray[numpy.float64]:
         """Regression coefficients eta, shape (num_topics,) — how each topic
         moves the response per unit of topic frequency."""
@@ -770,6 +780,13 @@ class SAGE:
         ...
 
     @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,).
+        SAGE's sparse additive parameterization is on the word side; the document
+        side is an ordinary Dirichlet."""
+        ...
+
+    @property
     def groups(self) -> list[str]:
         """Group names, in the index order of topic_word's second axis."""
         ...
@@ -835,6 +852,11 @@ class LabeledLDA:
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
         """theta matrix (num_docs, num_topics); only a document's label topics
         are non-zero, rows sum to 1."""
+        ...
+
+    @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
         ...
 
     @property
@@ -1116,6 +1138,10 @@ class PT:
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+    @property
     def num_topics(self) -> int: ...
     @property
     def vocabulary(self) -> list[str]: ...
@@ -1213,6 +1239,10 @@ class PA:
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
         """Document sub-topic matrix, shape (num_docs, num_sub)."""
+        ...
+    @property
+    def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
+        """The symmetric sub-topic Dirichlet prior alpha, shape (num_sub,)."""
         ...
     @property
     def super_sub(self) -> numpy.typing.NDArray[numpy.float64]:

@@ -39,28 +39,94 @@ def test_model_family_detection():
     assert topica.model_family(topica.BERTopic(min_cluster_size=5)) == "none"
 
 
-def test_collapsed_gibbs_models_are_dirichlet():
-    """Issue #20: KeyATM and SeededLDA are collapsed-Gibbs Dirichlet models, so
-    `model_family` must classify them as "dirichlet" (they expose `alpha`) and
-    `composition_theta` must draw the full posterior, not silently fall back."""
-    docs = [list(np.random.default_rng(i).choice(
-        [f"a{j}" for j in range(6)] + [f"b{j}" for j in range(6)], size=12))
-        for i in range(60)]
+# Issue #21: model_family must classify the *whole* registry, not just the
+# handful of models that happened to expose `alpha`. `model_family` inspects the
+# class (a PyO3 getter is a class attribute even before fit), so unfitted
+# instances are enough to pin every model's family. New models added without a
+# deliberate family land here as a failure.
+_FAMILY_REGISTRY = [
+    # collapsed-Gibbs / Dirichlet doc-topic posterior
+    ("LDA", lambda: topica.LDA(2), "dirichlet"),
+    ("HDP", lambda: topica.HDP(), "dirichlet"),
+    ("KeyATM", lambda: topica.KeyATM({"a": ["x"]}, num_topics=2), "dirichlet"),
+    ("SeededLDA", lambda: topica.SeededLDA({"a": ["x"], "b": ["y"]}), "dirichlet"),
+    ("LabeledLDA", lambda: topica.LabeledLDA(), "dirichlet"),
+    ("SupervisedLDA", lambda: topica.SupervisedLDA(num_topics=2), "dirichlet"),
+    ("DMR", lambda: topica.DMR(2), "dirichlet"),
+    ("PA", lambda: topica.PA(num_super=2, num_sub=4), "dirichlet"),
+    ("PT", lambda: topica.PT(num_topics=2, num_pseudo=10), "dirichlet"),
+    ("SAGE", lambda: topica.SAGE(2), "dirichlet"),
+    # logistic-normal (variational eta posterior)
+    ("STM", lambda: topica.STM(2), "logistic_normal"),
+    ("CTM", lambda: topica.CTM(2), "logistic_normal"),
+    # no theta posterior -> method='bootstrap'. GSDMM is a Dirichlet *mixture*
+    # (one topic per document), so a Dirichlet theta draw would misstate its
+    # uncertainty; it stays "none" deliberately, alongside the embedding models.
+    ("GSDMM", lambda: topica.GSDMM(num_topics=5), "none"),
+    ("BERTopic", lambda: topica.BERTopic(min_cluster_size=5), "none"),
+    ("Top2Vec", lambda: topica.Top2Vec(), "none"),
+    ("ETM", lambda: topica.ETM(2), "none"),
+    ("ProdLDA", lambda: topica.ProdLDA(2), "none"),
+    ("FASTopic", lambda: topica.FASTopic(2), "none"),
+]
+
+
+@pytest.mark.parametrize("name, make, expected", _FAMILY_REGISTRY,
+                         ids=[r[0] for r in _FAMILY_REGISTRY])
+def test_model_family_registry(name, make, expected):
+    assert topica.model_family(make()) == expected
+
+
+def _fit_for_composition():
+    """Fit one model of each Dirichlet family on a shared toy corpus, with the
+    extra inputs each one needs, so composition_theta can be exercised."""
+    rng = np.random.default_rng(0)
+    vocab = [f"w{i}" for i in range(12)]
+    docs = [list(rng.choice(vocab, size=10)) for _ in range(40)]
     corpus = topica.Corpus.from_documents(docs)
+    y = rng.normal(size=len(docs))
+    X = rng.normal(size=(len(docs), 1))
 
-    seeded = topica.SeededLDA({"a": ["a0", "a1"], "b": ["b0", "b1"]}, residual=1)
-    seeded.fit(corpus, iters=150)
-    key = topica.KeyATM({"a": ["a0", "a1"], "b": ["b0", "b1"]}, num_topics=3)
-    key.fit(corpus, iters=150)
+    models = {}
+    m = topica.LDA(3, seed=1); m.fit(corpus, iterations=120); models["LDA"] = m
+    m = topica.HDP(seed=1); m.fit(corpus, iters=120); models["HDP"] = m
+    m = topica.KeyATM({"a": ["w0"], "b": ["w1"]}, num_topics=3)
+    m.fit(corpus, iters=120); models["KeyATM"] = m
+    m = topica.SeededLDA({"a": ["w0"], "b": ["w1"]}, residual=1)
+    m.fit(corpus, iters=120); models["SeededLDA"] = m
+    m = topica.LabeledLDA(seed=1); m.fit(docs, [["x", "y"]] * len(docs), iterations=120)
+    models["LabeledLDA"] = m
+    m = topica.SupervisedLDA(num_topics=3, seed=1); m.fit(docs, y, em_iters=8)
+    models["SupervisedLDA"] = m
+    m = topica.DMR(num_topics=3, seed=1, optimize_interval=25, burn_in=20)
+    m.fit(docs, X, feature_names=["x"], iterations=120, num_samples=2, sample_interval=10)
+    models["DMR"] = m
+    m = topica.PA(num_super=2, num_sub=4, seed=1); m.fit(corpus, iters=120)
+    models["PA"] = m
+    m = topica.PT(num_topics=3, num_pseudo=10, seed=1); m.fit(corpus, iters=120)
+    models["PT"] = m
+    m = topica.SAGE(num_topics=3, seed=1, optimize_interval=25, burn_in=20)
+    m.fit(docs, ["g"] * len(docs), iterations=120, num_samples=2, sample_interval=10)
+    models["SAGE"] = m
+    return corpus, models
 
-    k = len(corpus.doc_lengths)
-    for model in (seeded, key):
-        assert topica.model_family(model) == "dirichlet"
-        assert np.asarray(model.alpha).shape == (model.num_topics,)
+
+def test_composition_theta_runs_for_every_dirichlet_model():
+    """Issue #21: composition_theta must not raise for any Dirichlet model, and
+    must return a genuine posterior sample (varying across draws), not a silently
+    repeated point estimate that would zero out tempotm's between-draw variance."""
+    corpus, models = _fit_for_composition()
+    n = len(corpus.doc_lengths)
+    for name, model in models.items():
+        assert topica.model_family(model) == "dirichlet", name
+        k = np.asarray(model.doc_topic).shape[1]
+        # HDP's `alpha` is the DP concentration scalar by design; every other
+        # Dirichlet model exposes a per-topic prior aligned with doc_topic.
+        if name != "HDP":
+            assert np.asarray(model.alpha).shape == (k,), name
         draws = topica.effects.composition_theta(model, corpus, nsims=5)
-        assert draws.shape == (5, k, model.num_topics)
-        # Real posterior draws vary across simulations (not a repeated point estimate).
-        assert draws.std(axis=0).max() > 0.0
+        assert draws.shape == (5, n, k), name
+        assert draws.std(axis=0).max() > 0.0, name
 
 
 def test_composition_effect_inflates_over_ols():

@@ -2771,6 +2771,19 @@ impl DMR {
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
     }
 
+    /// The baseline document-topic Dirichlet prior α, shape ``(num_topics,)``:
+    /// ``exp(λ_intercept)``, the per-topic prior at covariates = 0. DMR's prior is
+    /// per-document (``α_{d,k} = exp(λ_k · x_d)``), so this is the baseline; it
+    /// marks DMR as a Dirichlet model for :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        // feature_effects is (num_topics, num_features); column 0 is the intercept.
+        let lam = self.feature_effects.as_ref().unwrap();
+        let a: Vec<f64> = lam.column(0).iter().map(|&l| l.exp()).collect();
+        Ok(Array1::from(a).to_pyarray_bound(py))
+    }
+
     /// Learned feature weights λ, shape ``(num_topics, num_features)`` — how
     /// each feature (column 0 is the intercept) shifts each topic's log-prior.
     /// Positive ⇒ the feature raises that topic's prevalence.
@@ -3206,6 +3219,15 @@ impl LabeledLDA {
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
     }
 
+    /// The symmetric document-topic Dirichlet prior α, shape ``(num_topics,)``.
+    /// Marks LabeledLDA as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_topics]).to_pyarray_bound(py))
+    }
+
     /// The label name for each topic, in topic (column) order.
     #[getter]
     fn labels(&self) -> PyResult<Vec<String>> {
@@ -3615,6 +3637,16 @@ impl SAGE {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// The symmetric document-topic Dirichlet prior α, shape ``(num_topics,)``.
+    /// SAGE's sparse additive parameterization is on the word side; the
+    /// document side is an ordinary Dirichlet, so this marks SAGE as a Dirichlet
+    /// model for :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_topics]).to_pyarray_bound(py))
     }
 
     /// Group names, in the index order used by :attr:`topic_word`'s second axis.
@@ -5769,6 +5801,15 @@ impl SupervisedLDA {
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
     }
 
+    /// The symmetric document-topic Dirichlet prior α, shape ``(num_topics,)``.
+    /// Marks SupervisedLDA as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_topics]).to_pyarray_bound(py))
+    }
+
     /// Regression coefficients η, shape ``(num_topics,)`` — how each topic moves
     /// the response (in the response's units, per unit of topic frequency).
     #[getter]
@@ -5987,6 +6028,14 @@ impl PT {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// The symmetric document-topic Dirichlet prior α, shape ``(num_topics,)``.
+    /// Marks PT as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_topics]).to_pyarray_bound(py))
     }
     #[getter]
     fn num_topics(&self) -> usize {
@@ -8798,6 +8847,14 @@ impl PA {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// The symmetric sub-topic Dirichlet prior α, broadcast to the columns of
+    /// :attr:`doc_topic`, shape ``(num_sub,)``. Marks PA as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_sub]).to_pyarray_bound(py))
     }
     /// Super-topic → sub-topic association, shape ``(num_super, num_sub)``; row s
     /// shows which sub-topics super-topic s groups together (the correlations).
