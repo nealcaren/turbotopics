@@ -16,6 +16,8 @@ conditional given its proportions and length.
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 
 from .stm import estimate_effect, posterior_theta_samples
@@ -72,9 +74,11 @@ def dirichlet_theta_samples(doc_topic, doc_lengths, *, nsims=25, seed=0, prior=0
     if prior < 0:
         raise ValueError("prior must be >= 0")
 
-    # Concentration α + n_d for each document; clip tiny values so the gamma
-    # draws are well defined for topics a document never uses.
-    conc = theta * (lengths[:, None] + prior) + prior / theta.shape[1]
+    # Concentration α + n_d for each document, where doc_topic is the posterior
+    # mean (n_dk + α_k)/(N_d + Σα) and `prior` is Σα, so α_k + n_dk is exactly
+    # theta · (N_d + prior). Clip tiny values so the gamma draws are well defined
+    # for topics a document never uses.
+    conc = theta * (lengths[:, None] + prior)
     conc = np.clip(conc, 1e-6, None)
 
     rng = np.random.default_rng(seed)
@@ -296,13 +300,22 @@ def _bootstrap_refits(model, docs, *, n_boot, topn, seed, model_factory, refit, 
             m.fit([docs[i] for i in picks], **fit_kwargs)
             return m
 
+    # Decide refit's arity once, by inspecting its signature, rather than calling
+    # the 2-arg form and treating any TypeError as "this is a 1-arg hook". A
+    # TypeError raised *inside* refit (a bad kwarg, a type error in the hook body)
+    # would otherwise be misread as an arity mismatch and silently retried as
+    # refit(picks) — running every resample at the default seed and returning SEs
+    # computed from mis-seeded refits with no error or warning.
+    try:
+        takes_seed = True
+        inspect.signature(refit).bind(np.empty(0), seed + 1)
+    except TypeError:
+        takes_seed = False
+
     rng = np.random.RandomState(seed)
     for b in range(n_boot):
         picks = rng.randint(0, d, size=d)
-        try:
-            boot = refit(picks, seed + b + 1)
-        except TypeError:
-            boot = refit(picks)  # user hook with a single argument
+        boot = refit(picks, seed + b + 1) if takes_seed else refit(picks)
         _, boot_sets = _top_word_strings(boot, topn)
         match, quality, margin = _match_to_reference(ref_sets, boot_sets)
         yield picks, boot, match, quality, margin

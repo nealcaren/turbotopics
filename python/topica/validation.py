@@ -20,7 +20,9 @@ exclusivity, and the intrusion tests live in :mod:`topica.coherence`.
 from __future__ import annotations
 
 import html as _html
+import inspect
 import re
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -112,8 +114,13 @@ def diagnostics(model, texts=None, *, n=10, coherence_type=None, stability=False
         if callable(top_method):
             try:
                 return [w for w, _ in top_method(n, topic=t)]
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.warn(
+                    f"{type(model).__name__}.top_words failed ({type(exc).__name__}: "
+                    f"{exc}); falling back to raw topic-word rows, which drops any "
+                    "custom weighting (e.g. FREX) that top_words applies.",
+                    stacklevel=2,
+                )
         return [vocab[i] for i in np.argsort(phi[t])[::-1][:n]]
 
     rows = []
@@ -137,6 +144,21 @@ def diagnostics(model, texts=None, *, n=10, coherence_type=None, stability=False
         return rows
 
 
+def _accepts_kwarg(fn, name):
+    """Whether ``fn`` accepts the keyword argument ``name``. PyO3 methods expose a
+    text signature, so this works on the Rust models; if a callable has no
+    introspectable signature we assume it does not take the kwarg (the caller then
+    uses the plain form), which is safe — a wrong guess drops an optional arg, it
+    does not crash."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (ValueError, TypeError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _transform_theta(model, docs, seed):
     fn = getattr(model, "transform", None)
     if not callable(fn):
@@ -144,12 +166,13 @@ def _transform_theta(model, docs, seed):
             f"{type(model).__name__} has no transform(); perplexity needs a generative "
             "model that can infer topics for held-out documents"
         )
+    # Pass seed= only if transform actually accepts it, rather than calling with
+    # seed= and treating any TypeError as "no seed param" — a TypeError raised
+    # *inside* transform (a real bug) would otherwise be silently swallowed and
+    # retried without the seed.
+    accepts_seed = _accepts_kwarg(fn, "seed")
     try:
-        return np.asarray(fn(docs, seed=seed), dtype=np.float64)
-    except TypeError:
-        pass
-    try:
-        return np.asarray(fn(docs), dtype=np.float64)
+        return np.asarray(fn(docs, seed=seed) if accepts_seed else fn(docs), dtype=np.float64)
     except TypeError as exc:
         raise ValueError(
             f"{type(model).__name__}.transform needs more than documents (e.g. "
@@ -443,6 +466,12 @@ def find_thoughts(doc_topic, texts=None, *, topic, n=3):
     theta = _as_doc_topic(doc_topic)
     if topic < 0 or topic >= theta.shape[1]:
         raise ValueError(f"topic {topic} out of range (num_topics={theta.shape[1]})")
+    if texts is not None and len(texts) != theta.shape[0]:
+        raise ValueError(
+            f"texts has {len(texts)} entries but doc_topic has {theta.shape[0]} "
+            "rows; pass texts aligned to the kept documents (corpus.kept_indices), "
+            "not the original documents — pruning may have dropped some."
+        )
     col = theta[:, topic]
     # argpartition for the top-n (O(D)) then sort just those n, rather than a full
     # O(D log D) argsort of every document.
@@ -1056,6 +1085,17 @@ def quality_frontier(model, *, n=10, texts=None, coherence_type="u_mass", plot=F
     if texts is not None and coherence_type != "u_mass":
         coh = np.asarray(_coherence(model, texts, coherence_type=coherence_type, topn=n))
     else:
+        # The windowed coherence types need a reference corpus; without `texts`
+        # the only score available is UMass. Warn rather than silently returning
+        # UMass under the requested name — the scales differ (UMass ~ (-inf, 0],
+        # c_v ~ [0, 1]), so a mislabeled axis invites wrong comparisons.
+        if texts is None and coherence_type != "u_mass":
+            warnings.warn(
+                f"quality_frontier: coherence_type={coherence_type!r} needs texts "
+                "(a reference corpus); without them coherence is UMass, which is on "
+                "a different scale. Pass texts= or set coherence_type='u_mass'.",
+                stacklevel=2,
+            )
         coh = np.asarray(model.coherence(n))
     data = {
         "topic": np.arange(K),
@@ -1124,8 +1164,10 @@ def bootstrap_stability(
     """
     from . import LDA  # local import to avoid a cycle at module load
 
-    if hasattr(docs, "docs") and hasattr(docs, "id_to_word"):
-        raise TypeError("bootstrap_stability needs a list of token lists, not a Corpus")
+    # Accept a Corpus, matching the docstring and the sibling functions
+    # (perplexity, prepare_pyldavis): pull its token lists before resampling.
+    if hasattr(docs, "documents"):
+        docs = docs.documents()
     docs = [list(d) for d in docs]
     D = len(docs)
     if D < 2:

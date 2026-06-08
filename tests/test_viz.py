@@ -377,13 +377,13 @@ def test_sage_all_term_modes(sage_content):
 def test_dashboard_content_and_inspector(sage_content):
     m, texts = sage_content
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # frontier is skipped for SAGE (recorded below)
+        warnings.simplefilter("ignore")
         d = viz.dashboard(m, texts, inspect_doc=0)
     # SAGE is a content model, so the wording panel is auto-included; inspector
-    # appears because inspect_doc was given. The generic panels survive SAGE's 3-D phi.
-    assert {"content", "inspector", "similarity", "terms", "health"} <= set(d.panels)
-    # the coherence frontier can't support SAGE; the skip is recorded, not silent
-    assert "frontier" in d.skipped
+    # appears because inspect_doc was given. The generic panels survive SAGE's 3-D
+    # phi via the group marginal (issue #27), including the coherence frontier.
+    assert {"content", "inspector", "similarity", "terms", "health", "frontier"} <= set(d.panels)
+    assert "frontier" not in d.skipped
     assert d.to_png() is not None
 
 

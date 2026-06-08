@@ -135,11 +135,14 @@ class TestBootstrapStability:
         # Two clean, well-separated topics should be highly reproducible.
         assert res["mean"] > 0.5
 
-    def test_rejects_corpus_object(self, two_topic):
+    def test_accepts_corpus_object(self, two_topic):
+        # Issue #27: the docstring promises a Corpus is accepted (like its
+        # siblings perplexity / prepare_pyldavis), so it must not raise.
         _, docs = two_topic
         corpus = topica.Corpus.from_documents(docs)
-        with pytest.raises(TypeError):
-            topica.bootstrap_stability(corpus, k=2, n_boot=2)
+        res = topica.bootstrap_stability(corpus, k=2, n_boot=2, iterations=80, topn=4)
+        assert res["stability"].shape == (2,)
+        assert 0.0 <= res["mean"] <= 1.0
 
     def test_stable_across_changing_vocabulary(self):
         # Each document carries its block's shared words plus a unique filler

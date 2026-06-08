@@ -4,7 +4,10 @@ These helpers read only a fitted model's public attributes — ``topic_word``
 (K x V), ``doc_topic`` (D x K), ``topic_names``, ``vocabulary``, ``num_topics``,
 and the optional ``labels`` (hard document assignments on the embedding-cluster
 models, where ``-1`` marks a noise/outlier document) — so they work uniformly
-across LDA, STM, CTM, keyATM, Top2Vec, BERTopic, and the rest. The goal is the
+across LDA, STM, CTM, keyATM, Top2Vec, BERTopic, and the rest. SAGE's
+``(K, G, V)`` topic-word is reduced to its group marginal; DTM (time-sliced
+``topic_word(time)``) and HLDA (a topic tree, no ``doc_topic``) do not present
+this static surface and are not supported here. The goal is the
 overview a researcher reaches for first: how big each topic is, what it is about,
 who its representative documents are, and how its prevalence moves across time or
 across groups.
@@ -19,6 +22,8 @@ across groups.
 """
 
 from __future__ import annotations
+
+import warnings
 
 import numpy as np
 
@@ -122,8 +127,13 @@ def _top_words(model, t, n):
         try:
             pairs = method(n, topic=t)
             return [w for w, _ in pairs]
-        except Exception:
-            pass
+        except Exception as exc:
+            warnings.warn(
+                f"{type(model).__name__}.top_words failed ({type(exc).__name__}: "
+                f"{exc}); falling back to raw topic-word rows, which drops any "
+                "custom weighting (e.g. FREX) that top_words applies.",
+                stacklevel=2,
+            )
     phi = np.asarray(model.topic_word, dtype=np.float64)
     vocab = list(model.vocabulary)
     idx = np.argsort(phi[t])[::-1][:n]
@@ -250,7 +260,15 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
     captions = [_short(r["label"], r["top_words"]) for r in rows]
     prevalence = np.array([r["prevalence"] for r in rows])
 
-    # Decide which optional panels we can draw.
+    # Decide which optional panels we can draw. A panel that fails for a real
+    # reason warns (naming itself) rather than vanishing silently — a missing
+    # panel should never read as "this model has nothing to show here".
+    def _skip(panel, exc):
+        warnings.warn(
+            f"plot_report: '{panel}' panel skipped — {type(exc).__name__}: {exc}",
+            stacklevel=2,
+        )
+
     panels = ["prevalence"]
     quality = None
     try:
@@ -264,32 +282,39 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
             coherence_type=coherence_type if ref is not None else "u_mass",
         )
         panels.append("quality")
-    except Exception:
-        pass
+    except Exception as exc:
+        _skip("quality", exc)
+        ref = None
     corr = None
     if 2 <= K <= 40:
         try:
             corr = np.asarray(_diagnostics.topic_correlation(model.doc_topic).cor)
             panels.append("correlation")
-        except Exception:
-            pass
+        except Exception as exc:
+            _skip("correlation", exc)
     over_time = None
     if timestamps is not None:
         try:
             over_time = topics_over_time(model, timestamps)
             panels.append("time")
-        except Exception:
-            pass
+        except Exception as exc:
+            _skip("time", exc)
     per_class = None
     if groups is not None:
         try:
             theta = _doc_topic(model)
             g = np.asarray(list(groups))
+            if g.shape[0] != theta.shape[0]:
+                raise ValueError(
+                    f"groups has {g.shape[0]} entries but doc_topic has "
+                    f"{theta.shape[0]} rows; pass groups aligned to the kept "
+                    "documents (corpus.kept_indices), not the original documents."
+                )
             levels = sorted(np.unique(g), key=lambda v: str(v))
             per_class = (levels, np.array([theta[g == lv].mean(axis=0) for lv in levels]))
             panels.append("class")
-        except Exception:
-            pass
+        except Exception as exc:
+            _skip("class", exc)
 
     ncols = 1 if len(panels) == 1 else 2
     nrows = (len(panels) + ncols - 1) // ncols
