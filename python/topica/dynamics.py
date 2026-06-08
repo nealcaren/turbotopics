@@ -47,9 +47,13 @@ import numpy as np
 __all__ = [
     "period_prevalence",
     "period_prevalence_from_counts",
+    "period_prevalence_panel_from_counts",
     "fit_prevalence_var",
+    "fit_multilevel_var",
     "PeriodPrevalence",
     "PrevalenceVAR",
+    "PanelPrevalence",
+    "MultilevelVAR",
 ]
 
 
@@ -497,6 +501,157 @@ def _chol_psd(M):
     M = 0.5 * (M + M.T)
     w, V = np.linalg.eigh(M)
     return V * np.sqrt(np.clip(w, 1e-12, None))
+
+
+# --------------------------------------------------------------------------- #
+# Multilevel HDPM: paper(group)-specific intercepts + one shared latent VAR.
+#
+#   eta_{p,t} = alpha_p + m_t + u_{p,t},   u ~ N(0, R_{p,t})       (observation)
+#   m_t       = c + A m_{t-1} + eps_t,     eps ~ N(0, Q)           (shared state)
+#   alpha_p   ~ N(0, Sigma_alpha)                                  (random effect)
+#
+# This separates *which papers contributed* (alpha_p, time-invariant composition)
+# from *when the discourse moved* (m_t), defending the dynamics against the
+# compositional confound of pooling. Per-paper-per-period data is sparse, so the
+# honest R_{p,t} layer is essential here -- this is where it earns its keep.
+#
+# Estimation is a nested EM. Given alpha_p, the papers present in period t give
+# Gaussian measurements of the same m_t, which combine EXACTLY into one effective
+# observation (precision-weighted), so the standard Kalman smoother applies. The
+# M-step then refreshes (A, c, Q) from the smoothed state and updates each
+# alpha_p by a shrinkage (random-effects) posterior. Identification of the
+# additive level is handled by the alpha_p ~ N(0, Sigma_alpha) prior.
+# --------------------------------------------------------------------------- #
+@dataclass
+class PanelPrevalence:
+    """Per-paper, per-period prevalence in ILR space with measurement covariance.
+
+    eta : (P, T, d) ; R : (P, T, d, d) ; present : (P, T) bool mask of which
+    (paper, period) cells are observed.
+    """
+    period_labels: list
+    paper_labels: list
+    eta: np.ndarray
+    R: np.ndarray
+    present: np.ndarray
+    basis: np.ndarray
+    num_topics: int
+
+
+@dataclass
+class MultilevelVAR:
+    """A fitted multilevel HDPM: shared VAR(1) + paper intercepts."""
+    A: np.ndarray
+    c: np.ndarray
+    Q: np.ndarray
+    alpha: np.ndarray            # (P, d) paper intercepts
+    Sigma_alpha: np.ndarray      # (d, d) random-effect covariance
+    m: np.ndarray                # (T, d) smoothed common state
+    loglik: float
+    period_labels: list
+    paper_labels: list
+    basis: np.ndarray
+
+    def stationary(self) -> bool:
+        return bool(np.max(np.abs(np.linalg.eigvals(self.A))) < 1.0)
+
+
+def period_prevalence_panel_from_counts(counts, paper_labels=None,
+                                        period_labels=None, *, smoothing=0.5):
+    """Build a :class:`PanelPrevalence` from per-paper, per-period COUNTS.
+
+    counts : (P, T, K) nonnegative counts. A (paper, period) cell with zero
+    documents is marked not-present. Measurement covariance per cell is the
+    multinomial sampling covariance, delta-mapped to ILR (as in
+    :func:`period_prevalence_from_counts`).
+    """
+    counts = np.asarray(counts, dtype=np.float64)
+    P, T, K = counts.shape
+    V = _ilr_basis(K)
+    d = K - 1
+    eta = np.zeros((P, T, d))
+    R = np.zeros((P, T, d, d))
+    present = np.zeros((P, T), dtype=bool)
+    for pp in range(P):
+        for t in range(T):
+            N = counts[pp, t].sum()
+            if N <= 0:
+                continue
+            present[pp, t] = True
+            p = (counts[pp, t] + smoothing) / (N + K * smoothing)
+            eta[pp, t] = _ilr(p, V)
+            J = V.T / p
+            R[pp, t] = J @ ((np.diag(p) - np.outer(p, p)) / N) @ J.T
+            R[pp, t] = 0.5 * (R[pp, t] + R[pp, t].T) + np.eye(d) * 1e-12
+    return PanelPrevalence(
+        period_labels=list(period_labels) if period_labels is not None else list(range(T)),
+        paper_labels=list(paper_labels) if paper_labels is not None else list(range(P)),
+        eta=eta, R=R, present=present, basis=V, num_topics=K)
+
+
+def fit_multilevel_var(panel: PanelPrevalence, *, n_iter: int = 40,
+                       inner_iter: int = 15) -> MultilevelVAR:
+    """Fit the multilevel HDPM (shared VAR + paper random intercepts) by EM."""
+    P, T, d = panel.eta.shape
+    eta, R, present = panel.eta, panel.R, panel.present
+    Rinv = np.zeros_like(R)
+    for pp in range(P):
+        for t in range(T):
+            if present[pp, t]:
+                Rinv[pp, t] = np.linalg.inv(R[pp, t] + np.eye(d) * 1e-10)
+
+    alpha = np.zeros((P, d))
+    Sig_a = np.eye(d) * 0.5
+    A = np.eye(d) * 0.5
+    c = np.zeros(d)
+    Q = np.eye(d) * 0.1
+    m_s = np.zeros((T, d))
+    loglik = -np.inf
+
+    for _ in range(n_iter):
+        # ---- E-step part 1: combine papers -> effective obs (yhat_t, Rtil_t) ----
+        yhat = np.zeros((T, d))
+        Rtil = np.zeros((T, d, d))
+        for t in range(T):
+            Lam = np.zeros((d, d))
+            b = np.zeros(d)
+            for pp in range(P):
+                if present[pp, t]:
+                    Lam += Rinv[pp, t]
+                    b += Rinv[pp, t] @ (eta[pp, t] - alpha[pp])
+            if np.trace(Lam) <= 0:
+                Rtil[t] = np.eye(d) * 1e6
+            else:
+                Rtil[t] = np.linalg.inv(Lam + np.eye(d) * 1e-10)
+                yhat[t] = Rtil[t] @ b
+        # ---- M-step part 1: refresh (A, c, Q) on the effective series ----
+        A, c, Q, loglik = _fit_ssm(yhat, Rtil, n_iter=inner_iter, init=(A, c, Q))
+        # smoothed common state (for the alpha update)
+        var0 = float(np.mean(np.var(yhat, axis=0)))
+        mu0 = yhat[0].copy()
+        P0 = np.eye(d) * (var0 * 10.0 + 1.0)
+        m_s, P_smooth, _, _ = _smoother(yhat, Rtil, A, c, Q, mu0, P0)
+        # ---- M-step part 2: update paper intercepts (shrinkage / random effect) ----
+        Sig_a_inv = np.linalg.inv(Sig_a + np.eye(d) * 1e-8)
+        new_alpha = np.zeros((P, d))
+        Sig_acc = np.zeros((d, d))
+        for pp in range(P):
+            Lam_p = Sig_a_inv.copy()
+            bp = np.zeros(d)
+            for t in range(T):
+                if present[pp, t]:
+                    Reff = np.linalg.inv(R[pp, t] + P_smooth[t] + np.eye(d) * 1e-10)
+                    Lam_p += Reff
+                    bp += Reff @ (eta[pp, t] - m_s[t])
+            cov_p = np.linalg.inv(Lam_p)
+            new_alpha[pp] = cov_p @ bp
+            Sig_acc += cov_p + np.outer(new_alpha[pp], new_alpha[pp])
+        alpha = new_alpha
+        Sig_a = _psd(Sig_acc / P, floor=1e-6)
+
+    return MultilevelVAR(A=A, c=c, Q=Q, alpha=alpha, Sigma_alpha=Sig_a, m=m_s,
+                         loglik=loglik, period_labels=panel.period_labels,
+                         paper_labels=panel.paper_labels, basis=panel.basis)
 
 
 def _simulate_null(A, c, Q, R, y0, rng):

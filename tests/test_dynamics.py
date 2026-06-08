@@ -122,6 +122,47 @@ def test_var_fit_and_granger():
     assert var.impulse_response(0, horizon=5).shape == (6, d)
 
 
+def test_multilevel_panel_fit():
+    """Multilevel HDPM: paper intercepts + shared VAR fits and returns the right
+    shapes, and recovers the common state better than pooling under a
+    composition shift."""
+    rng = np.random.default_rng(0)
+    K, d, P, T = 3, 2, 8, 50
+    V = dynamics._ilr_basis(K)
+    A = np.array([[0.7, 0.0], [0.1, 0.6]])
+    m = np.zeros((T, d))
+    for t in range(1, T):
+        m[t] = A @ m[t - 1] + 0.1 * rng.standard_normal(d)
+    alpha = np.vstack([rng.normal(0.7, 0.1, (P // 2, d)),
+                       rng.normal(-0.7, 0.1, (P - P // 2, d))])
+    counts = np.zeros((P, T, K))
+    for p in range(P):
+        early = p < P // 2
+        for t in range(T):
+            frac = t / (T - 1)
+            if rng.random() > ((1 - frac) if early else frac) * 0.9 + 0.05:
+                continue
+            counts[p, t] = rng.multinomial(rng.integers(8, 30),
+                                           dynamics._ilr_inv(alpha[p] + m[t], V))
+    panel = dynamics.period_prevalence_panel_from_counts(counts)
+    assert panel.eta.shape == (P, T, d)
+    assert panel.present.shape == (P, T)
+    ml = dynamics.fit_multilevel_var(panel, n_iter=25)
+    assert ml.A.shape == (d, d)
+    assert ml.alpha.shape == (P, d)
+    assert ml.m.shape == (T, d)
+    assert ml.Sigma_alpha.shape == (d, d)
+    # multilevel state tracks the truth better than the pooled state
+    pooled = dynamics.fit_prevalence_var(
+        dynamics.period_prevalence_from_counts(counts.sum(0)))
+
+    def corr(est):
+        return np.mean([abs(np.corrcoef(est[:, k] - est[:, k].mean(),
+                                        m[:, k] - m[:, k].mean())[0, 1])
+                        for k in range(d)])
+    assert corr(ml.m) > corr(pooled.eta)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
