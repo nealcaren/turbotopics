@@ -250,6 +250,7 @@ struct KeyAtmState {
     #[serde(default)] log_likelihood_history: Vec<(usize, f64, f64)>,
     #[serde(default)] alpha_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] pi_history: Vec<(usize, Vec<f64>)>,
+    #[serde(default)] alpha_vec: Option<Vec<f64>>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PaState {
@@ -6450,6 +6451,14 @@ impl SeededLDA {
     fn num_topics(&self) -> usize {
         self.num_topics_val()
     }
+    /// The symmetric document-topic Dirichlet prior α, broadcast to
+    /// ``(num_topics,)``. Marks SeededLDA as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        Ok(Array1::from(vec![self.alpha; self.num_topics_val()]).to_pyarray_bound(py))
+    }
     /// The topic labels: the seed names you gave, then ``residual_1`` … for any
     /// unseeded topics.
     #[getter]
@@ -8140,6 +8149,11 @@ pub struct KeyATM {
     // (iteration, alpha vector) and (iteration, pi vector) — plot_alpha / plot_pi.
     alpha_history: Vec<(usize, Vec<f64>)>,
     pi_history: Vec<(usize, Vec<f64>)>,
+    // Base model: the estimated asymmetric document-topic Dirichlet prior α_k
+    // (length K). None for the covariate model (which uses the DMR λ) and the
+    // dynamic model (per-state α); the `alpha` getter then falls back to the
+    // symmetric prior.
+    alpha_vec: Option<Vec<f64>>,
 }
 
 impl KeyATM {
@@ -8197,7 +8211,7 @@ impl KeyATM {
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: Vec::new(),
-            alpha_history: Vec::new(), pi_history: Vec::new(),
+            alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
         })
     }
 
@@ -8224,7 +8238,7 @@ impl KeyATM {
             corpus: None, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: Vec::new(),
-            alpha_history: Vec::new(), pi_history: Vec::new(),
+            alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
         })
     }
 
@@ -8383,6 +8397,7 @@ impl KeyATM {
             self.log_likelihood_history = model.log_likelihood_history.clone();
             self.alpha_history = model.alpha_history.clone();
             self.pi_history = model.pi_history.clone();
+            self.alpha_vec = model.alpha_vec.clone();
             self.time_labels = labels;
 
             let mut names = self.key_names.clone();
@@ -8488,6 +8503,7 @@ impl KeyATM {
         self.log_likelihood_history = model.log_likelihood_history.clone();
         self.alpha_history = model.alpha_history.clone();
         self.pi_history = model.pi_history.clone();
+        self.alpha_vec = model.alpha_vec.clone();
         if let Some(lam) = &model.lambda {
             self.feature_effects = Some(vecs_to_arr2(lam));
             self.feature_names = cov_names;
@@ -8575,6 +8591,21 @@ impl KeyATM {
         Ok(Array1::from(self.keyword_rate.clone()).to_pyarray_bound(py))
     }
 
+    /// The document-topic Dirichlet prior α, shape ``(num_topics,)``. For the base
+    /// model this is the estimated asymmetric prior (R keyATM's ``alpha``); the
+    /// covariate and dynamic models use a per-document prior, so this falls back to
+    /// the symmetric base value. Marks keyATM as a Dirichlet model for
+    /// :func:`topica.effects.composition_theta`.
+    #[getter]
+    fn alpha<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let a = match &self.alpha_vec {
+            Some(v) => v.clone(),
+            None => vec![self.alpha; self.num_topics],
+        };
+        Ok(Array1::from(a).to_pyarray_bound(py))
+    }
+
     /// Convergence trace as a list of ``(iteration, log_likelihood, perplexity)``
     /// triples — the three columns of keyATM's ``model_fit`` (``plot_modelfit``).
     /// ``log_likelihood`` is the collapsed marginal log-likelihood and
@@ -8650,6 +8681,7 @@ impl KeyATM {
             log_likelihood_history: self.log_likelihood_history.clone(),
             alpha_history: self.alpha_history.clone(),
             pi_history: self.pi_history.clone(),
+            alpha_vec: self.alpha_vec.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -8666,6 +8698,7 @@ impl KeyATM {
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: s.log_likelihood_history,
             alpha_history: s.alpha_history, pi_history: s.pi_history,
+            alpha_vec: s.alpha_vec,
         })
     }
 

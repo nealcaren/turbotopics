@@ -39,6 +39,30 @@ def test_model_family_detection():
     assert topica.model_family(topica.BERTopic(min_cluster_size=5)) == "none"
 
 
+def test_collapsed_gibbs_models_are_dirichlet():
+    """Issue #20: KeyATM and SeededLDA are collapsed-Gibbs Dirichlet models, so
+    `model_family` must classify them as "dirichlet" (they expose `alpha`) and
+    `composition_theta` must draw the full posterior, not silently fall back."""
+    docs = [list(np.random.default_rng(i).choice(
+        [f"a{j}" for j in range(6)] + [f"b{j}" for j in range(6)], size=12))
+        for i in range(60)]
+    corpus = topica.Corpus.from_documents(docs)
+
+    seeded = topica.SeededLDA({"a": ["a0", "a1"], "b": ["b0", "b1"]}, residual=1)
+    seeded.fit(corpus, iters=150)
+    key = topica.KeyATM({"a": ["a0", "a1"], "b": ["b0", "b1"]}, num_topics=3)
+    key.fit(corpus, iters=150)
+
+    k = len(corpus.doc_lengths)
+    for model in (seeded, key):
+        assert topica.model_family(model) == "dirichlet"
+        assert np.asarray(model.alpha).shape == (model.num_topics,)
+        draws = topica.effects.composition_theta(model, corpus, nsims=5)
+        assert draws.shape == (5, k, model.num_topics)
+        # Real posterior draws vary across simulations (not a repeated point estimate).
+        assert draws.std(axis=0).max() > 0.0
+
+
 def test_composition_effect_inflates_over_ols():
     m, corpus, x = _planted()
     X = x[:, None]
