@@ -46,14 +46,20 @@ def _extract_topics(topics, topn):
     lists, or a list of ``(word, prob)`` lists.
     """
     if hasattr(topics, "top_words") and not isinstance(topics, (list, tuple)):
-        rows = topics.top_words(topn)
-        return [[w for w, _ in row] for row in rows]
+        try:
+            rows = topics.top_words(topn)
+            return [[w for w, _ in row] for row in rows]
+        except (TypeError, ValueError):
+            # Some models' top_words takes extra positionals (SAGE's `topic`,
+            # DTM's `time`), so top_words(topn) misfires. Fall through to the
+            # topic_word + vocabulary contract below.
+            pass
     # A model exposing the analysis contract (topic_word + vocabulary) but no
-    # top_words: derive the top words from the matrix, so any conforming model
-    # works with coherence/topic_diversity.
+    # usable top_words(n): derive the top words from the matrix, so any conforming
+    # model works with coherence/topic_diversity.
     if (hasattr(topics, "topic_word") and hasattr(topics, "vocabulary")
             and not isinstance(topics, (list, tuple, np.ndarray))):
-        phi = np.asarray(topics.topic_word, dtype=np.float64)
+        phi = _as_topic_word(topics)  # marginalizes SAGE's (K, G, V); rejects DTM
         vocab = list(topics.vocabulary)
         n = topn or phi.shape[1]
         return [[vocab[i] for i in np.argsort(row)[::-1][:n]] for row in phi]
@@ -372,9 +378,30 @@ def topic_diversity(topics, topn=25):
 # ---------------------------------------------------------------------------
 
 def _as_topic_word(obj):
-    """A fitted model (use its ``topic_word``) or a ``(K, V)`` array."""
+    """A fitted model (use its ``topic_word``) or a ``(K, V)`` array.
+
+    Two models do not present a plain ``(K, V)`` matrix and are normalized here so
+    the whole static topic-word surface (coherence, frex, exclusivity, ...) works
+    uniformly: SAGE's ``topic_word`` is ``(K, G, V)`` (per content group), reduced
+    to the group-averaged marginal; DTM's ``topic_word`` is time-sliced (a
+    ``topic_word(time)`` callable) and has no single static matrix, so it is
+    rejected with a clear message rather than coerced into an object array.
+    """
     if hasattr(obj, "topic_word") and not isinstance(obj, np.ndarray):
-        return np.asarray(obj.topic_word, dtype=np.float64)
+        tw = obj.topic_word
+        if callable(tw):
+            raise ValueError(
+                f"{type(obj).__name__}.topic_word is time-sliced — call "
+                "topic_word(time) for a slice. The static topic-word diagnostics "
+                "do not apply to it; pass a single (K, V) time slice instead."
+            )
+        phi = np.asarray(tw, dtype=np.float64)
+        if phi.ndim == 3:
+            # SAGE: (K, G, V). Use the model's group-averaged marginal when it
+            # exposes one, else average over the group axis.
+            marg = getattr(obj, "topic_word_marginal", None)
+            phi = np.asarray(marg, dtype=np.float64) if marg is not None else phi.mean(axis=1)
+        return phi
     return np.asarray(obj, dtype=np.float64)
 
 
@@ -492,6 +519,12 @@ def document_intrusion(model_or_theta, texts=None, *, n_docs=3, seed=0):
         raise ValueError("document intrusion needs at least 2 topics")
     if D < n_docs + 1:
         raise ValueError(f"need at least {n_docs + 1} documents, got {D}")
+    if texts is not None and len(texts) != D:
+        raise ValueError(
+            f"texts has {len(texts)} entries but doc_topic has {D} rows; pass "
+            "texts aligned to the kept documents (corpus.kept_indices), not the "
+            "original documents — pruning may have dropped some."
+        )
     dominant = theta.argmax(axis=1)
 
     out = []

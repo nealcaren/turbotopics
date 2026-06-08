@@ -15,9 +15,12 @@ from dataclasses import dataclass
 # The embedding-cluster models: their ``topic_word`` is class-based TF-IDF (not a
 # word distribution) and their ``doc_topic`` is not a mixed-membership simplex.
 _CLUSTER = {"BERTopic", "Top2Vec"}
-# Models whose ``doc_topic`` is hard or degenerate (one topic per document), so
-# theta-bars and theta-correlation are meaningless.
-_DEGENERATE_THETA = {"BERTopic", "Top2Vec", "GSDMM"}
+# Models whose ``doc_topic`` is hard/degenerate (one topic per document) or
+# absent, so theta-bars and theta-correlation are meaningless: the cluster
+# models and GSDMM (degenerate), plus HLDA (a topic *tree*, no D x K theta) and
+# DTM (time-sliced, no static theta). Without this they would report
+# ``soft_theta == True`` and the theta panels would hit AttributeError.
+_DEGENERATE_THETA = {"BERTopic", "Top2Vec", "GSDMM", "HLDA", "DTM"}
 # Content-covariate models: ``topic_word`` is covariate-conditional.
 _CONTENT_COVARIATE = {"STM", "SAGE"}
 

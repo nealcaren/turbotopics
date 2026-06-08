@@ -185,18 +185,21 @@ class DMR:
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
-        prevalence: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
         *,
-        prevalence_names: list[str] | None = None,
-        content: Sequence[object] | None = None,
-        content_names: list[str] | None = None,
-        em_iters: int = 50,
+        feature_names: list[str] | None = None,
+        iterations: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        progress: object | None = None,
+        progress_interval: int = 50,
     ) -> None:
-        """Fit the STM. prevalence is an (num_docs, F) covariate matrix making
-        topic prevalence depend on covariates (an intercept is prepended;
-        prevalence_names names the F columns). content is one group label per
-        document for a SAGE content model. At least one of prevalence/content
-        should be given (else use CTM)."""
+        """Fit by collapsed Gibbs with the per-document Dirichlet prior
+        alpha_{d,t} = exp(lambda_t . x_d). `features` is required: an (num_docs, F)
+        covariate matrix (no intercept column — one is prepended), with
+        feature_names naming the F columns. The L-BFGS optimization of lambda runs
+        every optimize_interval sweeps after burn_in; topic-word phi is averaged
+        over num_samples samples taken every sample_interval sweeps."""
         ...
 
     @property
@@ -216,15 +219,15 @@ class DMR:
         ...
 
     @property
-    def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
-        """Learned prevalence weights gamma, shape (num_topics, num_features).
-        Column 0 is the intercept; positive entries raise that topic's
-        prevalence."""
+    def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Learned feature weights lambda, shape (num_topics, num_features). Column
+        0 is the intercept; positive entries raise that topic's prevalence as the
+        feature increases."""
         ...
 
     @property
     def feature_names(self) -> list[str]:
-        """Feature names aligned with prevalence_effects columns ('intercept' first)."""
+        """Feature names aligned with feature_effects columns ('intercept' first)."""
         ...
 
     @property
