@@ -25,11 +25,12 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 
 ## Models
 
-**Count-based models** learn topics from word counts (collapsed Gibbs or variational EM):
+**Count-based models** learn topics from word counts (collapsed Gibbs, variational EM, or an amortized VAE):
 
 | Model | What it's for |
 |-------|---------------|
 | **`LDA`** | Classic topics via fast collapsed-Gibbs (SparseLDA); optional multi-threaded and LightLDA alias samplers |
+| **`ProdLDA`** | Sharper, more coherent topics via a product-of-experts word model, fit as an amortized VAE (no PyTorch) |
 | **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
 | **`LabeledLDA`** | Supervised topics tied to document labels |
 | **`CTM`** | Correlated topics (logistic-normal) |
@@ -102,6 +103,7 @@ Topica stands on a generation of open topic-modeling research and code. Each ent
 - [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe, 2023) — `SeededLDA`: the seeded-prior scheme
 - [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al., 2015) — `LDA`: the alias-table Metropolis-Hastings sampler
 - **GSDMM** (Yin & Wang, 2014) — `GSDMM`: the movie-group-process mixture for short text
+- [**ProdLDA / AVITM**](https://arxiv.org/abs/1703.01488) (Srivastava & Sutton, 2017) — `ProdLDA`: autoencoding variational inference and the product-of-experts word model
 - [**BERTopic**](https://github.com/MaartenGr/BERTopic) (Grootendorst, 2022) and [**Top2Vec**](https://github.com/ddangelov/Top2Vec) (Angelov, 2020) — `BERTopic`, `Top2Vec`: the embedding-clustering pipeline, class-based TF-IDF, and the `reduce → cluster → represent` design
 - [**ETM**](https://github.com/adjidieng/ETM) (Dieng, Ruiz & Blei, 2020) — `ETM`: the Embedded Topic Model (per-document variational EM and an amortized VAE)
 - [**FASTopic**](https://github.com/BobXWu/FASTopic) (Wu et al., 2024) — `FASTopic`: the optimal-transport topic model

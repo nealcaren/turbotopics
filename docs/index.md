@@ -26,7 +26,7 @@ for i, words in enumerate(model.top_words(5)):
 
 ## Why topica
 
-- **One package, many models.** LDA, DMR, Labeled LDA, SAGE, CTM, the full STM
+- **One package, many models.** LDA, ProdLDA, DMR, Labeled LDA, SAGE, CTM, the full STM
   (prevalence **and** content covariates), HDP, dynamic topics, supervised LDA,
   short-text models, and embedding-based models (BERTopic, Top2Vec, ETM,
   FASTopic). See [the models](guides/models.md) and
@@ -47,6 +47,7 @@ for i, words in enumerate(model.top_words(5)):
 | Model | What it's for |
 |-------|---------------|
 | [`LDA`](api/models.md#topica.LDA) | Classic topics via fast collapsed-Gibbs (SparseLDA) |
+| [`ProdLDA`](api/models.md#topica.ProdLDA) | Sharper, more coherent topics via a product-of-experts word model (amortized VAE) |
 | [`DMR`](api/models.md#topica.DMR) | Topics conditioned on document metadata |
 | [`LabeledLDA`](api/models.md#topica.LabeledLDA) | Supervised topics tied to document labels |
 | [`CTM`](api/models.md#topica.CTM) | Correlated topics (logistic-normal) |
