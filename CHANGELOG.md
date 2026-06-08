@@ -6,6 +6,49 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-08
+
+### Added
+
+- `alpha` getter on the collapsed-Gibbs Dirichlet models that lacked it —
+  `KeyATM`, `SeededLDA`, `LabeledLDA`, `SupervisedLDA`, `DMR`, `PA`, `PT`, and
+  `SAGE` — returning the per-topic document-topic Dirichlet prior aligned with
+  `doc_topic`'s columns (the estimated/asymmetric prior where one is fitted, the
+  symmetric prior otherwise, and `exp(lambda_intercept)` for `DMR`'s
+  per-document prior). This is what `effects.model_family` keys "dirichlet" off,
+  so it is the mechanism behind the `composition_theta` fix below (#20, #21).
+
+### Fixed
+
+- `effects.model_family` misclassified every collapsed-Gibbs model except `LDA`
+  and `HDP` as `"none"`, so `composition_theta` raised for them and `viz`
+  effect/uncertainty panels silently fell back to point estimates. With `alpha`
+  now exposed, `KeyATM`, `SeededLDA`, `LabeledLDA`, `SupervisedLDA`, `DMR`, `PA`,
+  `PT`, and `SAGE` are correctly `"dirichlet"`; `GSDMM` stays `"none"` by design
+  (a Dirichlet mixture, not an admixture) (#20, #21).
+- `dirichlet_theta_samples` double-counted the symmetric prior on the `prior > 0`
+  path, biasing draws toward uniform; the default `prior = 0` path is unchanged
+  (#26).
+- `find_thoughts` and `document_intrusion` (and `representative_docs` /
+  `topic_info` through them) now raise on a `texts` / `doc_topic` length
+  mismatch, the guard their siblings already had, so a document dropped by
+  vocabulary pruning can no longer be returned in place of a real one;
+  `plot_report`'s per-class panel gets the same alignment check (#24).
+- Stopped swallowing exceptions that quietly degraded results: bootstrap refits
+  and held-out `transform` now choose their call arity by inspecting the
+  signature instead of treating any `TypeError` as an arity mismatch (which had
+  re-run every resample at the default seed); `quality_frontier` warns when a
+  windowed `coherence_type` is requested without `texts`; `plot_report` warns and
+  names any panel it drops; the top-words fallback warns before discarding custom
+  (e.g. FREX) weighting (#25).
+- API-surface drift: the `DMR` type stub (copied from `STM`) now matches the real
+  `fit(data, features, ...)` signature and exposes `feature_effects` (not the
+  nonexistent `prevalence_effects`); `coherence` and the analysis surface work
+  for `SAGE` via its group marginal and reject `DTM`'s time-sliced `topic_word`
+  with a clear message; the `viz` capability descriptor marks `HLDA` and `DTM`
+  (no usable `doc_topic`) as not soft-theta; `bootstrap_stability` accepts a
+  `Corpus`, as its docstring promised (#27).
+
 ## [0.11.0] - 2026-06-07
 
 ### Added
