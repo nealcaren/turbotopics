@@ -551,9 +551,25 @@ class MultilevelVAR:
     period_labels: list
     paper_labels: list
     basis: np.ndarray
+    eta_eff: np.ndarray          # (T, d) composition-adjusted effective obs (yhat)
+    R_eff: np.ndarray            # (T, d, d) its measurement covariance (Rtilde)
 
     def stationary(self) -> bool:
         return bool(np.max(np.abs(np.linalg.eigvals(self.A))) < 1.0)
+
+    def granger_test(self, cause: int, effect: int, **kwargs) -> dict:
+        """Granger test on the shared dynamics, NET of paper composition.
+
+        The effective series (eta_eff, R_eff) is the precision-weighted, alpha_p
+        -removed observation of the common state m_t, so running the calibrated
+        bootstrap test on it asks whether the lead-lag survives after paper
+        intercepts are partialled out. Conditional on the fitted alpha_p
+        (paper-intercept uncertainty is not re-propagated). Accepts the same
+        kwargs as PrevalenceVAR.granger_test (method, n_boot, seed)."""
+        pv = PrevalenceVAR(A=self.A, c=self.c, Q=self.Q, loglik=self.loglik,
+                           labels=self.period_labels, eta=self.eta_eff,
+                           R=self.R_eff, basis=self.basis)
+        return pv.granger_test(cause, effect, **kwargs)
 
 
 def period_prevalence_panel_from_counts(counts, paper_labels=None,
@@ -649,9 +665,26 @@ def fit_multilevel_var(panel: PanelPrevalence, *, n_iter: int = 40,
         alpha = new_alpha
         Sig_a = _psd(Sig_acc / P, floor=1e-6)
 
+    # final composition-adjusted effective series, at the converged alpha
+    yhat = np.zeros((T, d))
+    Rtil = np.zeros((T, d, d))
+    for t in range(T):
+        Lam = np.zeros((d, d))
+        b = np.zeros(d)
+        for pp in range(P):
+            if present[pp, t]:
+                Lam += Rinv[pp, t]
+                b += Rinv[pp, t] @ (eta[pp, t] - alpha[pp])
+        if np.trace(Lam) <= 0:
+            Rtil[t] = np.eye(d) * 1e6
+        else:
+            Rtil[t] = np.linalg.inv(Lam + np.eye(d) * 1e-10)
+            yhat[t] = Rtil[t] @ b
+
     return MultilevelVAR(A=A, c=c, Q=Q, alpha=alpha, Sigma_alpha=Sig_a, m=m_s,
                          loglik=loglik, period_labels=panel.period_labels,
-                         paper_labels=panel.paper_labels, basis=panel.basis)
+                         paper_labels=panel.paper_labels, basis=panel.basis,
+                         eta_eff=yhat, R_eff=Rtil)
 
 
 def _simulate_null(A, c, Q, R, y0, rng):
