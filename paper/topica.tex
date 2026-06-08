@@ -25,25 +25,25 @@ structural topic model lives in \proglang{R}, the fastest collapsed-Gibbs
 sampler lives in \proglang{Java}, and the keyword-assisted and embedding-based
 models live in separate \proglang{Python} repositories, none sharing a data
 format or a diagnostic suite. We present \pkg{topica}, a \proglang{Python}
-framework that brings more than a dozen topic models---classical and
-embedding-based alike---behind one \pkg{NumPy}-native interface. Every model
+framework that brings more than a dozen topic models, classical and
+embedding-based alike, behind one \pkg{NumPy}-native interface. Every model
 exposes the same surface, the topic-word and document-topic matrices, so one set
 of coherence, exclusivity, stability, labeling, and covariate-effect tools
 applies to all of them, and a count-based model and a clustering of embeddings
-can be compared on a single corpus in one session. That same uniformity is what
-makes the framework extensible: a new model that presents the same surface
+can be compared on a single corpus in one session. That same uniformity makes
+the framework extensible: a new model that presents the same surface
 inherits the entire diagnostic and effect-estimation stack without writing any
-of it. \pkg{topica} is built around the premise that the researcher, not the
-software, owns the theoretical decisions that make a topic-model study
-credible---what the corpus represents, how many topics is the right granularity,
-what each topic means---and supplies the mechanics and the honest diagnostics to
-support them, declining, for instance, to report confidence intervals for a
+of it. \pkg{topica} is built on the premise that the researcher, not the
+software, owns the theoretical decisions that make a topic-model study credible:
+what the corpus represents, how many topics is the right granularity, what each
+topic means. The software supplies the mechanics and the diagnostics to support
+those decisions, and declines, for instance, to report confidence intervals for a
 model that has no posterior to draw them from. A parallel \proglang{Rust} core
-makes the fits fast---three to twenty-two times faster than \proglang{R} \pkg{stm}
-for the structural and other variational models, at parity with the compiled
-\pkg{MALLET} and \pkg{keyATM} samplers---and reproducible, the variational models
-to the bit and the samplers from a fixed seed, and each model is validated against
-its reference implementation. We describe the design, the
+makes the fits fast and reproducible: three to twenty-two times faster than
+\proglang{R} \pkg{stm} for the structural and other variational models, at parity
+with the compiled \pkg{MALLET} and \pkg{keyATM} samplers, deterministic to the bit
+for the variational models and seed-reproducible for the samplers. Each model is
+validated against its reference implementation. We describe the design, the
 model family, and a principled analysis workflow.
 }
 
@@ -117,12 +117,12 @@ apply to every model and cross-model comparison costs no extra plumbing
 \item \textbf{Speed.} A parallel \proglang{Rust} core fits the structural and
 other variational models from three to twenty-two times faster than \proglang{R}
 \pkg{stm}, and matches the compiled \pkg{MALLET} and \pkg{keyATM} samplers core
-for core---without a JVM and without \pkg{PyTorch} (Section~\ref{sec:performance}).
+for core, without a JVM and without \pkg{PyTorch} (Section~\ref{sec:performance}).
 \item \textbf{Reproducibility by construction.} The variational models are
 deterministic to the bit even when multithreaded, and the sampling models are
 seed-reproducible (Section~\ref{sec:design}).
 \item \textbf{Reference validation.} Each model is checked against its original
-implementation, and we report the agreement honestly, including where two correct
+implementation, and we report the agreement, including where two correct
 engines disagree because the model is non-convex (Section~\ref{sec:validation}).
 \end{enumerate}
 
@@ -132,7 +132,7 @@ decisions that make a topic-model study credible are theoretical: what the corpu
 represents, how many topics is the right granularity for the question, what each
 topic means, which covariates belong in the model, and whether a pattern is
 substantively interesting. \pkg{topica} is built so that the researcher makes
-those decisions and the software supplies the mechanics and the honest
+those decisions and the software supplies the mechanics and the
 diagnostics to support them (Section~\ref{sec:workflow}). The library refuses to
 manufacture certainty the data does not support: it declines to report confidence
 intervals for a model that has no posterior to draw them from, rather than
@@ -158,6 +158,20 @@ that social scientists have standardized on, and \pkg{keyATM}
 \citep{dieng2020etm} and \pkg{FASTopic} \citep{wu2024fastopic} are generative
 embedding models.
 
+Each of these retains advantages it would be dishonest to ignore, and \pkg{topica}
+does not dominate any of them on its own ground. \pkg{gensim}'s online LDA streams a
+corpus larger than memory, which \pkg{topica}, holding the document-term matrix in
+core, does not. \pkg{BERTopic} ships an integrated embedding-to-topic
+pipeline (sentence transformers, class-based TF-IDF representation, and
+hierarchical and dynamic topic reduction), whereas \pkg{topica} deliberately takes
+vectors the user has already computed and bundles none of that machinery.
+\pkg{MALLET} and \pkg{tomotopy} have years of production hardening and, for plain
+LDA, an inner loop \pkg{topica} matches rather than beats. And \pkg{stm} is not
+merely an implementation but an ecosystem (\pkg{tidystm}, \pkg{stminsights}, and a
+decade of applied practice) that a reimplementation has to earn its way into.
+\pkg{topica}'s claim is narrower and relational: not that it bests these tools where
+they are strong, but that none of them reaches across the others' territory.
+
 What no single tool offers is the combination a social-science workflow needs:
 the structural topic model and the fast classical samplers and the embedding
 models, behind one interface, with shared diagnostics, reproducible fits, and
@@ -179,6 +193,7 @@ reproducibility guarantee: \emph{seed} reproduces from a fixed seed,
 \pkg{topica}'s bit-for-bit variational fits.}
 \label{tab:compare}
 \small
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lccccccc}
 \toprule
  & Language & Classical & STM/content & Short-text & Embedding & Effect SEs & Determinism \\
@@ -192,7 +207,8 @@ reproducibility guarantee: \emph{seed} reproduces from a fixed seed,
 \midrule
 \pkg{topica}    & \proglang{Python}/\proglang{Rust} & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 %% ===========================================================================
@@ -239,13 +255,34 @@ cross-model comparison free: an LDA fit and a clustering of embeddings present
 the same surface, so the analyst can score both with the same coherence measure
 and align their topics with the same tools.
 
+\subsection{Inside the boundary}
+
+The narrowness of that boundary is what keeps the unified surface from costing
+anything. Each of the more than two dozen models is a native \proglang{Rust}
+module (\code{lda.rs}, \code{ctm.rs}, \code{stm.rs}, and the rest) that runs its
+own inference loop over the corpus and writes its result into two \proglang{Rust}
+\code{ndarray} matrices. When a model's \code{topic\_word} or \code{doc\_topic} is
+read, the core materializes that matrix as an ordinary \pkg{NumPy} array; nothing
+is recomputed on access, and the \proglang{Python} layer carries no model-specific
+code. The diagnostics are then plain \pkg{NumPy} functions that take the two arrays
+and never learn which module produced them.
+
+The consequence is that a new model is new \proglang{Rust} on one side of the
+boundary and \emph{zero} lines on the other: it inherits the diagnostic, labeling,
+and effect-estimation stack by producing the two matrices, not by registering with
+anything. The same split lets speed and breadth coexist: inference runs at
+native speed across parallel \proglang{Rust} threads, while the interface stays a
+thin, \pkg{NumPy}-shaped layer that adds no per-call cost. The extension module
+is compiled against the stable \proglang{C} ABI (\pkg{abi3}), so a single binary per
+platform serves every supported \proglang{Python} version.
+
 \subsection{Extensibility falls out of the contract}
 
 Because the analysis surface reads only from \code{topic\_word},
 \code{doc\_topic}, \code{vocabulary}, and \code{top\_words}, adding a model is a
 local act, and so is bringing one \pkg{topica} does not ship. Any object that
-presents those four members---whether a built-in model, a subclass, or an
-external estimator the analyst wraps---is scored, labeled, and compared by the
+presents those four members (whether a built-in model, a subclass, or an
+external estimator the analyst wraps) is scored, labeled, and compared by the
 same functions, with no code written for it on the diagnostics side:
 
 \begin{CodeChunk}
@@ -279,7 +316,24 @@ the threads happen to finish. The collapsed-Gibbs models are reproducible from a
 fixed seed. The practical consequence is that the most basic robustness check a
 topic-model study should report, refitting under different seeds to confirm that
 the topics persist, is a clean experiment in \pkg{topica}: the only thing that
-varies is the seed.
+varies is the seed. Repeating a fit makes the guarantee visible. The two fits
+are equal element for element, not merely close:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+a = topica.STM(num_topics=10, seed=1)
+a.fit(docs, conservative, prevalence_names=["conservative"], em_iters=15)
+b = topica.STM(num_topics=10, seed=1)
+b.fit(docs, conservative, prevalence_names=["conservative"], em_iters=15)
+
+print("topic_word identical:", np.array_equal(a.topic_word, b.topic_word))
+print("doc_topic  identical:", np.array_equal(a.doc_topic, b.doc_topic))
+\end{CodeInput}
+\begin{CodeOutput}
+topic_word identical: True
+doc_topic  identical: True
+\end{CodeOutput}
+\end{CodeChunk}
 
 \subsection{A lean core with optional extras}
 
@@ -297,7 +351,25 @@ reducer \citep{mcinnes2018umap}.
 \section{The model family}\label{sec:models}
 %% ===========================================================================
 
-\pkg{topica} groups its models into two kinds by how they treat words.
+Behind the breadth is a single statistical skeleton. Every model in \pkg{topica}
+factors a corpus into the same two objects: a document-topic matrix $\theta$
+(\code{doc\_topic}) giving how much each document draws on each topic, and a
+topic-word matrix $\phi$ (\code{topic\_word}) giving which words each topic
+favors. What separates the models is not the output but the assumptions that
+produce it: how $\theta$ is structured, and where $\phi$ comes from. \code{LDA}
+puts independent Dirichlet priors on the rows of $\theta$; \code{CTM} replaces
+that prior with a logistic-normal one so topics may correlate; \code{STM} and
+\code{DMR} let the $\theta$ prior depend on document covariates, and \code{STM}
+further lets $\phi$ vary by covariate through the SAGE mechanism; \code{HDP} drops
+the fixed topic count, putting a nonparametric prior on how many columns $\theta$
+has; the short-text models tie each document to a single topic; and the
+embedding-based models give up the generative story for $\phi$, deriving $\theta$
+from a clustering of document vectors and reading $\phi$ off the words each cluster
+favors. The models are points in one space (priors and structure on $\theta$, a
+generative or a geometric route to $\phi$), not a list of unrelated programs, and
+that shared shape is exactly what the contract of Section~\ref{sec:design} exposes.
+
+The family therefore divides, by the route to $\phi$, into two kinds.
 \emph{Count-based} models learn topics from word counts, by collapsed-Gibbs
 sampling or variational EM, and place topic-word weights on the probability
 simplex. \emph{Embedding-based} models start from document vectors the user
@@ -311,6 +383,7 @@ baseline to the structural topic model to neural clustering.
 \code{topic\_word}/\code{doc\_topic} contract of Section~\ref{sec:design}.}
 \label{tab:models}
 \small
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lll}
 \toprule
 Model & What it is for & Reference \\
@@ -335,7 +408,8 @@ Model & What it is for & Reference \\
 \code{ETM}          & Generative LDA factored through embeddings           & \citet{dieng2020etm} \\
 \code{FASTopic}     & Topics from optimal-transport plans                  & \citet{wu2024fastopic} \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 Two implementations carry most of the weight for social-science users and are
@@ -346,6 +420,54 @@ while its prevalence is regressed on metadata. The keyword-assisted model is als
 implemented in full, covering the base, covariate, and dynamic variants, the
 information-theoretic token weighting, and the change-point hidden Markov model
 \citep{chib1998changepoint} of the dynamic specification.
+
+\subsection{One pattern, many models}
+
+The breadth is not a list of disconnected estimators but the same three steps
+applied across the family: construct the model, \code{fit} a corpus, and read the
+topics from \code{top\_words}. What changes between rows is the capability the
+model adds, not the way it is called. Four models beyond those of the spanning
+comparison in Section~\ref{sec:example} (one that infers its own number of
+topics, one that conditions topics on document metadata, a short-text model, and
+one steered by keywords) run on the same poliblog posts through the identical
+pattern:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+import topica
+
+hdp = topica.HDP(eta=0.3, seed=1)                      # infers its own K
+hdp.fit(docs, iters=300)
+
+dmr = topica.DMR(num_topics=15, seed=1)                # topics by metadata
+dmr.fit(docs, conservative, feature_names=["conservative"])
+
+pt = topica.PT(num_topics=15, num_pseudo=100, seed=1)  # short-text model
+pt.fit(docs, iters=500)
+
+seeds = {"economy": ["economi", "tax", "job", "market"],
+         "foreign": ["iraq", "war", "troop", "iran"]}
+keyatm = topica.KeyATM(seeds, num_topics=15, seed=1)   # steered by keywords
+keyatm.fit(docs, iters=500)
+
+for name, m in [("HDP", hdp), ("DMR", dmr), ("PT", pt), ("KeyATM", keyatm)]:
+    print("%-7s K=%-2d |" % (name, m.num_topics),
+          ", ".join(w for w, _ in m.top_words(6)[0]))
+\end{CodeInput}
+\begin{CodeOutput}
+HDP     K=22 | will, american, tax, year, economi, govern
+DMR     K=15 | said, report, senat, hous, say, polit
+PT      K=15 | will, new, american, year, time, peopl
+KeyATM  K=15 | tax, economi, econom, will, govern, oil
+\end{CodeOutput}
+\end{CodeChunk}
+
+The models differ in what they assume and what they estimate: \code{HDP} chooses
+$K=22$ on its own, and \code{KeyATM}'s first topic is the economy theme its seed
+words pin (\emph{tax}, \emph{economi}, \emph{oil}). But none of that surfaces at the
+call site, and none of it reaches the diagnostics, which read only the matrices
+every one of them exposes. Adding the fifth model is the same four lines again.
+This listing is reproduced by \code{paper/replication.py}.
 
 %% ===========================================================================
 \section{A principled analysis workflow}\label{sec:workflow}
@@ -374,9 +496,26 @@ with fewer topics often scores higher on coherence while collapsing distinctions
 the researcher cares about. \code{topica.search\_k} fits a range of $K$ and
 reports coherence, exclusivity, and held-out perplexity for each, and
 \code{topica.quality\_frontier} plots the per-topic coherence-exclusivity
-trade-off. The honest procedure is to fit a small range around a theoretically
+trade-off. The careful procedure is to fit a small range around a theoretically
 plausible $K$, label the topics at each, count the uninterpretable ones, and let
-the researcher choose, reporting sensitivity to that choice.
+the researcher choose, reporting sensitivity to that choice. The grid makes the
+trap concrete: on this corpus coherence is highest at the smallest $K$, which a
+metric-maximizing pipeline would seize on, collapsing into five topics the
+distinctions a fifteen-topic model draws.
+
+\begin{CodeChunk}
+\begin{CodeInput}
+for r in topica.search_k(docs, ks=[5, 10, 15, 20], model="lda", iterations=200):
+    print("K=%-2d  coherence=%7.2f  exclusivity=%.3f"
+          % (r["k"], r["coherence"], r["exclusivity"]))
+\end{CodeInput}
+\begin{CodeOutput}
+K=5   coherence= -44.04  exclusivity=0.660
+K=10  coherence= -51.01  exclusivity=0.600
+K=15  coherence= -52.39  exclusivity=0.544
+K=20  coherence= -56.06  exclusivity=0.560
+\end{CodeOutput}
+\end{CodeChunk}
 
 \subsection{Fit, read, and validate}
 
@@ -415,7 +554,22 @@ effects = stm.estimate_effect(draws, X, feature_names=names, cluster=source_id)
 The model-agnostic \code{topica.standard\_errors} extends this to any model and is
 explicit about the kind of uncertainty it reports. For a clustering of embeddings,
 which has no posterior over $\theta$, it declines to report confidence intervals
-and says so, rather than returning a number that looks like one.
+and says so, rather than returning a number that looks like one. The two calls
+are the same line; only the answer differs, and the refusal points to the
+estimator that would be valid:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+topica.standard_errors(stm_model, X=X, feature_names=["conservative"])
+topica.standard_errors(bertopic,  X=X, feature_names=["conservative"])
+\end{CodeInput}
+\begin{CodeOutput}
+STM      effect=-0.004  se=0.009  (method of composition)
+BERTopic has no posterior over theta for method='composition' (no
+logistic-normal or Dirichlet structure). Use method='bootstrap' for
+standard errors on this model.
+\end{CodeOutput}
+\end{CodeChunk}
 
 \subsection{Visualization and reporting}
 
@@ -428,7 +582,7 @@ every model in the family; Figure~\ref{fig:report} shows it for the poliblog
 \citep{sievert2014ldavis}: it draws confidence bands only where a posterior
 exists, labels each topic-word weight for what it is, reports a closure-corrected
 topic correlation rather than the spuriously strong raw version, flags \emph{dead}
-and near-duplicate topics, and refuses panels a model cannot honestly support---a
+and near-duplicate topics, and refuses panels a model cannot support: a
 clustering of embeddings with no posterior over $\theta$ gets no uncertainty
 ribbons. Interactive views render through \pkg{Plotly}, and
 \code{topica.prepare\_pyldavis} still feeds the original \pkg{LDAvis} when wanted.
@@ -447,11 +601,57 @@ so the same report renders for any model in Table~\ref{tab:models}. Reproduced b
 \end{figure}
 
 %% ===========================================================================
-\section{Validation against reference implementations}\label{sec:validation}
+\section{Validation}\label{sec:validation}
 %% ===========================================================================
 
+\subsection{Recovering topics we planted}
+
+Agreement with another implementation shows that two engines compute the same
+thing; it does not show they compute the \emph{right} thing, since both could be
+wrong in the same way. The complementary check fits a corpus whose answer is fixed
+in advance. We plant five topics with disjoint vocabularies and draw every document
+from a single topic, so a faithful model must recover the five and concentrate each
+recovered topic on one planted topic. \emph{Purity} is the probability mass a
+fitted topic places on its best-matching planted topic ($1.0$ when a recovered
+topic is exactly one true topic), and \emph{recovered} counts how many of the five
+are some fitted topic's best match.
+
+\begin{CodeChunk}
+\begin{CodeInput}
+docs, true_sets = planted_corpus(seed=0)    # five disjoint-vocabulary topics
+
+specs = [("LDA",   topica.LDA(num_topics=5, seed=1),   dict(iterations=400)),
+         ("CTM",   topica.CTM(num_topics=5, seed=1),   dict(em_iters=40)),
+         ("GSDMM", topica.GSDMM(num_topics=5, seed=1), dict(iters=50)),
+         ("HDP",   topica.HDP(eta=0.3, seed=1),        dict(iters=300))]
+
+print("model  K   purity  recovered")
+for name, m, kw in specs:
+    m.fit(docs, **kw)                        # HDP is given no K; it infers one
+    K, purity, recovered = recovery(m, true_sets)
+    print("%-5s  %d   %.3f   %d/5" % (name, K, purity, recovered))
+\end{CodeInput}
+\begin{CodeOutput}
+model  K   purity  recovered
+LDA    5   0.999   5/5
+CTM    5   1.000   5/5
+GSDMM  5   0.996   5/5
+HDP    5   0.761   4/5
+\end{CodeOutput}
+\end{CodeChunk}
+
+Three inference families told the answer is five (collapsed-Gibbs \code{LDA},
+variational \code{CTM}, and the Dirichlet-mixture short-text \code{GSDMM}) recover
+the planting almost exactly. The nonparametric \code{HDP}, told nothing about the
+number of topics, independently infers five and recovers four of them: a stricter
+test it largely, not perfectly, passes, and we report the $0.761$ as readily as the
+$1.000$s. Because the planting and the scoring run through the shared contract, the
+same loop scores every family (\code{paper/replication.py}).
+
+\subsection{Agreement with reference implementations}
+
 A framework that reimplements published methods earns trust only by agreeing with
-the implementations social scientists already use---so rather than assert that
+the implementations social scientists already use. So rather than assert that
 agreement, we ship the scripts that run the reference packages themselves and
 report what they produce. The checks in \code{parity/} drive Java \pkg{MALLET} and
 the \proglang{R} \pkg{stm} and \pkg{keyATM} packages on the same tokenized inputs
@@ -459,7 +659,7 @@ as \pkg{topica}, align the fitted topics, and report the overlap;
 \code{paper/replication.py} runs them end to end and skips, visibly, any whose
 toolchain is absent. Because the engines share no code and no random number
 generator, ``agreement'' means \emph{statistical} agreement on the fitted topics,
-benchmarked against each reference's own run-to-run reproducibility---the only
+benchmarked against each reference's own run-to-run reproducibility, the only
 honest yardstick for stochastic inference. We report it without inflating it.
 
 \paragraph{Collapsed-Gibbs LDA.} \pkg{topica}'s LDA binds \pkg{RustMallet}, David
@@ -477,24 +677,24 @@ top-word Jaccard and cosine of $1.000$ on a planted-topic corpus
 \proglang{R} \pkg{keyATM} package's per-sweep asymmetric-$\alpha$ estimation and
 \code{model\_fit} log-likelihood \citep{eshima2024keyatm}. \pkg{keyATM}
 initializes at random, so even two \proglang{R} runs differ; on the poliblog
-corpus the keyword topics---the ones the method pins---agree between \pkg{topica}
+corpus the keyword topics, the ones the method pins, agree between \pkg{topica}
 and \proglang{R} at a cosine of $0.91$, as close as \proglang{R}'s two seeds agree
 with each other ($0.90$) (\code{parity/keyatm\_r\_compare.py}).
 
 \paragraph{Structural topic model.} The structural topic model is non-convex, so
-the right question is not whether two engines produce identical matrices---they
-need not---but whether \pkg{topica} lands on \proglang{R}'s solution as closely as
+the right question is not whether two engines produce identical matrices, which
+they need not, but whether \pkg{topica} lands on \proglang{R}'s solution as closely as
 \proglang{R} lands on its own. On the poliblog vignette, with both engines given
 the same Spectral initialization, \pkg{topica}'s prevalence fit agrees with
 \proglang{R} \pkg{stm}'s at a topic-word cosine of $0.973$ (per-topic median
 $0.993$), far inside \proglang{R}'s own spectral-versus-random spread of about
-$0.61$---\pkg{topica} reproduces \proglang{R}'s solution more closely than
+$0.61$: \pkg{topica} reproduces \proglang{R}'s solution more closely than
 \proglang{R}, reinitialized, reproduces itself (\code{parity/stm\_poliblog\_compare.py}).
 For the content model the comparison is sharper still: the per-group topic-word
 distributions agree at a cosine of $0.999$--$1.000$ (\code{parity/stm\_content\_r\_compare.py}).
 The parameters replicate, and so does the conclusion: on the canonical vignettes
 \pkg{topica} recovers the same prevalence effects the package documents, with
-honest standard errors from the method of composition.
+standard errors from the method of composition.
 
 %% ===========================================================================
 \section{Performance}\label{sec:performance}
@@ -559,16 +759,16 @@ built around the sampler, not raw LDA throughput.
 \pkg{topica}'s value shows in two directions at once on a single corpus: across
 models, where the shared contract makes a many-model comparison nearly free, and
 within one model, where the structural topic model answers a substantive question
-with honest uncertainty. Both run on the political-blog corpus of the \pkg{stm}
-literature \citep{roberts2016model}---weblog posts from the 2008 \proglang{U.S.}
+with calibrated uncertainty. Both run on the political-blog corpus of the \pkg{stm}
+literature \citep{roberts2016model}, weblog posts from the 2008 \proglang{U.S.}
 presidential campaign, rated by the blog's political leaning. The full, runnable
 script is \code{paper/replication.py}.
 
 \subsection{Comparing models behind one contract}
 
 Because every model exposes the same surface, scoring a heterogeneous set of them
-is one loop, not four pipelines. Here four models from two families---three
-count-based and one embedding-based---are fit on the same corpus and scored by the
+is one loop, not four pipelines. Here four models from two families, three
+count-based and one embedding-based, are fit on the same corpus and scored by the
 same diagnostics:
 
 \begin{CodeChunk}
@@ -596,14 +796,20 @@ for name, m in [("LDA", lda), ("CTM", ctm),
                 ("STM", stm_model), ("BERTopic", bert)]:
     print(name, m.num_topics, *("%.3f" % v for v in score(m)))
 \end{CodeInput}
+\begin{CodeOutput}
+LDA 15 0.358 0.514 0.683
+CTM 15 0.351 0.446 0.579
+STM 15 0.350 0.435 0.565
+BERTopic 3 0.459 0.526 0.693
+\end{CodeOutput}
 \end{CodeChunk}
 
-Table~\ref{tab:spanning} collects the result. The count-based models resolve
+The loop prints one row per model; Table~\ref{tab:spanning} collects the same
+numbers. The count-based models resolve
 fifteen granular topics; the embedding clustering resolves three broad, highly
 coherent macro-topics. Which granularity is right is the researcher's call, not
-the software's---and the point is that the comparison needed to make that call
-costs no translation between tools, because all four models are scored through the
-identical interface.
+the software's. The comparison needed to make that call costs no translation
+between tools, because all four models are scored through the identical interface.
 
 \begin{table}[t!]
 \centering
@@ -626,7 +832,35 @@ Model & Family & Topics & Coherence ($c_v$) & Exclusivity & Diversity \\
 \end{tabular}
 \end{table}
 
-\subsection{One model in depth: covariate effects with honest uncertainty}
+Scoring is not the only thing the shared surface makes free. The question the
+introduction posed, whether a count-based model and a clustering of embeddings
+find the \emph{same} themes, is itself a one-call comparison, because
+\code{align\_topics} matches topics across any two models by the cosine similarity
+of their topic-word distributions:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+for i, j, sim in topica.align_topics(lda, bert):
+    print("LDA t%-2d [%s] ~ BERTopic t%d [%s]  cos=%.2f"
+          % (i, ", ".join(w for w, _ in lda.top_words(3)[i]),
+             j, ", ".join(w for w, _ in bert.top_words(3)[j]), sim))
+\end{CodeInput}
+\begin{CodeOutput}
+LDA t1  [peopl, will, american] ~ BERTopic t1 [obama, will, one]  cos=0.43
+LDA t4  [palin, polit, one] ~ BERTopic t2 [palin, sarah, media]  cos=0.30
+LDA t6  [mccain, john, campaign] ~ BERTopic t0 [mccain, campaign, obama]  cos=0.18
+\end{CodeOutput}
+\end{CodeChunk}
+
+The two families, fit on the same corpus, agree on the themes a reader would
+recognize: both isolate a Sarah Palin topic and a John McCain topic, even though
+one learns from word counts and the other from document embeddings. Where they
+diverge is granularity, not substance: the fifteen-topic \code{LDA} splits
+material the three-cluster embedding model keeps whole. Answering the
+introduction's question took one function, not a hand-built crosswalk between two
+tools' output formats.
+
+\subsection{One model in depth: estimating covariate effects}
 
 The same corpus also carries a substantive question the structural topic model is
 built for: how does topic prevalence differ by the blog's political rating? The
@@ -715,7 +949,7 @@ Python Package Index with \code{pip install topica}; the core requires only
 \url{https://github.com/nealcaren/topica} and
 \url{https://nealcaren.github.io/topica/}. A single script,
 \code{paper/replication.py}, regenerates every quantitative artifact in this
-article---the worked-example figure and table (Section~\ref{sec:example}) and,
+article: the worked-example figure and table (Section~\ref{sec:example}) and,
 where the reference toolchains are installed, the cross-implementation validation
 (Section~\ref{sec:validation}) and speed comparisons (Section~\ref{sec:performance})
 by running \pkg{MALLET} and the \proglang{R} \pkg{stm} and \pkg{keyATM} packages
@@ -723,6 +957,20 @@ themselves. \pkg{topica} reimplements published
 methods and is validated against their reference implementations; it does not
 replace the original work, and users should cite both \pkg{topica}
 \citep{caren2026topica} and the model they use.
+
+\subsection*{Computational details}
+
+% --- generated by paper/computational_details.py; do not hand-edit ---
+The results in this article were produced with \pkg{topica}~0.11.0 on
+\proglang{Python}~3.13.1, with \pkg{NumPy}~2.4.6, \pkg{SciPy}~1.17.1,
+\pkg{scikit-learn}~1.9.0, \pkg{Matplotlib}~3.10.9, and \pkg{Plotly}~6.8.0. The
+\proglang{Rust} core was compiled with \code{rustc}~1.85.0. The
+cross-implementation checks of Section~\ref{sec:validation} and the timings of
+Section~\ref{sec:performance} ran the reference packages \proglang{Java}~15.0.1
+\pkg{MALLET}~2.0.8 (Homebrew build 202108) and \proglang{R}~4.5.2 with
+\pkg{stm}~1.3.8 and \pkg{keyATM}~0.5.5. All computations were performed on
+macOS~26.5 (Apple Silicon), \code{arm64}. This block is regenerated from the live
+toolchain by \code{paper/computational\_details.py}.
 
 \bibliography{topica}
 
