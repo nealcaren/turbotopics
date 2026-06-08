@@ -28,6 +28,7 @@ use crate::keyatm;
 use crate::seeded;
 use crate::hlda;
 use crate::pa;
+use crate::prodlda;
 use crate::pt;
 use crate::slda;
 use crate::top2vec;
@@ -7669,6 +7670,216 @@ impl ETM {
     }
 }
 
+/// ProdLDA (Srivastava & Sutton 2017), the AVITM autoencoding-variational topic
+/// model. ProdLDA is LDA with the word-level mixture replaced by a *product of
+/// experts*: each topic is an unnormalized expert and the word distribution is
+/// ``softmax(beta . theta)`` rather than ``softmax(beta) . theta``, which yields
+/// noticeably more coherent topics. Inference is amortized -- an encoder network
+/// maps a document's bag of words to a logistic-normal posterior over ``theta``,
+/// trained by minibatch Adam on the ELBO -- so new documents transform with a
+/// single forward pass. Batch normalization and high-momentum Adam guard against
+/// the component collapse that otherwise afflicts this model. Unlike ``ETM`` you
+/// bring no embeddings: ``beta`` is learned directly.
+#[pyclass(module = "topica")]
+pub struct ProdLDA {
+    num_topics: usize,
+    hidden_size: usize,
+    alpha: f64,
+    dropout: f64,
+    epochs: usize,
+    batch_size: usize,
+    lr: f64,
+    em_tol: f64,
+    seed: u64,
+    fitted: bool,
+    model: Option<prodlda::ProdldaModel>,
+    corpus: Option<corpus::Corpus>,
+}
+
+impl ProdLDA {
+    fn fitted_model(&self) -> PyResult<&prodlda::ProdldaModel> {
+        self.model
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+    }
+}
+
+#[pymethods]
+impl ProdLDA {
+    /// Create an unfitted model. `alpha` is the symmetric Dirichlet prior
+    /// concentration (reference 1.0); `hidden_size` is the encoder width (reference
+    /// 100); `dropout` is the dropout rate on the hidden layer and on `theta`;
+    /// `epochs`/`batch_size`/`lr` drive Adam (reference 200/200/0.002, with
+    /// `beta1 = 0.99`); `em_tol > 0` stops early on the relative change in the
+    /// epoch ELBO (0 runs all epochs).
+    #[new]
+    #[pyo3(signature = (num_topics, *, alpha=1.0, hidden_size=100, dropout=0.2,
+                        epochs=200, batch_size=200, lr=0.002, em_tol=0.0, seed=42))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
+        alpha: f64,
+        hidden_size: usize,
+        dropout: f64,
+        epochs: usize,
+        batch_size: usize,
+        lr: f64,
+        em_tol: f64,
+        seed: u64,
+    ) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("need at least 2 topics"));
+        }
+        if !finite_pos(alpha) {
+            return Err(PyValueError::new_err("alpha must be > 0"));
+        }
+        if !(0.0..1.0).contains(&dropout) {
+            return Err(PyValueError::new_err("dropout must be in [0, 1)"));
+        }
+        Ok(ProdLDA {
+            num_topics,
+            hidden_size,
+            alpha,
+            dropout,
+            epochs,
+            batch_size,
+            lr,
+            em_tol,
+            seed,
+            fitted: false,
+            model: None,
+            corpus: None,
+        })
+    }
+
+    /// Fit on `data` (a Corpus or list of token lists).
+    #[pyo3(signature = (data))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
+        };
+        if corpus.num_docs() == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        let num_types = corpus.num_types();
+        if num_types < self.num_topics {
+            return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
+        }
+        let (k, h, a, dp, ep, bs, lr, et) = (
+            self.num_topics, self.hidden_size, self.alpha, self.dropout, self.epochs,
+            self.batch_size, self.lr, self.em_tol,
+        );
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let (model, corpus) = py.allow_threads(move || {
+            let m = prodlda::fit_prodlda(
+                &corpus.docs, k, num_types, h, a, dp, ep, bs, lr, et, &mut rng,
+            );
+            (m, corpus)
+        });
+        self.model = Some(model);
+        self.corpus = Some(corpus);
+        self.fitted = true;
+        Ok(())
+    }
+
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+    /// Topic-word matrix (num_topics, vocab); each row is ``softmax(beta_k)``.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.topic_word()).to_pyarray_bound(py))
+    }
+    /// Document-topic proportions theta (num_docs, num_topics); rows sum to 1.
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+    /// The ELBO (negative training loss) at the final epoch.
+    #[getter]
+    fn bound(&self) -> PyResult<f64> {
+        Ok(self.fitted_model()?.bound)
+    }
+    /// Per-epoch ELBO trajectory.
+    #[getter]
+    fn bound_history(&self) -> PyResult<Vec<f64>> {
+        Ok(self.fitted_model()?.bound_history.clone())
+    }
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        Ok(self.fitted_model()?.converged)
+    }
+    #[getter]
+    fn epochs_run(&self) -> PyResult<usize> {
+        Ok(self.fitted_model()?.epochs_run)
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+    }
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(
+        &self,
+        py: Python<'py>,
+        n: usize,
+        topic: Option<usize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let phi = vecs_to_arr2(&self.fitted_model()?.topic_word());
+        topic_words_helper(py, &phi, &self.corpus.as_ref().unwrap().id_to_word, self.num_topics, n, topic)
+    }
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let phi = vecs_to_arr2(&self.fitted_model()?.topic_word());
+        let tops = top_word_ids_phi(&phi, self.num_topics, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Held-out topic proportions for new documents: one encoder forward pass each
+    /// (`theta = softmax(mu)`, running batchnorm statistics, no sampling). Tokens
+    /// outside the vocabulary are dropped. Returns `(num_docs, num_topics)`.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let m = self.fitted_model()?;
+        let docs = docs_to_ids(data, &self.corpus.as_ref().unwrap().id_to_word)?;
+        Ok(vecs_to_arr2(&m.transform(&docs)).to_pyarray_bound(py))
+    }
+
+    /// Fit, then return the document-topic proportions (`fit_transform`).
+    #[pyo3(signature = (data))]
+    fn fit_transform<'py>(
+        &mut self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.fit(py, data)?;
+        Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ProdLDA(num_topics={}, fitted={})", self.num_topics, self.fitted)
+    }
+}
+
 /// FASTopic (Wu et al. 2024): a topic model with no encoder and no neural
 /// network. The topic proportions ``theta`` and the topic-word matrix ``beta`` are
 /// read off two entropic optimal-transport plans between embedding sets. You bring
@@ -8827,6 +9038,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Top2Vec>()?;
     m.add_class::<BERTopic>()?;
     m.add_class::<ETM>()?;
+    m.add_class::<ProdLDA>()?;
     m.add_class::<FASTopic>()?;
     m.add_class::<PA>()?;
     m.add_class::<HLDA>()?;

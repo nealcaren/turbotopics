@@ -16,6 +16,7 @@ pub mod model;
 pub mod optimize;
 pub mod output;
 pub mod pa;
+pub mod prodlda;
 pub mod pt;
 pub mod sage;
 pub mod sampler;

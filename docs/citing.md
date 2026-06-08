@@ -41,6 +41,7 @@ model you use, and, where you rely on a feature ported from a specific package
 | `BERTopic` | Grootendorst (2022) |
 | `Top2Vec` | Angelov (2020) |
 | `ETM` | Dieng, Ruiz & Blei (2020) |
+| `ProdLDA` | Srivastava & Sutton (2017) |
 | `FASTopic` | Wu et al. (2024) |
 
 ## Full references
@@ -69,6 +70,7 @@ model you use, and, where you rely on a feature ported from a specific package
 - Grootendorst, M. (2022). BERTopic: Neural topic modeling with a class-based TF-IDF procedure. [arXiv:2203.05794](https://arxiv.org/abs/2203.05794).
 - Angelov, D. (2020). Top2Vec: Distributed representations of topics. [arXiv:2008.09470](https://arxiv.org/abs/2008.09470).
 - Dieng, A. B., Ruiz, F. J. R., & Blei, D. M. (2020). Topic modeling in embedding spaces. *Transactions of the Association for Computational Linguistics*, 8, 439–453. [doi:10.1162/tacl_a_00325](https://doi.org/10.1162/tacl_a_00325)
+- Srivastava, A., & Sutton, C. (2017). Autoencoding variational inference for topic models. *ICLR 2017*. [arXiv:1703.01488](https://arxiv.org/abs/1703.01488) (ProdLDA / AVITM)
 - Wu, X., Nguyen, T., Zhang, D. C., Wang, W. Y., & Luu, A. T. (2024). FASTopic: A fast, adaptive, stable, and transferable topic modeling paradigm. *NeurIPS 2024*. [arXiv:2405.17978](https://arxiv.org/abs/2405.17978)
 
 ### Methods used in the diagnostics and effects tools

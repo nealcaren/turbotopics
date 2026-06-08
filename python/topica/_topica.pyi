@@ -1536,6 +1536,64 @@ class ETM:
     def __repr__(self) -> str: ...
 
 
+class ProdLDA:
+    """ProdLDA (Srivastava & Sutton 2017), the AVITM autoencoding-variational topic
+    model. LDA with the word-level mixture replaced by a product of experts:
+    the word distribution is softmax(beta . theta) with an unnormalized beta,
+    yielding more coherent topics. Inference is an amortized VAE trained by
+    minibatch Adam on the ELBO; batch normalization and high-momentum Adam guard
+    against component collapse. Unlike ETM you bring no embeddings: beta is learned
+    directly. New documents transform with a single encoder forward pass."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        alpha: float = 1.0,
+        hidden_size: int = 100,
+        dropout: float = 0.2,
+        epochs: int = 200,
+        batch_size: int = 200,
+        lr: float = 0.002,
+        em_tol: float = 0.0,
+        seed: int = 42,
+    ) -> None: ...
+    def fit(self, data: Corpus | Sequence[Sequence[str]]) -> None:
+        """Fit on a Corpus or a list of token lists."""
+        ...
+    @property
+    def num_topics(self) -> int: ...
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def bound(self) -> float: ...
+    @property
+    def bound_history(self) -> list[float]: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def epochs_run(self) -> int: ...
+    @property
+    def topic_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def fit_transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def __repr__(self) -> str: ...
+
+
 class FASTopic:
     """FASTopic (Wu et al. 2024): a topic model with no encoder or neural network.
     The topic proportions theta and topic-word matrix beta are read off two

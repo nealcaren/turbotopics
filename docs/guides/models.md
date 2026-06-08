@@ -18,6 +18,7 @@ Every model shares the same shape: construct with hyperparameters and a `seed`,
 | Tie topics to known labels | [`LabeledLDA`](#labeledlda) |
 | Shape topics to predict an outcome | [`SupervisedLDA`](#supervisedlda) |
 | Steer topics with known keywords | [`SeededLDA`, `KeyATM`](guided.md) |
+| Sharper, more coherent topics at scale | [`ProdLDA`](#prodlda) |
 | Model short texts (tweets, answers) | [`PT`, `GSDMM`](short-text.md) |
 | Build a topic hierarchy | `PA`, `HLDA` |
 
@@ -89,6 +90,30 @@ that most distinguish two groups' phrasing.
 The Correlated Topic Model (logistic-normal): topics can co-occur, unlike LDA's
 Dirichlet. This is the engine STM builds on; `topic_correlation` reports the
 learned structure. Fit by parallel variational EM.
+
+## ProdLDA
+
+ProdLDA ([Srivastava & Sutton 2017](https://arxiv.org/abs/1703.01488)) keeps
+LDA's document model but replaces the word-level *mixture* of topics with a
+*product of experts*: the word distribution is `softmax(βθ)` with an unnormalized
+β, rather than `softmax(β)·θ`. This sharper word model reliably yields more
+coherent topics than collapsed-Gibbs LDA. Inference is an amortized variational
+autoencoder (the AVITM framework): an encoder network maps a document's bag of
+words to a logistic-normal posterior over θ, trained by minibatch Adam on the
+ELBO. There is no PyTorch dependency; the network is hand-coded in the Rust core.
+
+```python
+model = topica.ProdLDA(num_topics=20, seed=1)
+theta = model.fit_transform(docs)      # one encoder pass per document
+model.top_words(10)
+```
+
+Two details follow the paper's recipe for avoiding *component collapse* (topics
+decaying onto the prior early in training): batch normalization on the encoder
+heads and decoder, and high-momentum Adam (`β₁ = 0.99`). Because inference is
+amortized, `transform` maps new documents with a single forward pass rather than
+re-running an optimizer. ProdLDA is bag-of-words (no embeddings); for the
+embedding-factored generative model see [`ETM`](embedding.md).
 
 ## STM
 

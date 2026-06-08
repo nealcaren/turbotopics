@@ -23,6 +23,7 @@ from ._topica import (
     Top2Vec as Top2Vec,
     BERTopic as BERTopic,
     ETM as ETM,
+    ProdLDA as ProdLDA,
     FASTopic as FASTopic,
     Corpus as Corpus,
     tokenize as tokenize,
