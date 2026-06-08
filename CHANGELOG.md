@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-06-08
+
+### Fixed
+
+- The `viz` topic-correlation panel (`TopicCorrelation`, and the correlation
+  sub-panel of `plot_report`) masks its always-1.0 diagonal instead of drawing
+  it. The self-correlation carried no information yet saturated the diverging
+  color scale and visually dominated the panel; the diagonal now renders as a
+  neutral background so the off-diagonal structure reads on a scale set by the
+  strongest real correlation. `to_frame()` is unchanged and still reports the
+  true diagonal.
+
+### Docs
+
+- Paper: added `ProdLDA` to the model-family table (count-based, with its
+  bibliography entry), and a worked example that aligns two model families and
+  compares their covariate effects with method-of-composition uncertainty.
+
 ## [0.12.0] - 2026-06-08
 
 ### Added

@@ -286,7 +286,8 @@ varies is the seed.
 The core depends only on \pkg{NumPy}. Features that pull heavier dependencies are
 optional extras, so the base install stays small and \pkg{PyTorch} is never
 required, even for the embedding-based models, which take vectors the user
-supplies from any embedder. The \code{viz} extra adds the plotting stack, the
+supplies from any embedder, and even for the neural \code{ProdLDA}, whose
+amortized variational autoencoder is hand-coded against \pkg{NumPy} alone. The \code{viz} extra adds the plotting stack, the
 \code{formula} extra adds \proglang{R}-style model formulas, and the \code{llm}
 extra adds optional large-language-model labeling and embedding through an API or
 a local model. The embedding models build on two pure-\proglang{Rust},
@@ -299,9 +300,9 @@ reducer \citep{mcinnes2018umap}.
 
 \pkg{topica} groups its models into two kinds by how they treat words.
 \emph{Count-based} models learn topics from word counts, by collapsed-Gibbs
-sampling or variational EM, and place topic-word weights on the probability
-simplex. \emph{Embedding-based} models start from document vectors the user
-supplies. Table~\ref{tab:models} lists the family and the question each model
+sampling, variational EM, or an amortized variational autoencoder, and present
+topic-word weights on the probability simplex. \emph{Embedding-based} models
+start from document vectors the user supplies. Table~\ref{tab:models} lists the family and the question each model
 answers. The breadth is the point: a single import covers the span from the LDA
 baseline to the structural topic model to neural clustering.
 
@@ -320,6 +321,7 @@ Model & What it is for & Reference \\
 \code{DMR}          & Topics conditioned on document metadata              & \citet{mimno2008dmr} \\
 \code{LabeledLDA}   & Supervised topics tied to document labels            & \citet{ramage2009llda} \\
 \code{CTM}          & Correlated topics (logistic-normal)                  & \citet{blei2007ctm} \\
+\code{ProdLDA}      & Sharper topics via a product-of-experts VAE          & \citet{srivastava2017prodlda} \\
 \code{STM}          & Prevalence \emph{and} content covariates             & \citet{roberts2016model} \\
 \code{SAGE}         & A topic worded differently across groups             & \citet{eisenstein2011sage} \\
 \code{HDP}          & Infers the number of topics                          & \citet{teh2006hdp} \\
@@ -625,6 +627,49 @@ Model & Family & Topics & Coherence ($c_v$) & Exclusivity & Diversity \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+A comparison behind one contract need not stop at diagnostics. Two count-based
+models from different families can be aligned topic to topic and their covariate
+effects set side by side, each carried with the uncertainty its own posterior
+admits:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+from topica import stm
+
+# lda (collapsed-Gibbs) and stm_model (variational) were fit above on the
+# same corpus, so their topic-word columns share a vocabulary. Match them.
+pairs = topica.align_topics(lda, stm_model)   # [(lda_topic, stm_topic, dist), ...]
+
+# One estimator, two families: it draws the posterior each admits --- Dirichlet
+# theta for the Gibbs LDA, logistic-normal theta for the STM --- so the
+# conservative effect carries method-of-composition uncertainty in both.
+eff_lda = stm.estimate_effect(lda, conservative, corpus=docs,
+                              feature_names=["conservative"], nsims=100)
+eff_stm = stm.estimate_effect(stm_model, conservative,
+                              feature_names=["conservative"], nsims=100)
+
+# Compare the conservative slope on matched topics, each with its own 95% CI.
+for i, j, _ in pairs:
+    a, b = eff_lda[i], eff_stm[j]   # coef[1] = conservative; coef[0] = intercept
+    print("%+.3f [%+.3f, %+.3f]   %+.3f [%+.3f, %+.3f]" % (
+        a.coef[1], a.ci_low[1], a.ci_high[1],
+        b.coef[1], b.ci_low[1], b.ci_high[1]))
+\end{CodeInput}
+\end{CodeChunk}
+
+The match is one assignment problem on the topic-word distances, and the single
+\code{estimate\_effect} call serves both families, drawing Dirichlet $\theta$ for
+the collapsed-Gibbs LDA and logistic-normal $\theta$ for the variational STM, so
+each conservative effect arrives with a method-of-composition interval rather than
+a bare point. Where two model families agree, within their intervals, on which
+topics are partisan, that agreement is a cross-model robustness check no
+single-model tool can pose; and the same call, asked of the embedding clustering
+of Table~\ref{tab:spanning}, finds no posterior over $\theta$ and declines the
+interval rather than manufacture one. This is the measurement stance of
+Section~\ref{sec:design} made operational: uncertainty is propagated from topic
+estimation into the effect where a posterior exists, and withheld where it does
+not, uniformly across the model family.
 
 \subsection{One model in depth: covariate effects with honest uncertainty}
 
