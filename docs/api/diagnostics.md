@@ -61,6 +61,23 @@ and in the `topica.validation` module.
 
 ::: topica.topic_stability
 
+## Held-out likelihood
+
+Build a within-corpus word-heldout set — the analogue of R `stm`'s
+`make.heldout` — and score it under a fitted model to get document-completion
+log-likelihood.
+
+::: topica.make_heldout
+
+::: topica.eval_heldout
+
+## Estimator conformance
+
+Check any fitted model or model class against the topica estimator contract;
+returns a list of violation strings (empty means fully conformant).
+
+::: topica.check_conformance
+
 ## Reporting
 
 Model-neutral summaries that work on any fitted model.
