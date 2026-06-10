@@ -108,6 +108,7 @@ def summary(model, topn=8):
 
 
 from . import stm  # noqa: E402  (stm imports names defined above)
+from .stm import align_corpus  # noqa: E402
 from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
 from . import effects  # noqa: E402  (model-neutral prevalence analysis)
 from . import validation  # noqa: E402  (post-hoc topic diagnostics surface)
@@ -308,6 +309,7 @@ __all__ = [
     "apply_phrases",
     "add_ngrams",
     "Phrases",
+    "align_corpus",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
     "__citation__",

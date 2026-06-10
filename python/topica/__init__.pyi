@@ -62,6 +62,18 @@ def one_hot(
     """One-hot encode a categorical covariate into (matrix, names) for DMR.fit."""
     ...
 
+
+def align_corpus(
+    new_docs: Sequence[Sequence[str]],
+    model: Any,
+) -> list[list[str]]:
+    """Restrict each token list to the tokens present in model.vocabulary.
+
+    Out-of-vocabulary tokens are silently dropped. Documents that become empty
+    after filtering are represented as empty lists. Returns aligned token lists
+    ready to pass to model.transform or topica.stm.transform."""
+    ...
+
 def coherence(
     topics: Any,
     texts: Sequence[Sequence[str]],
@@ -360,6 +372,7 @@ __all__ = [
     "llm_topic_labels",
     "llm_backend",
     "topic_label_prompts",
+    "align_corpus",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
     "__citation__",

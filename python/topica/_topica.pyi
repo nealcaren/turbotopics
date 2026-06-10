@@ -517,11 +517,19 @@ class STM:
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
-        self, data: Corpus | Sequence[Sequence[str]]
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        eta_prior_mean: numpy.typing.NDArray[numpy.float64] | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by the variational
-        E-step against the fitted globals (covariate-free baseline prior).
-        Shape (num_new_docs, num_topics)."""
+        E-step against the fitted globals (beta and the logistic-normal prior).
+        Shape (num_new_docs, num_topics).
+
+        When eta_prior_mean is None (default), the covariate-free baseline mu
+        is used for every document. When eta_prior_mean is a
+        (num_docs, num_topics-1) array, row d is the prior mean for document d.
+        The ergonomic covariate path is topica.stm.transform."""
         ...
     def __repr__(self) -> str: ...
 

@@ -997,6 +997,119 @@ def _normal_ppf(q: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# align_corpus: vocabulary alignment for out-of-sample documents
+# ---------------------------------------------------------------------------
+
+def align_corpus(new_docs, model):
+    """Restrict token lists to the fitted model's vocabulary before transform.
+
+    Each document in `new_docs` is filtered to keep only tokens that appear in
+    ``model.vocabulary``. Tokens outside that vocabulary are silently dropped.
+    Documents that become empty after filtering are represented as empty lists.
+
+    Parameters
+    ----------
+    new_docs : list[list[str]]
+        Token lists for the new documents (one list per document).
+    model : fitted STM or CTM
+        A fitted model with a ``vocabulary`` attribute (list of strings).
+
+    Returns
+    -------
+    list[list[str]]
+        Aligned token lists ready to pass to ``model.transform`` or
+        ``topica.stm.transform``. Each output list is a subset of the
+        corresponding input list, with out-of-vocabulary tokens removed.
+    """
+    vocab_set = set(model.vocabulary)
+    return [[tok for tok in doc if tok in vocab_set] for doc in new_docs]
+
+
+# ---------------------------------------------------------------------------
+# transform: covariate-aware out-of-sample inference for STM
+# ---------------------------------------------------------------------------
+
+def transform(model, docs, *, prevalence=None, data=None, formula=None, X=None):
+    """Infer topic proportions for new documents, optionally using prevalence covariates.
+
+    When prevalence information is supplied the per-document prior mean is set
+    to ``mu_d = X_d @ gamma`` (where ``gamma = model.prevalence_effects``),
+    which mirrors R ``stm``'s ``fitNewDocuments`` behavior. Without covariates
+    the covariate-free baseline prior learned at fit time is used, giving the
+    same result as ``model.transform(docs)`` directly.
+
+    The topic-word matrix used is always the marginal ``model.topic_word``; a
+    content model's per-group beta is not applied here. Documents should first
+    be aligned to the fitted vocabulary with :func:`align_corpus` if the new
+    corpus may contain out-of-vocabulary tokens.
+
+    Parameters
+    ----------
+    model : fitted STM
+        A fitted ``topica.STM`` with ``prevalence_effects`` available when
+        covariates are supplied.
+    docs : list[list[str]] or Corpus
+        Token lists (or a Corpus) for the new documents.
+    prevalence : array-like (num_docs, F), optional
+        Raw covariate matrix for the new documents, without the intercept
+        column. An intercept is prepended to match how ``gamma`` was learned.
+        Supply either ``prevalence`` or ``X``; they are equivalent.
+    data : pandas.DataFrame, optional
+        Document-level DataFrame for the new documents. Required when
+        ``formula`` is given.
+    formula : str, optional
+        R-style formula string (e.g. ``"~ party + spline(year, df=3)"``).
+        When supplied with ``data``, the design matrix is built from the
+        formula using the same column encoding as at fit time (including
+        intercept stripping). An intercept is then prepended here so the
+        column order matches ``gamma``.
+    X : array-like (num_docs, p), optional
+        Pre-built design matrix without the intercept column. Alternative to
+        ``prevalence``; they are equivalent.
+
+    Returns
+    -------
+    numpy.ndarray
+        Topic proportions, shape ``(num_docs, num_topics)``.
+    """
+    # Accept prevalence= or X= as aliases for the raw matrix path.
+    raw_x = prevalence if prevalence is not None else X
+
+    if formula is not None or raw_x is not None:
+        # Retrieve gamma from the model (raises RuntimeError if not fitted with
+        # prevalence covariates).
+        gamma = np.asarray(model.prevalence_effects, dtype=np.float64)  # (F, K-1)
+
+        if formula is not None:
+            if data is None:
+                raise ValueError("formula= requires data= (a pandas DataFrame).")
+            from .formulas import design_matrix
+            X_raw, _ = design_matrix(formula, data)
+            X_raw = np.asarray(X_raw, dtype=np.float64)
+        else:
+            X_raw = np.asarray(raw_x, dtype=np.float64)
+            if X_raw.ndim == 1:
+                X_raw = X_raw[:, None]
+
+        n = X_raw.shape[0]
+        # Prepend intercept column to match how gamma was learned.
+        X_full = np.hstack([np.ones((n, 1)), X_raw])  # (n, F)
+
+        if X_full.shape[1] != gamma.shape[0]:
+            raise ValueError(
+                f"Design matrix (with intercept) has {X_full.shape[1]} columns "
+                f"but gamma has {gamma.shape[0]} rows. Check that the number of "
+                f"covariate columns matches the fitted model."
+            )
+
+        eta_prior_mean = X_full @ gamma  # (n, K-1)
+        return model.transform(docs, eta_prior_mean=eta_prior_mean)
+
+    # No covariates: fall back to the baseline prior.
+    return model.transform(docs)
+
+
+# ---------------------------------------------------------------------------
 # Back-compatibility: the general post-hoc diagnostics were moved to
 # ``topica.diagnostics`` (they apply to any model, not just STM) and are
 # also exported at the package top level. They are re-exported here so existing
@@ -1027,6 +1140,8 @@ __all__ = [
     "posterior_theta_samples",
     "spline",
     "interaction",
+    "align_corpus",
+    "transform",
     "frex",
     "label_topics",
     "topic_correlation",
