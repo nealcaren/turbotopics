@@ -13,7 +13,7 @@ Tier 0  (floor, every estimator):
     model is iterative.
     Properties/methods: ``topic_word``, ``doc_topic``, ``vocabulary``,
     ``num_topics``, ``topic_names``, ``doc_names``, ``top_words``,
-    ``coherence``, ``save``, ``load``.
+    ``coherence``, ``save``, ``load``, ``fit_history``, ``converged``.
 
 Tier 1  (generative models, i.e. ``model_family != "none"``):
     ``transform(docs) -> (n, num_topics)``.
@@ -101,6 +101,8 @@ TIER0_ATTRS = [
     "coherence",
     "save",
     "load",
+    "fit_history",   # list[(iter, objective)] — [] when no trace is available
+    "converged",     # bool | None — None for non-iterative (cluster) models
 ]
 TIER0_ITERS = "iters"   # canonical iteration kwarg name
 
@@ -163,13 +165,23 @@ EXEMPT: dict[tuple[str, str], str] = {
     # Tier 2: family is 'none'; no Tier 2 applies.
     # coherence: a count-based UMass/NPMI is computable from any top-word list,
     # so a model-level coherence() is a fixable gap (see KNOWN_GAPS), not an
-    # exemption — even though their topic_word is c-TF-IDF rather than P(w|t).
+    # exemption -- even though their topic_word is c-TF-IDF rather than P(w|t).
+    #
+    # fit_history/converged: BERTopic and Top2Vec DO expose these (returning []
+    # and None respectively), so they are NOT exempted here.
 }
 
 # ---------------------------------------------------------------------------
 # Known gaps — TEMPORARY, tracked as a burn-down worklist
 # ---------------------------------------------------------------------------
 # Key: (model_name, requirement)   Value: phase note
+#
+# Issue #46 Part B: DMR, SeededLDA, LabeledLDA, SAGE, SupervisedLDA, PA, PT
+# return an empty fit_history (no per-iteration trace wired yet) and
+# converged=False (no early-stop).  The conformance check here is class-level
+# (hasattr), which passes because the attribute exists.  The per-iteration
+# trace quality is verified in tests/test_convergence_interface.py, which
+# marks those seven models xfail until part B ships.
 
 KNOWN_GAPS: dict[tuple[str, str], str] = {}
 
@@ -193,7 +205,7 @@ def check_conformance(model_or_class) -> list[str]:
 
     Returns a list of violation strings. An empty list means the model
     satisfies every applicable tier requirement (or has a valid exemption).
-    Does NOT look up KNOWN_GAPS or EXEMPT — it reports all raw violations so
+    Does NOT look up KNOWN_GAPS or EXEMPT -- it reports all raw violations so
     the conformance test can categorize them. Call this from the test or from
     your own CI after adding a new estimator.
 

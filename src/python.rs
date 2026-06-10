@@ -157,6 +157,8 @@ struct LdaState {
     corpus: Option<corpus::Corpus>,
     #[serde(default)] use_symmetric_alpha: bool,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DmrState {
@@ -736,6 +738,9 @@ pub struct LDA {
     theta_draws: Option<Array3<f32>>,
     model: Option<TopicModel>,
     corpus: Option<corpus::Corpus>,
+    // Convergence tracking (issue #46 uniform interface).
+    log_likelihood_history: Vec<(usize, f64)>, // (iteration, log_likelihood)
+    converged: bool,   // true only when convergence_tol criterion was met
 }
 
 impl LDA {
@@ -751,6 +756,8 @@ impl LDA {
         acc_theta: Vec<Vec<f64>>,
         model: TopicModel,
         corpus: corpus::Corpus,
+        log_likelihood_history: Vec<(usize, f64)>,
+        converged: bool,
     ) {
         // phi: transpose (word, topic) -> (topic, word).
         let mut phi = Array2::<f64>::zeros((num_topics, num_types));
@@ -770,6 +777,8 @@ impl LDA {
         self.theta = Some(theta);
         self.model = Some(model);
         self.corpus = Some(corpus);
+        self.log_likelihood_history = log_likelihood_history;
+        self.converged = converged;
         self.fitted = true;
     }
 
@@ -914,6 +923,8 @@ impl LDA {
             theta_draws: None,
             model: None,
             corpus: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -926,9 +937,17 @@ impl LDA {
     ///
     /// `progress`, if given, is called as ``progress(iteration, ll_per_token)``
     /// every `progress_interval` iterations during the main loop.
+    ///
+    /// `convergence_tol` (default 0.0, disabled) enables early stopping: after
+    /// each `check_every` sweeps the relative change in a smoothed log-likelihood
+    /// is compared; if it falls below `convergence_tol` the loop stops and
+    /// :attr:`converged` is set to ``True``. When 0 (default), the full `iters`
+    /// sweeps always run (default behavior is unchanged, bit-for-bit identical).
     #[pyo3(signature = (data, *, iters=1000, num_samples=5, sample_interval=25,
                         progress=None, progress_interval=50,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
+    #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -940,6 +959,8 @@ impl LDA {
         progress_interval: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -963,9 +984,22 @@ impl LDA {
         let alpha_sum = self.alpha_sum.unwrap_or(num_topics as f64);
         let total_tokens = corpus.total_tokens().max(1) as f64;
 
+        // When check_every=0 the caller explicitly disabled trace recording.
+        // When convergence_tol > 0 and check_every was given a positive value,
+        // enforce at least 1 so the modulo never divides by zero.
+        let check_every = if check_every == 0 {
+            0_usize
+        } else if convergence_tol > 0.0 {
+            check_every.max(1)
+        } else {
+            check_every
+        };
+
         // Thinned θ-draw retention (issue #31): keep the last `draw_cap` snapshots
         // taken every `draw_thin` sweeps of the main loop. 0 ⇒ collection off.
         let draw_cap = if keep_theta_draws { num_theta_draws } else { 0 };
+        // draw_thin is computed against `iters`; under early stop we apply the
+        // same schedule (any iteration that passes draw_thin mod-check gets a draw).
         let draw_thin = theta_draw_thin(iters, draw_cap);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, num_topics)?;
 
@@ -984,7 +1018,9 @@ impl LDA {
 
         // LightLDA path: alias-MH sampling on dense count tables, packed back
         // into a TopicModel at the end. Separate from the SparseLDA path below so
-        // the well-tested MALLET sampler is left untouched.
+        // the well-tested MALLET sampler is left untouched. LightLDA does not
+        // support convergence_tol yet (no log_likelihood computed inline), so we
+        // run the full iters and return an empty trace + converged=false.
         if light {
             let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
                 let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
@@ -1046,13 +1082,15 @@ impl LDA {
             });
             let (model, corpus) = model;
             self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
-            self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
+            self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus,
+                Vec::new(), false);
             return Ok(());
         }
 
         // Heavy loop runs with the GIL released; the progress callback briefly
         // re-acquires it. allow_threads returns the owned model + accumulators.
-        let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
+        let (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, model) =
+            py.allow_threads(move || {
             // One Gibbs sweep: exact sequential path when single-threaded,
             // approximate parallel sampling otherwise. `sweep` seeds the
             // per-worker RNGs so parallel runs are deterministic.
@@ -1069,6 +1107,8 @@ impl LDA {
                     }
                 };
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+            let mut ll_history: Vec<(usize, f64)> = Vec::new();
+            let mut converged = false;
 
             // ---- main training loop (ports src/bin/train.rs) ----
             for iter in 1..=iters {
@@ -1091,6 +1131,27 @@ impl LDA {
                     optimize::optimize_beta(&mut model);
                 }
 
+                // Trace recording and optional convergence check (never alters RNG).
+                if convergence_tol > 0.0 && check_every > 0 && iter % check_every == 0 {
+                    let ll = output::model_log_likelihood(&model, &corpus);
+                    ll_history.push((iter, ll));
+                    // Relative change criterion: compare the current ll to the
+                    // one recorded one window back (window = check_every sweeps).
+                    if ll_history.len() >= 2 {
+                        let prev = ll_history[ll_history.len() - 2].1;
+                        let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                        if rel < convergence_tol {
+                            converged = true;
+                            break;
+                        }
+                    }
+                } else if convergence_tol == 0.0 && check_every > 0 && iter % check_every == 0 {
+                    // When tol is disabled, still record the trace so fit_history
+                    // is non-empty, but never break early.
+                    let ll = output::model_log_likelihood(&model, &corpus);
+                    ll_history.push((iter, ll));
+                }
+
                 if let Some(cb) = &progress {
                     if progress_interval > 0 && iter % progress_interval == 0 {
                         let ll = output::model_log_likelihood(&model, &corpus) / total_tokens;
@@ -1100,6 +1161,10 @@ impl LDA {
                     }
                 }
             }
+
+            // Under early stop, draw_thin was computed against the nominal `iters`
+            // but the loop ended at `actual_iters` sweeps; remaining draws are
+            // whatever was already collected (ring-buffered), which is correct.
 
             // ---- sampling phase: average num_samples smoothed snapshots ----
             let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
@@ -1126,11 +1191,12 @@ impl LDA {
             }
 
             // Return the corpus too (move it back out for storage).
-            (acc_phi, acc_theta, theta_draw_buf, (model, corpus))
+            (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, (model, corpus))
         });
         let (model, corpus) = model;
         self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
-        self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
+        self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus,
+            ll_history, converged);
         Ok(())
     }
 
@@ -1266,6 +1332,32 @@ impl LDA {
                 Ok(PyList::new_bound(py, all).into_any())
             }
         }
+    }
+
+    /// Per-iteration log-likelihood trace: ``(iteration, log_likelihood)`` pairs
+    /// recorded every ``check_every`` sweeps during :meth:`fit`. Non-empty for
+    /// the SparseLDA path; empty for the LightLDA path.
+    #[getter]
+    fn log_likelihood_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.log_likelihood_history.clone())
+    }
+
+    /// Uniform convergence trace: ``(iteration, log_likelihood)`` pairs, one per
+    /// trace checkpoint. Equivalent to :attr:`log_likelihood_history` for LDA.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.log_likelihood_history.clone())
+    }
+
+    /// ``True`` if fit stopped early because the convergence tolerance criterion
+    /// was met (``convergence_tol > 0``); ``False`` if the full ``iters``
+    /// sweeps ran (the default).
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(self.converged)
     }
 
     /// MALLET-formula model log-likelihood of the final sampler state.
@@ -1501,6 +1593,8 @@ impl LDA {
             theta_draws: None,
             model: Some(model),
             corpus: Some(corpus),
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -1862,6 +1956,8 @@ impl LDA {
             model: self.model.clone(), corpus: self.corpus.clone(),
             use_symmetric_alpha: self.use_symmetric_alpha,
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -1882,6 +1978,8 @@ impl LDA {
             topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta), theta_draws: None,
             model: s.model, corpus: s.corpus,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -3060,6 +3158,20 @@ impl DMR {
         Ok(self.feature_names.clone())
     }
 
+    /// DMR has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// DMR does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
@@ -3569,6 +3681,20 @@ impl LabeledLDA {
         Ok(self.label_vocab.clone())
     }
 
+    /// LabeledLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// LabeledLDA does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
@@ -4057,6 +4183,20 @@ impl SAGE {
     fn groups(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.group_names.clone())
+    }
+
+    /// SAGE has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// SAGE does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
     }
 
     #[getter]
@@ -4554,6 +4694,19 @@ impl CTM {
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
         Ok(self.converged)
+    }
+
+    /// Uniform convergence trace: ``(iteration, bound)`` pairs, one per EM
+    /// iteration. The objective is the variational ELBO (same as
+    /// :attr:`bound_history`).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect())
     }
 
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
@@ -5073,6 +5226,19 @@ impl STM {
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
         Ok(self.converged)
+    }
+
+    /// Uniform convergence trace: ``(iteration, bound)`` pairs, one per EM
+    /// iteration. The objective is the variational ELBO (same as
+    /// :attr:`bound_history`).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect())
     }
 
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
@@ -5731,6 +5897,21 @@ impl HDP {
         Ok(self.trace.iter().map(|&(it, _, ll, _, _)| (it, ll)).collect())
     }
 
+    /// Uniform convergence trace: ``(iteration, log_likelihood)`` pairs (same as
+    /// :attr:`log_likelihood_history`).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, _, ll, _, _)| (it, ll)).collect())
+    }
+
+    /// HDP does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     /// The learned-concentration trace: ``(iteration, alpha, gamma)`` triples
     /// sampled during fit (only informative when ``resample_conc=True``). Empty
     /// if tracing was disabled.
@@ -6199,6 +6380,20 @@ impl DTM {
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
     }
 
+    /// DTM has no per-iteration ELBO trace yet; always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// DTM does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
     /// after fit; assign a list of the same length to override.
     #[getter]
@@ -6521,6 +6716,20 @@ impl SupervisedLDA {
         self.num_topics
     }
 
+    /// SupervisedLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// SupervisedLDA does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
@@ -6794,6 +7003,18 @@ impl PT {
     fn num_topics(&self) -> usize {
         self.num_topics
     }
+    /// PT has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+    /// PT does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
     /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
     /// after fit; assign a list of the same length to override.
     #[getter]
@@ -7050,6 +7271,19 @@ impl GSDMM {
     fn log_likelihood_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
         Ok(self.trace.iter().map(|&(it, _, ll)| (it, ll)).collect())
+    }
+    /// Uniform convergence trace: ``(iteration, log_likelihood)`` pairs (same as
+    /// :attr:`log_likelihood_history`).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.trace.iter().map(|&(it, _, ll)| (it, ll)).collect())
+    }
+    /// GSDMM does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
     }
     /// Document-topic matrix θ, shape ``(num_docs, num_topics)``; rows sum to 1.
     #[getter]
@@ -7364,6 +7598,18 @@ impl SeededLDA {
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics_val()
+    }
+    /// SeededLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+    /// SeededLDA does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
     }
     /// The symmetric document-topic Dirichlet prior α, broadcast to
     /// ``(num_topics,)``. Marks SeededLDA as a Dirichlet model for
@@ -8012,6 +8258,18 @@ impl Top2Vec {
         })
     }
 
+    /// Top2Vec has no iterative objective; fit_history is always ``[]``.
+    #[getter]
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    /// Top2Vec is not an iterative sampler (UMAP + clustering); converged is always ``None``.
+    #[getter]
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
     fn __repr__(&self) -> String {
         let k = self.model.as_ref().map_or(0, |m| m.num_topics);
         format!("Top2Vec(fitted={}, num_topics={})", self.fitted, k)
@@ -8423,6 +8681,18 @@ impl BERTopic {
         })
     }
 
+    /// BERTopic has no iterative objective; fit_history is always ``[]``.
+    #[getter]
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    /// BERTopic is not an iterative sampler (UMAP + clustering); converged is always ``None``.
+    #[getter]
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
     fn __repr__(&self) -> String {
         let k = self.model.as_ref().map_or(0, |m| m.num_topics);
         format!("BERTopic(fitted={}, num_topics={})", self.fitted, k)
@@ -8567,6 +8837,15 @@ impl ETM {
         match (&self.model, &self.vae) {
             (Some(m), _) => Ok(m.converged),
             (_, Some(m)) => Ok(m.converged),
+            _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
+        }
+    }
+
+    fn surf_bound_history(&self) -> PyResult<Vec<f64>> {
+        self.ensure_fitted()?;
+        match (&self.model, &self.vae) {
+            (Some(m), _) => Ok(m.bound_history.clone()),
+            (_, Some(m)) => Ok(m.bound_history.clone()),
             _ => Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first")),
         }
     }
@@ -8767,6 +9046,17 @@ impl ETM {
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.surf_converged()
+    }
+    /// Uniform convergence trace: ``(iteration, bound)`` pairs, one per EM or
+    /// VAE epoch. The objective is the variational ELBO. Empty after
+    /// :meth:`load` (bound_history is not persisted in the saved state).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        Ok(self.surf_bound_history()?
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect())
     }
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
@@ -9155,6 +9445,17 @@ impl ProdLDA {
     fn converged(&self) -> PyResult<bool> {
         Ok(self.fitted_model()?.converged)
     }
+    /// Uniform convergence trace: ``(epoch, elbo)`` pairs, one per training
+    /// epoch (same as :attr:`bound_history` but indexed).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        Ok(self.fitted_model()?
+            .bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect())
+    }
     #[getter]
     fn epochs_run(&self) -> PyResult<usize> {
         Ok(self.fitted_model()?.epochs_run)
@@ -9519,6 +9820,17 @@ impl FASTopic {
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         Ok(self.fitted_model()?.converged)
+    }
+    /// Uniform convergence trace: ``(epoch, negative_loss)`` pairs. The
+    /// objective is the negated OT loss (so higher = better), indexed from 1.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        Ok(self.fitted_model()?
+            .loss_history
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| (i + 1, -l))
+            .collect())
     }
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
@@ -10209,6 +10521,25 @@ impl KeyATM {
         Ok(self.log_likelihood_history.clone())
     }
 
+    /// Uniform convergence trace: ``(iteration, log_likelihood)`` pairs (the
+    /// first two columns of :attr:`log_likelihood_history`; perplexity column
+    /// dropped for cross-model uniformity).
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.log_likelihood_history
+            .iter()
+            .map(|&(it, ll, _)| (it, ll))
+            .collect())
+    }
+
+    /// KeyATM does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
+
     /// Trace of the estimated document-topic prior α as ``(iteration, alpha)``
     /// pairs, where ``alpha`` is the length-K asymmetric prior at that sweep —
     /// keyATM's ``plot_alpha`` / ``values_iter$alpha_iter``. Base model only;
@@ -10498,6 +10829,18 @@ impl PA {
     fn num_topics(&self) -> usize {
         self.num_sub
     }
+    /// PA has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+    /// PA does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
+    }
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
@@ -10757,6 +11100,20 @@ impl HLDA {
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+
+    /// HLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(Vec::new())
+    }
+
+    /// HLDA does not implement an early-stop criterion; always ``False``.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(false)
     }
 
     /// Top `n` words for one topic node as ``(word, probability)`` pairs.
