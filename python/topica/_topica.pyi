@@ -895,6 +895,28 @@ class SAGE:
         ...
 
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs against
+        the fitted group-averaged topic-word matrix. The group-specific word
+        distributions are held fixed and averaged; no group covariate is needed for
+        held-out documents. Shape (num_new_docs, num_topics); rows sum to 1."""
+        ...
+
+    def save(self, path: str) -> None: ...
+    @staticmethod
+    def load(path: str) -> "SAGE": ...
+    @property
+    def doc_names(self) -> list[str]: ...
     def __repr__(self) -> str: ...
 
 
@@ -1292,6 +1314,21 @@ class PT:
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs against the
+        fitted topic-word matrix. The pseudo-document layer is a training-time device;
+        held-out documents infer theta over the K topics directly under the fitted phi.
+        Shape (num_new_docs, num_topics); rows sum to 1."""
+        ...
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "PT": ...
@@ -1425,6 +1462,20 @@ class PA:
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer sub-topic proportions for new documents by collapsed Gibbs against the
+        fitted sub-topic-word matrix. Projects onto the num_sub sub-topics, marginalizing
+        the super-topic layer. Shape (num_new_docs, num_sub); rows sum to 1."""
+        ...
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "PA": ...
@@ -1541,6 +1592,21 @@ class SeededLDA:
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs against the
+        fitted topic-word matrix. The seed-word boost is baked into the fitted phi;
+        new documents infer theta under those distributions without re-estimating the
+        seed prior. Shape (num_new_docs, num_topics); rows sum to 1."""
+        ...
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "SeededLDA": ...
@@ -2056,6 +2122,22 @@ class KeyATM:
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    def transform(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iterations: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed: int | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer document-topic theta for new documents by collapsed Gibbs against the
+        fitted effective topic-word matrix. The effective P(w|topic) already marginalizes
+        over the keyword switch; held-out inference does not re-estimate the switch for
+        new tokens. Uses the estimated asymmetric alpha when available. Shape
+        (num_new_docs, num_topics); rows sum to 1."""
+        ...
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "KeyATM": ...
