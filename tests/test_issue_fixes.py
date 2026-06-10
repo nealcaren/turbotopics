@@ -31,7 +31,7 @@ def test_prepare_pyldavis_accepts_corpus():
     docs = [["cat", "dog", "pet"]] * 10 + [["star", "moon", "sky"]] * 10
     c = topica.Corpus.from_documents(docs)
     m = topica.LDA(2, seed=1)
-    m.fit(c, iterations=100)
+    m.fit(c, iters=100)
     out = topica.prepare_pyldavis(m, c)  # must not raise on a Corpus
     assert out is not None
 
@@ -101,7 +101,7 @@ def test_flexible_first_arg_accepts_model_or_matrix():
     # fitted model (the failing convention) as well as the raw matrix.
     docs = [["cat", "dog", "pet", "vet"]] * 12 + [["star", "moon", "sky", "sun"]] * 12
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=150)
+    m.fit(docs, iters=150)
     texts = [" ".join(d) for d in docs]
 
     # model-first (previously raised "float() argument ... not 'topica.LDA'")
@@ -123,7 +123,7 @@ def test_flexible_first_arg_accepts_model_or_matrix():
 def test_search_k_labels_its_coherence_metric():
     # #14: search_k reports UMass; label it so its scale isn't confused with c_v.
     docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
-    rows = topica.search_k(docs, [2, 3], iterations=60, num_samples=1)
+    rows = topica.search_k(docs, [2, 3], iters=60, num_samples=1)
     assert all(r["coherence_metric"] == "u_mass" for r in rows)
 
 
@@ -208,6 +208,6 @@ def test_report_is_callable():
     assert callable(topica.report)
     docs = [["cat", "dog"], ["star", "moon"]] * 8
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=50)
+    m.fit(docs, iters=50)
     assert topica.report(m) == topica.summary(m)
     assert "num_topics" in topica.report(m)

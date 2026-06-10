@@ -149,7 +149,7 @@ def main():
     K = 15
     lda = LDA(num_topics=K, seed=1)
     # progress callback prints likelihood as it samples.
-    lda.fit(pcorpus, iterations=400, num_samples=4, sample_interval=25)
+    lda.fit(pcorpus, iters=400, num_samples=4, sample_interval=25)
     print(f"Fit LDA(K={K}). Top words per topic:")
     for t in range(K):
         words = [w for w, _ in lda.top_words(8, topic=t)]
@@ -188,7 +188,7 @@ def main():
     stm_model = STM(num_topics=Ks, seed=1)
     # em_iters modest for runtime; ~75-100 for a real fit.
     stm_model.fit(phrased_docs, X_decade,
-                  prevalence_names=decade_names, em_iters=30)
+                  prevalence_names=decade_names, iters=30)
     print(f"Fit STM(K={Ks}) with decade prevalence.")
 
     # Interpret topics with stm-style word lists: prob (frequent) vs FREX
@@ -240,7 +240,7 @@ def main():
     didx = {d: i for i, d in enumerate(decades)}
     times = [didx[r["decade"]] for r in rows]
     dtm = DTM(num_topics=8, chain_variance=0.05, seed=1)
-    dtm.fit(pcorpus, times, em_iters=20)   # ~30+ EM iters for a real run
+    dtm.fit(pcorpus, times, iters=20)   # ~30+ EM iters for a real run
     print(f"Fit DTM(K=8) over {dtm.num_times} decade slices "
           f"({decades[0]}s ... {decades[-1]}s).")
 

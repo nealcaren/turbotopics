@@ -119,7 +119,7 @@ score higher on coherence while collapsing distinctions the researcher cares
 about. Use the diagnostics as evidence, not as an optimizer:
 
 ```python
-rows = topica.search_k(docs, [10, 15, 20, 25, 30], iterations=1000)
+rows = topica.search_k(docs, [10, 15, 20, 25, 30], iters=1000)
 # coherence, exclusivity, and held-out perplexity per K
 ```
 
@@ -144,7 +144,7 @@ model = topica.STM(num_topics=20, seed=42)
 model.fit(docs, prevalence=X, prevalence_names=names)   # content=... for SAGE
 ```
 
-A plain LDA fit is `topica.LDA(num_topics=20, seed=42).fit(docs, iterations=1000)`.
+A plain LDA fit is `topica.LDA(num_topics=20, seed=42).fit(docs, iters=1000)`.
 Check that the fit converged (the EM models expose a bound / `converged` flag;
 the Gibbs models expose log-likelihood history). A model that did not converge is
 not a result. Read topics off `top_words`, `label_topics` (prob / FREX / lift /

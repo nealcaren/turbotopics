@@ -19,19 +19,19 @@ DOCS = (
 def test_symmetric_alpha_stays_symmetric():
     sym = topica.LDA(num_topics=4, seed=1, optimize_interval=10, burn_in=20,
                      use_symmetric_alpha=True)
-    sym.fit(DOCS, iterations=300)
+    sym.fit(DOCS, iters=300)
     assert np.allclose(sym.alpha, sym.alpha[0])  # every alpha[t] equal
 
 
 def test_asymmetric_alpha_is_default_and_varies():
     asym = topica.LDA(num_topics=4, seed=1, optimize_interval=10, burn_in=20)
-    asym.fit(DOCS, iterations=300)
+    asym.fit(DOCS, iters=300)
     assert not np.allclose(asym.alpha, asym.alpha[0])  # learned per-topic shape
 
 
 def test_symmetric_flag_survives_save_load(tmp_path):
     m = topica.LDA(num_topics=3, seed=1, use_symmetric_alpha=True)
-    m.fit(DOCS, iterations=100)
+    m.fit(DOCS, iters=100)
     path = str(tmp_path / "m.tt")
     m.save(path)
     loaded = topica.LDA.load(path)
@@ -41,7 +41,7 @@ def test_symmetric_flag_survives_save_load(tmp_path):
 
 def test_load_state_round_trip(tmp_path):
     m = topica.LDA(num_topics=3, seed=1)
-    m.fit(DOCS, iterations=200)
+    m.fit(DOCS, iters=200)
     state = str(tmp_path / "state.gz")
     m.save_state(state)
 
@@ -66,7 +66,7 @@ def test_load_state_reconstructs_assignments(tmp_path):
     # A planted corpus with disjoint vocab: load_state must preserve which words
     # land in which topic (up to topic relabeling).
     m = topica.LDA(num_topics=3, seed=3)
-    m.fit(DOCS, iterations=300)
+    m.fit(DOCS, iters=300)
     state = str(tmp_path / "s.gz")
     m.save_state(state)
     r = topica.LDA.load_state(state)
@@ -79,7 +79,7 @@ def test_load_state_reconstructs_assignments(tmp_path):
 def test_load_state_plain_text(tmp_path):
     # load_state accepts an uncompressed state file too.
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(DOCS, iterations=100)
+    m.fit(DOCS, iters=100)
     gz = str(tmp_path / "s.gz")
     m.save_state(gz)
     plain = str(tmp_path / "s.txt")
@@ -91,7 +91,7 @@ def test_load_state_plain_text(tmp_path):
 
 def test_diagnostics_has_mallet_fields():
     m = topica.LDA(num_topics=3, seed=1)
-    m.fit(DOCS, iterations=200)
+    m.fit(DOCS, iters=200)
     diag = m.diagnostics(n=5)
     assert len(diag) == 3
     required = {

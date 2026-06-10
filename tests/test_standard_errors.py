@@ -22,7 +22,7 @@ def _planted(seed=0, n=240):
         docs.append(list(rng.choice(block, size=12)))
     corpus = topica.Corpus.from_documents(docs)
     m = topica.LDA(2, seed=1)
-    m.fit(corpus, iterations=250)
+    m.fit(corpus, iters=250)
     return m, corpus, x
 
 
@@ -88,25 +88,25 @@ def _fit_for_composition():
     X = rng.normal(size=(len(docs), 1))
 
     models = {}
-    m = topica.LDA(3, seed=1); m.fit(corpus, iterations=120); models["LDA"] = m
+    m = topica.LDA(3, seed=1); m.fit(corpus, iters=120); models["LDA"] = m
     m = topica.HDP(seed=1); m.fit(corpus, iters=120); models["HDP"] = m
     m = topica.KeyATM({"a": ["w0"], "b": ["w1"]}, num_topics=3)
     m.fit(corpus, iters=120); models["KeyATM"] = m
     m = topica.SeededLDA({"a": ["w0"], "b": ["w1"]}, residual=1)
     m.fit(corpus, iters=120); models["SeededLDA"] = m
-    m = topica.LabeledLDA(seed=1); m.fit(docs, [["x", "y"]] * len(docs), iterations=120)
+    m = topica.LabeledLDA(seed=1); m.fit(docs, [["x", "y"]] * len(docs), iters=120)
     models["LabeledLDA"] = m
-    m = topica.SupervisedLDA(num_topics=3, seed=1); m.fit(docs, y, em_iters=8)
+    m = topica.SupervisedLDA(num_topics=3, seed=1); m.fit(docs, y, iters=8)
     models["SupervisedLDA"] = m
     m = topica.DMR(num_topics=3, seed=1, optimize_interval=25, burn_in=20)
-    m.fit(docs, X, feature_names=["x"], iterations=120, num_samples=2, sample_interval=10)
+    m.fit(docs, X, feature_names=["x"], iters=120, num_samples=2, sample_interval=10)
     models["DMR"] = m
     m = topica.PA(num_super=2, num_sub=4, seed=1); m.fit(corpus, iters=120)
     models["PA"] = m
     m = topica.PT(num_topics=3, num_pseudo=10, seed=1); m.fit(corpus, iters=120)
     models["PT"] = m
     m = topica.SAGE(num_topics=3, seed=1, optimize_interval=25, burn_in=20)
-    m.fit(docs, ["g"] * len(docs), iterations=120, num_samples=2, sample_interval=10)
+    m.fit(docs, ["g"] * len(docs), iters=120, num_samples=2, sample_interval=10)
     models["SAGE"] = m
     return corpus, models
 
@@ -138,7 +138,7 @@ def test_composition_effect_inflates_over_ols():
     # test_real_draws_reflect_identifiability in test_theta_draws.py.)
     _, corpus, x = _planted()
     m = topica.LDA(2, seed=1)
-    m.fit(corpus, iterations=250, keep_theta_draws=False)
+    m.fit(corpus, iters=250, keep_theta_draws=False)
     X = x[:, None]
     ols = topica.estimate_effect(m.doc_topic, X, feature_names=["x"])
     moc = topica.standard_errors(m, corpus, of="effect", X=X, feature_names=["x"], nsims=30)
@@ -153,7 +153,7 @@ def test_composition_self_sufficient_for_gibbs_and_rejects_embedding():
     # #32), so even with draws disabled the Dirichlet fallback needs no corpus=.
     _, corpus, _ = _planted()
     m = topica.LDA(2, seed=1)
-    m.fit(corpus, iterations=250, keep_theta_draws=False)
+    m.fit(corpus, iters=250, keep_theta_draws=False)
     prev = topica.standard_errors(m, of="prevalence", nsims=10)  # no corpus needed
     assert len(prev) == 2
 
@@ -178,7 +178,7 @@ def test_bootstrap_prevalence_matches_composition_on_clean_data():
     m, corpus, _ = _planted()
     comp = topica.standard_errors(m, corpus, of="prevalence", nsims=40)
     boot = topica.standard_errors(m, corpus, of="prevalence", method="bootstrap",
-                                  n_boot=40, topn=5, iterations=150, seed=0)
+                                  n_boot=40, topn=5, iters=150, seed=0)
     for t in range(2):
         assert boot[t].reliable
         assert boot[t].alignment_quality > 0.5 and boot[t].alignment_margin > 0.1
@@ -189,7 +189,7 @@ def test_bootstrap_prevalence_matches_composition_on_clean_data():
 def test_bootstrap_top_words_inclusion_probs():
     m, corpus, _ = _planted()
     res = topica.standard_errors(m, corpus, of="top_words", method="bootstrap",
-                                 n_boot=30, topn=5, iterations=150, seed=0)
+                                 n_boot=30, topn=5, iters=150, seed=0)
     assert len(res) == 2
     for r in res:
         assert r.reliable
@@ -206,7 +206,7 @@ def test_alignment_margin_flags_indistinct_topics():
     # margin diagnostic must catch this and suppress the SE.
     m, corpus, _ = _planted()
     res = topica.standard_errors(m, corpus, of="prevalence", method="bootstrap",
-                                 n_boot=20, topn=20, iterations=150, seed=0)
+                                 n_boot=20, topn=20, iters=150, seed=0)
     for r in res:
         assert r.alignment_margin < 0.1
         assert not r.reliable
@@ -221,7 +221,7 @@ def test_bootstrap_via_refit_hook():
 
     def refit(picks):
         mm = topica.LDA(2, seed=int(picks[0]) + 1)
-        mm.fit([docs[i] for i in picks], iterations=150)
+        mm.fit([docs[i] for i in picks], iters=150)
         return mm
 
     res = topica.standard_errors(m, corpus, of="prevalence", method="bootstrap",

@@ -27,7 +27,7 @@ def _corpus(n=80):
 def test_dirichlet_theta_samples_shape_and_determinism():
     docs, _ = _corpus()
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=150)
+    m.fit(docs, iters=150)
     lengths = np.array([len(d) for d in docs])
     a = topica.dirichlet_theta_samples(m.doc_topic, lengths, nsims=15, seed=0)
     b = topica.dirichlet_theta_samples(m.doc_topic, lengths, nsims=15, seed=0)
@@ -43,7 +43,7 @@ def test_dirichlet_theta_samples_shape_and_determinism():
 def test_estimate_effect_on_gibbs_draws_and_point():
     docs, x = _corpus()
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=200)
+    m.fit(docs, iters=200)
     lengths = np.array([len(d) for d in docs])
     draws = topica.dirichlet_theta_samples(m.doc_topic, lengths, nsims=20, seed=0)
 

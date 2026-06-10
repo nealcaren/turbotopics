@@ -188,7 +188,7 @@ class DMR:
         features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
         *,
         feature_names: list[str] | None = None,
-        iterations: int = 1000,
+        iters: int = 1000,
         num_samples: int = 5,
         sample_interval: int = 25,
         progress: object | None = None,
@@ -294,12 +294,12 @@ class CTM:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        em_iters: int = 500,
+        iters: int = 500,
         em_tol: float = 1e-5,
     ) -> None:
         """EM stops once the relative change in the variational bound falls below
-        em_tol or after em_iters iterations, whichever comes first. Pass em_tol=0
-        to always run em_iters steps. Check converged and bound afterward."""
+        em_tol or after iters iterations, whichever comes first. Pass em_tol=0
+        to always run iters steps. Check converged and bound afterward."""
         ...
 
     @property
@@ -314,7 +314,7 @@ class CTM:
         ...
     @property
     def converged(self) -> bool:
-        """True if EM met em_tol; False if it hit the em_iters cap."""
+        """True if EM met em_tol; False if it hit the iters cap."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -387,7 +387,7 @@ class STM:
         prevalence_names: list[str] | None = None,
         content: Sequence[str] | Sequence[int] | None = None,
         content_names: list[str] | None = None,
-        em_iters: int = 500,
+        iters: int = 500,
         em_tol: float = 1e-5,
     ) -> None:
         """Fit. prevalence is (num_docs, F) covariates driving topic proportions
@@ -396,8 +396,8 @@ class STM:
         one of prevalence/content must be given.
 
         EM stops once the relative change in the variational bound falls below
-        em_tol (R stm's emtol) or after em_iters iterations, whichever comes
-        first. Pass em_tol=0 to always run em_iters steps. Check converged and
+        em_tol (R stm's emtol) or after iters iterations, whichever comes
+        first. Pass em_tol=0 to always run iters steps. Check converged and
         bound afterward."""
         ...
 
@@ -414,7 +414,7 @@ class STM:
         ...
     @property
     def converged(self) -> bool:
-        """True if EM met em_tol; False if it hit the em_iters cap."""
+        """True if EM met em_tol; False if it hit the iters cap."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -612,7 +612,7 @@ class DTM:
         data: Corpus | Sequence[Sequence[str]],
         times: Sequence[int],
         *,
-        em_iters: int = 20,
+        iters: int = 20,
     ) -> None:
         """Fit by variational EM. `times` is each document's integer time-slice
         index (0-based, contiguous); the slice count is max(times)+1."""
@@ -670,7 +670,7 @@ class SupervisedLDA:
         data: Corpus | Sequence[Sequence[str]],
         y: Sequence[float],
         *,
-        em_iters: int = 25,
+        iters: int = 25,
         var_iters: int = 15,
     ) -> None:
         """Fit by variational EM. `y` is the per-document response (length =
@@ -757,7 +757,7 @@ class SAGE:
         groups: Sequence[str] | Sequence[int],
         *,
         group_names: list[str] | None = None,
-        iterations: int = 1000,
+        iters: int = 1000,
         num_samples: int = 5,
         sample_interval: int = 25,
         progress: Optional[object] = None,
@@ -835,7 +835,7 @@ class LabeledLDA:
         labels: Sequence[Sequence[str]],
         *,
         label_names: list[str] | None = None,
-        iterations: int = 1000,
+        iters: int = 1000,
         num_samples: int = 5,
         sample_interval: int = 25,
         progress: Optional[object] = None,
@@ -949,7 +949,7 @@ class LDA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 1000,
+        iters: int = 1000,
         num_samples: int = 5,
         sample_interval: int = 25,
         progress: Optional[object] = None,

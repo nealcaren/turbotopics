@@ -17,7 +17,7 @@ def model_and_texts():
     docs = [d.split() for d in (pets * 20 + sky * 20)]
     texts = pets * 20 + sky * 20
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=300)
+    m.fit(docs, iters=300)
     return m, texts
 
 

@@ -19,10 +19,10 @@ from topica import LDA, Corpus
 # Available as `toy_docs` session fixture.
 
 
-def _fitted_toy(toy_docs, seed=42, num_topics=2, iterations=300, **kwargs):
+def _fitted_toy(toy_docs, seed=42, num_topics=2, iters=300, **kwargs):
     """Return a fitted LDA on toy_docs with sensible defaults."""
     model = LDA(num_topics, seed=seed, optimize_interval=0, **kwargs)
-    model.fit(toy_docs, iterations=iterations, num_samples=3, sample_interval=10)
+    model.fit(toy_docs, iters=iters, num_samples=3, sample_interval=10)
     return model
 
 
@@ -242,7 +242,7 @@ class TestPerplexityRecoversK:
 
     def _fit(self, k, train_docs):
         model = LDA(k, seed=42, optimize_interval=0)
-        model.fit(train_docs, iterations=300, num_samples=3, sample_interval=10)
+        model.fit(train_docs, iters=300, num_samples=3, sample_interval=10)
         return model
 
     def test_k2_lower_than_k1(self, cluster_data):
@@ -270,7 +270,7 @@ class TestHeldOutVsTrainingPerplexity:
         space = [["planet", "star", "moon"]] * 5
         held_docs = animal + space
 
-        model = _fitted_toy(toy_docs, seed=42, iterations=300)
+        model = _fitted_toy(toy_docs, seed=42, iters=300)
         train_perp = model.perplexity(toy_docs, num_particles=10, seed=42)
         held_perp = model.perplexity(held_docs, num_particles=10, seed=42)
         assert held_perp >= train_perp, (
@@ -317,9 +317,9 @@ class TestCoherence:
         than a random-looking single-topic model."""
         train, _ = _make_cluster_corpus(n_per_cluster=40, doc_len=10, seed=0)
         good_model = LDA(2, seed=42, optimize_interval=0)
-        good_model.fit(train, iterations=300, num_samples=3, sample_interval=10)
+        good_model.fit(train, iters=300, num_samples=3, sample_interval=10)
         bad_model = LDA(1, seed=42, optimize_interval=0)
-        bad_model.fit(train, iterations=300, num_samples=3, sample_interval=10)
+        bad_model.fit(train, iters=300, num_samples=3, sample_interval=10)
         # k=2 mean coherence should be closer to 0 than k=1
         assert np.mean(good_model.coherence(5)) > np.mean(bad_model.coherence(5))
 
@@ -412,7 +412,7 @@ class TestDiagnosticsSemantics:
     def cluster_model(self):
         train, _ = _make_cluster_corpus(n_per_cluster=40, doc_len=10, seed=0)
         m = LDA(2, seed=42, optimize_interval=0)
-        m.fit(train, iterations=300, num_samples=3, sample_interval=10)
+        m.fit(train, iters=300, num_samples=3, sample_interval=10)
         return m
 
     def test_top_words_disjoint_between_topics(self, cluster_model):

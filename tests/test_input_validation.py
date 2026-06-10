@@ -52,7 +52,7 @@ def test_other_constructors_reject_nan():
 
 def test_valid_hyperparameters_still_construct_and_fit():
     m = LDA(num_topics=2, beta=0.01, alpha_sum=1.0, seed=42)
-    m.fit(DOCS, iterations=20)
+    m.fit(DOCS, iters=20)
     assert not np.any(np.isnan(m.topic_word))
     assert m.topic_word.shape == (2, len(m.vocabulary))
 
@@ -62,7 +62,7 @@ def test_valid_hyperparameters_still_construct_and_fit():
 def test_empty_documents_rejected():
     m = LDA(num_topics=2, seed=42)
     with pytest.raises(ValueError):
-        m.fit([[], [], []], iterations=20)
+        m.fit([[], [], []], iters=20)
 
 
 def test_all_words_filtered_rejected():
@@ -78,7 +78,7 @@ def test_all_words_filtered_rejected():
 @pytest.fixture(scope="module")
 def model():
     m = LDA(num_topics=2, seed=42)
-    m.fit(DOCS, iterations=30)
+    m.fit(DOCS, iters=30)
     return m
 
 

@@ -76,7 +76,7 @@ def _ensure_compiled(java_name: str) -> bool:
     return True
 
 
-def labeled_parity(seed: int = 0, iterations: int = 800, top_n: int = 6):
+def labeled_parity(seed: int = 0, iters: int = 800, top_n: int = 6):
     """Compare topica.LabeledLDA to Java MALLET's LabeledLDA on a shared
     multi-label corpus. Topics correspond to labels, so they align by name.
     Returns a dict with mean cosine and per-label detail."""
@@ -109,7 +109,7 @@ def labeled_parity(seed: int = 0, iterations: int = 800, top_n: int = 6):
                 f.write(f"{','.join(labs)}\t{' '.join(toks)}\n")
         subprocess.run(
             ["java", "-cp", f"{cp}:{HERE}", "LabeledLDADriver", inp,
-             str(iterations), "1", "0.1", "0.01", out],
+             str(iters), "1", "0.1", "0.01", out],
             check=True, capture_output=True, text=True,
         )
         lines = open(out).read().splitlines()
@@ -136,7 +136,7 @@ def labeled_parity(seed: int = 0, iterations: int = 800, top_n: int = 6):
             mal_phi[t, j] = (c + beta) / (tpt[t] + beta * W)
 
     model = LabeledLDA(alpha=0.1, beta=0.01, seed=1)
-    model.fit(docs, labels, iterations=iterations, num_samples=5, sample_interval=25)
+    model.fit(docs, labels, iters=iters, num_samples=5, sample_interval=25)
     oi = {w: i for i, w in enumerate(model.vocabulary)}
     olabels = model.labels
     our_phi = np.zeros((K, W))
@@ -168,7 +168,7 @@ def planted_corpus(seed: int = 0, num_docs: int = 250, doc_len: int = 12):
     return docs, len(topics)
 
 
-def _mallet_phi(docs, k, iterations, seed, beta=0.01):
+def _mallet_phi(docs, k, iters, seed, beta=0.01):
     """Run Java MALLET train-topics; return (phi (k, V), vocab)."""
     mallet = shutil.which("mallet")
     d = tempfile.mkdtemp()
@@ -187,7 +187,7 @@ def _mallet_phi(docs, k, iterations, seed, beta=0.01):
         wtc = os.path.join(d, "wtc.txt")
         subprocess.run(
             [mallet, "train-topics", "--input", mal, "--num-topics", str(k),
-             "--num-iterations", str(iterations), "--random-seed", str(seed),
+             "--num-iterations", str(iters), "--random-seed", str(seed),
              "--optimize-interval", "0", "--word-topic-counts-file", wtc, "--num-top-words", "1"],
             check=True, capture_output=True, text=True,
         )
@@ -228,7 +228,7 @@ def _align(a_phi, b_phi):
     return pairs
 
 
-def lda_parity(seed: int = 0, k: int | None = None, iterations: int = 800, top_n: int = 6):
+def lda_parity(seed: int = 0, k: int | None = None, iters: int = 800, top_n: int = 6):
     """Compare topica LDA to Java MALLET on a shared planted corpus.
 
     Returns a dict with `mean_jaccard`, `mean_cosine`, and per-topic detail.
@@ -238,11 +238,11 @@ def lda_parity(seed: int = 0, k: int | None = None, iterations: int = 800, top_n
     docs, planted_k = planted_corpus(seed=seed)
     k = planted_k if k is None else k
 
-    mal_phi, vocab = _mallet_phi(docs, k, iterations, seed=1)
+    mal_phi, vocab = _mallet_phi(docs, k, iters, seed=1)
     vi = {w: j for j, w in enumerate(vocab)}
 
     model = LDA(num_topics=k, seed=1, optimize_interval=0)
-    model.fit(docs, iterations=iterations, num_samples=5, sample_interval=25)
+    model.fit(docs, iters=iters, num_samples=5, sample_interval=25)
     ophi, ovocab = model.topic_word, model.vocabulary
     our_phi = np.zeros((k, len(vocab)))
     for j, w in enumerate(vocab):
@@ -265,7 +265,7 @@ def lda_parity(seed: int = 0, k: int | None = None, iterations: int = 800, top_n
     }
 
 
-def dmr_parity(seed: int = 0, iterations: int = 800, num_docs: int = 160):
+def dmr_parity(seed: int = 0, iters: int = 800, num_docs: int = 160):
     """Compare topica.DMR to Java MALLET's DMRTopicModel. Because DMR fits
     feature weights with L-BFGS (which differs between implementations), this is
     a *statistical* check: do the topics align, and does the covariate's effect
@@ -294,7 +294,7 @@ def dmr_parity(seed: int = 0, iterations: int = 800, num_docs: int = 160):
             for toks, x in zip(docs, cov):
                 f.write(f"is_space={x}\t{' '.join(toks)}\n")
         subprocess.run(
-            ["java", "-cp", f"{cp}:{HERE}", "DMRDriver", inp, "2", str(iterations), "1", oc, op],
+            ["java", "-cp", f"{cp}:{HERE}", "DMRDriver", inp, "2", str(iters), "1", oc, op],
             check=True, capture_output=True, text=True,
         )
         import collections
@@ -320,7 +320,7 @@ def dmr_parity(seed: int = 0, iterations: int = 800, num_docs: int = 160):
 
     model = DMR(num_topics=2, seed=1, optimize_interval=25, burn_in=50)
     model.fit(docs, np.array(cov, float)[:, None], feature_names=["is_space"],
-              iterations=iterations, num_samples=5, sample_interval=25)
+              iters=iters, num_samples=5, sample_interval=25)
     oi = {w: i for i, w in enumerate(model.vocabulary)}
     ours = np.zeros((K, W))
     for j, w in enumerate(words):

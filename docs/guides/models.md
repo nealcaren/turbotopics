@@ -31,7 +31,7 @@ multi-threaded training.
 ```python
 import topica
 model = topica.LDA(num_topics=20, seed=42)
-model.fit(docs, iterations=1000)
+model.fit(docs, iters=1000)
 model.top_words(10)
 ```
 
@@ -53,7 +53,7 @@ model.top_words(10)
 
 ```python
 model = topica.LDA(num_topics=500, seed=1, sampler="lightlda", mh_steps=2)
-model.fit(docs, iterations=1000)
+model.fit(docs, iters=1000)
 ```
 
 Both samplers target the same posterior and recover the same topics (matched
@@ -141,7 +141,7 @@ rose and fell most within a topic — what makes its vocabulary evolve.
 
 ```python
 dtm = topica.DTM(num_topics=10, chain_variance=0.05, seed=1)
-dtm.fit(docs, times, em_iters=20)   # `times` = per-doc slice index
+dtm.fit(docs, times, iters=20)   # `times` = per-doc slice index
 
 drift = dtm.word_drift(topic=3)     # first vs last slice by default
 print("rising: ", [w for w, _ in drift["rising"][:5]])

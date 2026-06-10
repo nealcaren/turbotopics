@@ -110,7 +110,7 @@ def test_stm_fit_defaults_match_r_stm() -> None:
     fit_defaults = _topica_defaults("STM", "fit")
 
     assert init_defaults["init"] == r["init"].lower()
-    assert fit_defaults["em_iters"] == int(r["max_em_its"])
+    assert fit_defaults["iters"] == int(r["max_em_its"])
     assert math.isclose(fit_defaults["em_tol"], float(r["emtol"]), rel_tol=0, abs_tol=0)
 
 
@@ -186,7 +186,7 @@ def test_mallet_defaults_match_topica_for_shared_lda_controls() -> None:
     assert init_defaults["burn_in"] == int(mallet["optimize-burn-in"])
     assert init_defaults["num_threads"] == int(mallet["num-threads"])
     assert init_defaults["use_symmetric_alpha"] is (mallet["use-symmetric-alpha"] == "true")
-    assert fit_defaults["iterations"] == int(mallet["num-iterations"])
+    assert fit_defaults["iters"] == int(mallet["num-iterations"])
 
 
 def test_mallet_default_mismatches_are_explicit_contracts() -> None:

@@ -37,7 +37,7 @@ def main():
     period = [f"P{p}" for p in period]
 
     model = topica.LDA(num_topics=8, seed=1)
-    model.fit(docs, iterations=800)
+    model.fit(docs, iters=800)
 
     fig = topica.plot_report(
         model, texts=texts, timestamps=period, groups=rating, n=6,

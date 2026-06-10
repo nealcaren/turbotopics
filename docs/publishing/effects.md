@@ -68,7 +68,7 @@ method-of-composition machinery:
 import numpy as np, topica
 
 model = topica.LDA(num_topics=20, seed=1)
-model.fit(docs, iterations=1000)
+model.fit(docs, iters=1000)
 
 lengths = np.array([len(d) for d in docs])
 draws = topica.dirichlet_theta_samples(model.doc_topic, lengths, nsims=50, seed=0)

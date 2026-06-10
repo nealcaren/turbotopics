@@ -15,7 +15,7 @@ OpenAI or local via ollama). PyTorch is never required.
 from topica import LDA
 
 model = LDA(num_topics=2, seed=42)
-model.fit([["cat", "dog", "fish"]] * 15 + [["planet", "star", "moon"]] * 15, iterations=1000)
+model.fit([["cat", "dog", "fish"]] * 15 + [["planet", "star", "moon"]] * 15, iters=1000)
 
 for i, words in enumerate(model.top_words(3)):
     print(f"Topic {i}:", " ".join(w for w, _ in words))

@@ -55,7 +55,7 @@ print("vocab", corpus.num_words)                  # 3418
 
 ```python
 lda = topica.LDA(num_topics=15, seed=1)
-lda.fit(corpus, iterations=400, num_samples=4, sample_interval=25)
+lda.fit(corpus, iters=400, num_samples=4, sample_interval=25)
 for t in range(15):
     print(f"T{t:>2}: " + ", ".join(w.replace("_", " ") for w, _ in lda.top_words(8, topic=t)))
 
@@ -88,7 +88,7 @@ ordered time slices. `chain_variance=0.05` lets real trends show; the default
 decades = sorted(by_decade)
 times = [decades.index(r["decade"]) for r in rows]
 dtm = topica.DTM(num_topics=8, chain_variance=0.05, seed=1)
-dtm.fit(corpus, times, em_iters=20)
+dtm.fit(corpus, times, iters=20)
 
 vocab = list(dtm.vocabulary)
 per_time = np.stack([dtm.topic_word(s) for s in range(dtm.num_times)])

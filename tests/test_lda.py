@@ -16,7 +16,7 @@ from topica import LDA, Corpus
 def _quick_model(docs, seed=42, num_topics=2, **kwargs):
     """Return a fitted LDA with fast settings."""
     model = LDA(num_topics, seed=seed, **kwargs)
-    model.fit(docs, iterations=200, num_samples=3, sample_interval=5)
+    model.fit(docs, iters=200, num_samples=3, sample_interval=5)
     return model
 
 

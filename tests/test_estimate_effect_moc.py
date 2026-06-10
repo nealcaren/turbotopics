@@ -18,7 +18,7 @@ def treated_model():
         treat.append(float(t))
     X = np.array(treat).reshape(-1, 1)
     m = STM(num_topics=2, seed=1)
-    m.fit(docs, X, prevalence_names=["treatment"], em_iters=60)
+    m.fit(docs, X, prevalence_names=["treatment"], iters=60)
     return m, X
 
 
@@ -40,7 +40,7 @@ class TestVariationalPosterior:
     def test_ctm_also_exposes_posterior(self):
         docs = [["a", "b", "c"]] * 30 + [["x", "y", "z"]] * 30
         m = CTM(num_topics=2, seed=1)
-        m.fit(docs, em_iters=30)
+        m.fit(docs, iters=30)
         assert m.eta_mean.shape == (60, 1)
         assert m.eta_cov.shape == (60, 1, 1)
 

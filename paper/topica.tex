@@ -223,7 +223,7 @@ document-topic distribution $\theta$ as \code{doc\_topic}, both as plain
 import topica
 
 model = topica.LDA(num_topics=20, seed=42)
-model.fit(docs, iterations=1000)
+model.fit(docs, iters=1000)
 
 model.topic_word        # phi: ndarray (num_topics, vocab_size)
 model.doc_topic         # theta: ndarray (num_docs, num_topics)
@@ -583,11 +583,11 @@ def score(m):                # the SAME diagnostics for every model
             topica.exclusivity(m).mean(),
             topica.topic_diversity(m))
 
-lda = topica.LDA(num_topics=15, seed=1); lda.fit(docs, iterations=500)
-ctm = topica.CTM(num_topics=15, seed=1); ctm.fit(docs, em_iters=25)
+lda = topica.LDA(num_topics=15, seed=1); lda.fit(docs, iters=500)
+ctm = topica.CTM(num_topics=15, seed=1); ctm.fit(docs, iters=25)
 stm_model = topica.STM(num_topics=15, seed=1)
 stm_model.fit(docs, conservative,
-              prevalence_names=["conservative"], em_iters=25)
+              prevalence_names=["conservative"], iters=25)
 
 # An embedding model joins the same comparison: bring vectors,
 # fit, and score it too.
@@ -686,7 +686,7 @@ corpus = Corpus.from_documents(
     docs, min_doc_freq=10, max_doc_fraction=0.5, rm_top=20)
 model = topica.STM(num_topics=15, seed=1)
 model.fit(docs, conservative,
-          prevalence_names=["conservative"], em_iters=25)
+          prevalence_names=["conservative"], iters=25)
 
 labels = stm.label_topics(model.topic_word, model.vocabulary, n=3)
 panel = viz.effect_plot(model, corpus, X=conservative,

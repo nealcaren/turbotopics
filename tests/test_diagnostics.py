@@ -11,7 +11,7 @@ from topica import LDA, stm, validation as diagnostics
 def two_topic():
     docs = [["cat", "dog", "pet", "cat", "dog"]] * 40 + [["star", "moon", "sky", "star", "moon"]] * 40
     m = LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=400)
+    m.fit(docs, iters=400)
     return m, docs
 
 
@@ -88,7 +88,7 @@ class TestAlignment:
     def test_matches_swapped_topics(self, two_topic):
         m, docs = two_topic
         b = LDA(num_topics=2, seed=2)
-        b.fit(docs, iterations=400)
+        b.fit(docs, iters=400)
         pairs = stm.align_topics(m, b)
         assert len(pairs) == 2
         # one-to-one: each a-topic and b-topic used once.
@@ -100,7 +100,7 @@ class TestAlignment:
     def test_js_metric(self, two_topic):
         m, docs = two_topic
         b = LDA(num_topics=2, seed=3)
-        b.fit(docs, iterations=400)
+        b.fit(docs, iters=400)
         pairs = stm.align_topics(m, b, metric="js")
         assert len(pairs) == 2
 
@@ -123,7 +123,7 @@ class TestStability:
     def test_identical_fits_perfectly_stable(self, two_topic):
         m, docs = two_topic
         b = LDA(num_topics=2, seed=2)
-        b.fit(docs, iterations=400)
+        b.fit(docs, iters=400)
         s = stm.topic_stability([m, b], topn=3)
         assert s == 1.0  # the two clean topics recur exactly
 
@@ -132,7 +132,7 @@ class TestStability:
         runs = []
         for seed in (1, 2, 3):
             r = LDA(num_topics=2, seed=seed)
-            r.fit(docs, iterations=300)
+            r.fit(docs, iters=300)
             runs.append(r)
         s = stm.topic_stability(runs, topn=3)
         assert 0.0 <= s <= 1.0

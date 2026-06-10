@@ -116,7 +116,7 @@ def test_python_matches_train_cli(cli_binaries: dict[str, Path], tmp_path: Path)
     )
     model.fit(
         corpus,
-        iterations=ITERATIONS,
+        iters=ITERATIONS,
         num_samples=NUM_SAMPLES,
         sample_interval=SAMPLE_INTERVAL,
     )

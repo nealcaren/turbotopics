@@ -186,7 +186,7 @@ def run(verbose: bool = True) -> dict:
         # topica, spectral init (its default), same docs + covariates.
         X = np.column_stack([treatment, pid])
         model = STM(num_topics=3, init="spectral")
-        model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], em_iters=80)
+        model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], iters=80)
         tt_vocab = list(model.vocabulary)
         tt_beta_raw = np.asarray(model.topic_word)  # K x |tt_vocab|
 

@@ -11,7 +11,7 @@ def fitted():
     docs = [["cat", "dog", "pet", "vet", "cat"]] * 15 + \
            [["star", "moon", "sky", "sun", "star"]] * 15
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=300)
+    m.fit(docs, iters=300)
     return m, docs
 
 

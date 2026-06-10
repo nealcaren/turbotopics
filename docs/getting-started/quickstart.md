@@ -27,7 +27,7 @@ space_docs  = [["planet", "star", "moon", "rocket", "planet"]] * 15
 documents   = animal_docs + space_docs
 
 model = topica.LDA(num_topics=2, seed=42)
-model.fit(documents, iterations=1000)
+model.fit(documents, iters=1000)
 ```
 
 ## Read the results

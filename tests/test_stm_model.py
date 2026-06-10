@@ -64,10 +64,10 @@ def stm_corpus_and_x():
 
 @pytest.fixture(scope="module")
 def fitted_stm(stm_corpus_and_x):
-    """STM(num_topics=2, seed=1) fitted on the synthetic corpus (em_iters=60)."""
+    """STM(num_topics=2, seed=1) fitted on the synthetic corpus (iters=60)."""
     docs, x_2d = stm_corpus_and_x
     model = STM(num_topics=2, seed=1)
-    model.fit(docs, x_2d, prevalence_names=["x"], em_iters=60)
+    model.fit(docs, x_2d, prevalence_names=["x"], iters=60)
     return model
 
 
@@ -306,9 +306,9 @@ class TestSTMDeterminism:
     def test_same_seed_identical_topic_word(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m1 = STM(2, seed=42)
-        m1.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m1.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         m2 = STM(2, seed=42)
-        m2.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m2.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         assert np.array_equal(m1.topic_word, m2.topic_word), (
             "Same seed must produce identical topic_word"
         )
@@ -316,9 +316,9 @@ class TestSTMDeterminism:
     def test_same_seed_identical_doc_topic(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m1 = STM(2, seed=42)
-        m1.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m1.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         m2 = STM(2, seed=42)
-        m2.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m2.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         assert np.array_equal(m1.doc_topic, m2.doc_topic), (
             "Same seed must produce identical doc_topic"
         )
@@ -326,9 +326,9 @@ class TestSTMDeterminism:
     def test_same_seed_identical_prevalence_effects(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m1 = STM(2, seed=42)
-        m1.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m1.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         m2 = STM(2, seed=42)
-        m2.fit(docs, x_2d, prevalence_names=["x"], em_iters=20)
+        m2.fit(docs, x_2d, prevalence_names=["x"], iters=20)
         assert np.array_equal(m1.prevalence_effects, m2.prevalence_effects), (
             "Same seed must produce identical prevalence_effects"
         )
@@ -342,14 +342,14 @@ class TestSTMInputTypes:
     def test_numpy_array_input_accepted(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=10)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=10)
         assert m.doc_topic.shape == (250, 2)
 
     def test_list_of_float_lists_accepted(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         x_list = x_2d.tolist()  # list of [float]
         m = STM(2, seed=1)
-        m.fit(docs, x_list, prevalence_names=["x"], em_iters=10)
+        m.fit(docs, x_list, prevalence_names=["x"], iters=10)
         assert m.doc_topic.shape == (250, 2)
 
     def test_numpy_and_list_give_identical_topic_word(self, stm_corpus_and_x):
@@ -357,9 +357,9 @@ class TestSTMInputTypes:
         docs, x_2d = stm_corpus_and_x
         x_list = x_2d.tolist()
         m1 = STM(2, seed=5)
-        m1.fit(docs, x_2d, prevalence_names=["x"], em_iters=15)
+        m1.fit(docs, x_2d, prevalence_names=["x"], iters=15)
         m2 = STM(2, seed=5)
-        m2.fit(docs, x_list, prevalence_names=["x"], em_iters=15)
+        m2.fit(docs, x_list, prevalence_names=["x"], iters=15)
         assert np.array_equal(m1.topic_word, m2.topic_word), (
             "numpy array and list[list[float]] input must produce identical topic_word"
         )
@@ -368,7 +368,7 @@ class TestSTMInputTypes:
         docs, x_2d = stm_corpus_and_x
         corpus = Corpus.from_documents(docs)
         m = STM(2, seed=1)
-        m.fit(corpus, x_2d, prevalence_names=["x"], em_iters=10)
+        m.fit(corpus, x_2d, prevalence_names=["x"], iters=10)
         assert m.doc_topic.shape == (250, 2)
 
     def test_corpus_and_list_give_identical_topic_word(self, stm_corpus_and_x):
@@ -376,9 +376,9 @@ class TestSTMInputTypes:
         docs, x_2d = stm_corpus_and_x
         corpus = Corpus.from_documents(docs)
         m1 = STM(2, seed=7)
-        m1.fit(corpus, x_2d, prevalence_names=["x"], em_iters=15)
+        m1.fit(corpus, x_2d, prevalence_names=["x"], iters=15)
         m2 = STM(2, seed=7)
-        m2.fit(docs, x_2d, prevalence_names=["x"], em_iters=15)
+        m2.fit(docs, x_2d, prevalence_names=["x"], iters=15)
         assert np.array_equal(m1.topic_word, m2.topic_word)
 
 
@@ -395,7 +395,7 @@ class TestSTMMultipleCovariates:
         ctrl = rng.standard_normal((250, 1))
         x2 = np.hstack([x_2d, ctrl])
         m = STM(2, seed=1)
-        m.fit(docs, x2, em_iters=30)
+        m.fit(docs, x2, iters=30)
         return m
 
     def test_prevalence_effects_shape_two_covariates(self, multi_cov_model):
@@ -411,7 +411,7 @@ class TestSTMMultipleCovariates:
         ctrl = rng.standard_normal((250, 1))
         x2 = np.hstack([x_2d, ctrl])
         m = STM(2, seed=1)
-        m.fit(docs, x2, prevalence_names=["treatment", "control"], em_iters=30)
+        m.fit(docs, x2, prevalence_names=["treatment", "control"], iters=30)
         assert m.feature_names == ["intercept", "treatment", "control"]
 
     def test_prevalence_effects_shape_with_names(self, stm_corpus_and_x):
@@ -420,7 +420,7 @@ class TestSTMMultipleCovariates:
         ctrl = rng.standard_normal((250, 1))
         x2 = np.hstack([x_2d, ctrl])
         m = STM(2, seed=1)
-        m.fit(docs, x2, prevalence_names=["x", "ctrl"], em_iters=30)
+        m.fit(docs, x2, prevalence_names=["x", "ctrl"], iters=30)
         assert m.prevalence_effects.shape == (3, 1)
 
 
@@ -434,20 +434,20 @@ class TestSTMFitValidation:
         bad_x = x_2d[:-5]  # 245 rows, corpus has 250
         m = STM(2, seed=1)
         with pytest.raises(ValueError):
-            m.fit(docs, bad_x, em_iters=5)
+            m.fit(docs, bad_x, iters=5)
 
     def test_ragged_prevalence_rows_raises(self, stm_corpus_and_x):
         docs, _ = stm_corpus_and_x
         ragged = [[1.0, 2.0]] * 100 + [[1.0]] * 150
         m = STM(2, seed=1)
         with pytest.raises(ValueError):
-            m.fit(docs, ragged, em_iters=5)
+            m.fit(docs, ragged, iters=5)
 
     def test_prevalence_names_length_mismatch_raises(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(2, seed=1)
         with pytest.raises(ValueError):
-            m.fit(docs, x_2d, prevalence_names=["x", "wrong_extra"], em_iters=5)
+            m.fit(docs, x_2d, prevalence_names=["x", "wrong_extra"], iters=5)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +523,7 @@ class TestSTMConvergence:
     def test_bound_history_monotone_increasing(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=200, em_tol=1e-6)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=200, em_tol=1e-6)
         h = m.bound_history
         assert len(h) >= 2
         assert all(h[i + 1] >= h[i] - 1e-6 for i in range(len(h) - 1))
@@ -533,21 +533,21 @@ class TestSTMConvergence:
     def test_converges_before_cap(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=500, em_tol=1e-5)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, em_tol=1e-5)
         assert m.converged is True
         assert len(m.bound_history) < 500
 
     def test_em_tol_zero_runs_full_cap(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=15, em_tol=0.0)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=15, em_tol=0.0)
         assert m.converged is False
         assert len(m.bound_history) == 15
 
     def test_convergence_state_survives_save_load(self, stm_corpus_and_x, tmp_path):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], em_iters=500, em_tol=1e-5)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, em_tol=1e-5)
         path = str(tmp_path / "stm.bin")
         m.save(path)
         reloaded = STM.load(path)

@@ -53,7 +53,7 @@ model = LDA(
 print("Training (500 iterations, progress every 100) …")
 model.fit(
     documents,
-    iterations=500,
+    iters=500,
     num_samples=5,          # average this many snapshots for final φ/θ
     sample_interval=25,     # Gibbs sweeps between snapshots
     progress=on_progress,

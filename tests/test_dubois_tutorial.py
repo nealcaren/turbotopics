@@ -59,7 +59,7 @@ def test_corpus_is_model_ready():
     assert corpus.num_words > 50, f"vocab too small: {corpus.num_words}"
 
     lda = LDA(num_topics=3, seed=0)
-    lda.fit(corpus, iterations=50, num_samples=1, sample_interval=5)
+    lda.fit(corpus, iters=50, num_samples=1, sample_interval=5)
     assert lda.num_topics == 3
 
     topics = lda.top_words(5)

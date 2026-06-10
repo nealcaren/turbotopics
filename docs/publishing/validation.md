@@ -59,7 +59,7 @@ A topic that dissolves when you perturb the corpus is not a finding. Refit on
 bootstrap resamples and report which topics are robust:
 
 ```python
-boot = topica.bootstrap_stability(docs, k=20, n_boot=50, iterations=800)
+boot = topica.bootstrap_stability(docs, k=20, n_boot=50, iters=800)
 for t, s in zip(boot["topic"], boot["stability"]):
     print(f"Topic {t}: stability {s:.2f}")     # mean top-word Jaccard across resamples
 print("overall:", boot["mean"])
@@ -69,8 +69,8 @@ Also check that the *same* topics emerge across **random seeds**, aligning topic
 between fits and scoring their overlap:
 
 ```python
-a = topica.LDA(num_topics=20, seed=1); a.fit(docs, iterations=800)
-b = topica.LDA(num_topics=20, seed=2); b.fit(docs, iterations=800)
+a = topica.LDA(num_topics=20, seed=1); a.fit(docs, iters=800)
+b = topica.LDA(num_topics=20, seed=2); b.fit(docs, iters=800)
 pairs = topica.align_topics(a, b)                    # one-to-one matching (Hungarian)
 print("stability across seeds:", topica.topic_stability([a, b], topn=10))
 ```

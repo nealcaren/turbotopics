@@ -706,8 +706,7 @@ def search_k(
     model="lda",
     prevalence=None,
     held_out=None,
-    iterations=500,
-    em_iters=30,
+    iters=500,
     num_samples=3,
     sample_interval=10,
     seed=42,
@@ -735,10 +734,10 @@ def search_k(
     for k in ks:
         if model == "stm":
             m = STM(num_topics=k, seed=seed)
-            m.fit(docs, prevalence, em_iters=em_iters)
+            m.fit(docs, prevalence, iters=iters)
         else:
             m = LDA(num_topics=k, seed=seed)
-            m.fit(docs, iterations=iterations, num_samples=num_samples,
+            m.fit(docs, iters=iters, num_samples=num_samples,
                   sample_interval=sample_interval)
         row = {
             "k": k,
@@ -1365,7 +1364,7 @@ def bootstrap_stability(
         the resample topics are matched back to it (rather than to a fresh
         full-corpus fit), so the per-topic stability lines up with that model's
         topic indices. ``model_factory`` should rebuild the same model type.
-    fit_kwargs : forwarded to each model's ``fit`` (e.g. ``iterations=500``).
+    fit_kwargs : forwarded to each model's ``fit`` (e.g. ``iters=500``).
 
     Returns
     -------

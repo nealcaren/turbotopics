@@ -19,7 +19,7 @@ def _toy_docs(n=40, vocab=12, lo=8, hi=15, seed=0):
 def _fit_each(corpus, *, keep_draws):
     out = {}
     m = topica.LDA(num_topics=4, seed=1)
-    m.fit(corpus, iterations=120, keep_theta_draws=keep_draws)
+    m.fit(corpus, iters=120, keep_theta_draws=keep_draws)
     out["LDA"] = m
     m = topica.SeededLDA({"a": ["w0", "w1"], "b": ["w5", "w6"]}, residual=2, seed=1)
     m.fit(corpus, iters=120, keep_theta_draws=keep_draws)
@@ -64,7 +64,7 @@ def test_corpus_takes_precedence_over_retained_lengths():
     docs = _toy_docs()
     corpus = topica.Corpus.from_documents(docs)
     m = topica.LDA(num_topics=4, seed=1)
-    m.fit(corpus, iterations=120, keep_theta_draws=False)
+    m.fit(corpus, iters=120, keep_theta_draws=False)
 
     # A corpus with deliberately different (here, longer) documents changes the
     # Dirichlet concentration, so the draws differ from the retained-length path.

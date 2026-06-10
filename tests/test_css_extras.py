@@ -94,7 +94,7 @@ class TestSplitDocuments:
 def two_topic():
     docs = [["mob", "lynch", "south", "murder"]] * 40 + [["school", "child", "teach", "college"]] * 40
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=400)
+    m.fit(docs, iters=400)
     return m, docs
 
 
@@ -129,7 +129,7 @@ class TestQualityFrontier:
 class TestBootstrapStability:
     def test_stable_topics_score_high(self, two_topic):
         _, docs = two_topic
-        res = topica.bootstrap_stability(docs, k=2, n_boot=4, iterations=200, topn=4)
+        res = topica.bootstrap_stability(docs, k=2, n_boot=4, iters=200, topn=4)
         assert res["stability"].shape == (2,)
         assert 0.0 <= res["mean"] <= 1.0
         # Two clean, well-separated topics should be highly reproducible.
@@ -140,7 +140,7 @@ class TestBootstrapStability:
         # siblings perplexity / prepare_pyldavis), so it must not raise.
         _, docs = two_topic
         corpus = topica.Corpus.from_documents(docs)
-        res = topica.bootstrap_stability(corpus, k=2, n_boot=2, iterations=80, topn=4)
+        res = topica.bootstrap_stability(corpus, k=2, n_boot=2, iters=80, topn=4)
         assert res["stability"].shape == (2,)
         assert 0.0 <= res["mean"] <= 1.0
 
@@ -155,7 +155,7 @@ class TestBootstrapStability:
         for i in range(120):
             blk = blocks[i % 2]
             docs.append(blk + [blk[int(rng.integers(3))], f"uniq_{i}"])
-        res = topica.bootstrap_stability(docs, k=2, n_boot=6, iterations=200, topn=3)
+        res = topica.bootstrap_stability(docs, k=2, n_boot=6, iters=200, topn=3)
         assert res["mean"] > 0.4          # two clean blocks must stay reproducible
 
 

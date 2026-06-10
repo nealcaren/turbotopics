@@ -86,14 +86,14 @@ _N_DOCS_4 = len(_CORPUS_4)   # 400
 def _fit_2topic(num_threads, seed=1):
     """Fit a 2-topic model on the two-cluster corpus."""
     model = LDA(2, seed=seed, optimize_interval=0, num_threads=num_threads)
-    model.fit(_CORPUS_2, iterations=300, num_samples=3, sample_interval=10)
+    model.fit(_CORPUS_2, iters=300, num_samples=3, sample_interval=10)
     return model
 
 
 def _fit_4topic(num_threads, seed=1):
     """Fit a 4-topic model on the four-cluster corpus."""
     model = LDA(4, seed=seed, optimize_interval=0, num_threads=num_threads)
-    model.fit(_CORPUS_4, iterations=300, num_samples=3, sample_interval=10)
+    model.fit(_CORPUS_4, iters=300, num_samples=3, sample_interval=10)
     return model
 
 
@@ -153,7 +153,7 @@ class TestNumThreadsConstructor:
 
     def test_num_threads_zero_clamped_identical_to_one(self):
         """num_threads=0 is clamped to 1: results must equal num_threads=1 for same seed."""
-        kw = dict(iterations=200, num_samples=3, sample_interval=10)
+        kw = dict(iters=200, num_samples=3, sample_interval=10)
         m0 = LDA(2, seed=7, optimize_interval=0, num_threads=0)
         m1 = LDA(2, seed=7, optimize_interval=0, num_threads=1)
         m0.fit(_CORPUS_2, **kw)

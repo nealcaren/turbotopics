@@ -41,7 +41,7 @@ def test_accepts_model_and_validates():
     rng = np.random.default_rng(0)
     docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=100)
+    m.fit(docs, iters=100)
     word_emb = rng.normal(0, 1, (len(m.vocabulary), 8))
     out = topica.mmr(m, word_emb, n=3, diversity=0.3)  # model-first, vocab from model
     assert len(out) == 2 and len(out[0]) == 3

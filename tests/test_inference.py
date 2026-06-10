@@ -43,7 +43,7 @@ def cluster_model():
     animal_docs, space_docs = _make_cluster_docs()
     all_docs = animal_docs + space_docs
     model = LDA(2, seed=1, optimize_interval=0)
-    model.fit(all_docs, iterations=300, num_samples=3, sample_interval=10)
+    model.fit(all_docs, iters=300, num_samples=3, sample_interval=10)
     # Sanity: topics are distinct
     vocab = model.vocabulary
     animal_t = int(model.topic_word[:, vocab.index("cat")].argmax())

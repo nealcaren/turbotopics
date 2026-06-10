@@ -910,14 +910,14 @@ impl LDA {
     ///
     /// `progress`, if given, is called as ``progress(iteration, ll_per_token)``
     /// every `progress_interval` iterations during the main loop.
-    #[pyo3(signature = (data, *, iterations=1000, num_samples=5, sample_interval=25,
+    #[pyo3(signature = (data, *, iters=1000, num_samples=5, sample_interval=25,
                         progress=None, progress_interval=50,
                         keep_theta_draws=true, num_theta_draws=25))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
-        iterations: usize,
+        iters: usize,
         num_samples: usize,
         sample_interval: usize,
         progress: Option<PyObject>,
@@ -950,7 +950,7 @@ impl LDA {
         // Thinned θ-draw retention (issue #31): keep the last `draw_cap` snapshots
         // taken every `draw_thin` sweeps of the main loop. 0 ⇒ collection off.
         let draw_cap = if keep_theta_draws { num_theta_draws } else { 0 };
-        let draw_thin = theta_draw_thin(iterations, draw_cap);
+        let draw_thin = theta_draw_thin(iters, draw_cap);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, num_topics)?;
 
         let mut model = TopicModel::new(num_topics, alpha_sum, self.beta, num_types);
@@ -976,7 +976,7 @@ impl LDA {
                 ls.mh_steps = mh_steps;
                 let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
-                for iter in 1..=iterations {
+                for iter in 1..=iters {
                     ls.sweep(&corpus, &mut rng);
                     if draw_thin > 0 && iter % draw_thin == 0 {
                         // One snapshot: theta_into accumulates, so start from zero.
@@ -1055,7 +1055,7 @@ impl LDA {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
             // ---- main training loop (ports src/bin/train.rs) ----
-            for iter in 1..=iterations {
+            for iter in 1..=iters {
                 do_sweep(&mut model, &mut rng);
 
                 if draw_thin > 0 && iter % draw_thin == 0 {
@@ -2725,7 +2725,7 @@ impl DMR {
     /// `features` is a `(num_docs, F)` numpy array or list of float lists (an
     /// intercept column is prepended automatically). `feature_names` (length F)
     /// names the columns; an "intercept" name is prepended.
-    #[pyo3(signature = (data, features, *, feature_names=None, iterations=1000,
+    #[pyo3(signature = (data, features, *, feature_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
@@ -2734,7 +2734,7 @@ impl DMR {
         data: &Bound<'_, PyAny>,
         features: &Bound<'_, PyAny>,
         feature_names: Option<Vec<String>>,
-        iterations: usize,
+        iters: usize,
         num_samples: usize,
         sample_interval: usize,
         progress: Option<PyObject>,
@@ -2807,7 +2807,7 @@ impl DMR {
         let lbfgs_iters = self.lbfgs_iters;
 
         let (acc_phi, acc_theta, feat_eff, model, corpus) = py.allow_threads(move || {
-            for iter in 1..=iterations {
+            for iter in 1..=iters {
                 let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
                 dmr::run_sweep_dmr(
                     &mut model.type_topic_counts,
@@ -3217,7 +3217,7 @@ impl LabeledLDA {
     /// `labels` is a list (one per document) of label lists. The topic set is
     /// the union of all labels (or `label_names`, which also fixes topic order).
     /// An empty label list leaves that document unconstrained.
-    #[pyo3(signature = (data, labels, *, label_names=None, iterations=1000,
+    #[pyo3(signature = (data, labels, *, label_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
@@ -3226,7 +3226,7 @@ impl LabeledLDA {
         data: &Bound<'_, PyAny>,
         labels: Vec<Vec<String>>,
         label_names: Option<Vec<String>>,
-        iterations: usize,
+        iters: usize,
         num_samples: usize,
         sample_interval: usize,
         progress: Option<PyObject>,
@@ -3296,7 +3296,7 @@ impl LabeledLDA {
         labeled::initialize_labeled(&mut model, &corpus.docs, &allowed, &mut rng);
 
         let (acc_phi, acc_theta, model, corpus) = py.allow_threads(move || {
-            for iter in 1..=iterations {
+            for iter in 1..=iters {
                 labeled::run_sweep_labeled(&mut model, &corpus.docs, &allowed, &mut rng);
                 if let Some(cb) = &progress {
                     if progress_interval > 0 && iter % progress_interval == 0 {
@@ -3628,7 +3628,7 @@ impl SAGE {
     /// Fit the model. `data` is a :class:`Corpus` or `list[list[str]]`;
     /// `groups` is a per-document group label (strings or ints), one per
     /// document. `group_names` fixes the group order (defaults to sorted union).
-    #[pyo3(signature = (data, groups, *, group_names=None, iterations=1000,
+    #[pyo3(signature = (data, groups, *, group_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
@@ -3637,7 +3637,7 @@ impl SAGE {
         data: &Bound<'_, PyAny>,
         groups: &Bound<'_, PyAny>,
         group_names: Option<Vec<String>>,
-        iterations: usize,
+        iters: usize,
         num_samples: usize,
         sample_interval: usize,
         progress: Option<PyObject>,
@@ -3706,7 +3706,7 @@ impl SAGE {
         let lbfgs_iters = self.lbfgs_iters;
 
         let (beta, acc_theta, corpus) = py.allow_threads(move || {
-            for iter in 1..=iterations {
+            for iter in 1..=iters {
                 sage::run_sweep_sage(&mut model, &corpus.docs, &groups_idx, &mut rng);
                 if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                     sage::optimize_kappa(&mut model, lbfgs_iters);
@@ -4148,15 +4148,15 @@ impl CTM {
 
     /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`.
     /// EM runs until the relative change in the variational bound drops below
-    /// `em_tol` (R `stm`'s `emtol`) or `em_iters` iterations are reached,
-    /// whichever comes first. Pass ``em_tol=0`` to always run `em_iters` steps.
+    /// `em_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
+    /// whichever comes first. Pass ``em_tol=0`` to always run `iters` steps.
     /// Check :attr:`converged` and :attr:`bound` afterward.
-    #[pyo3(signature = (data, *, em_iters=500, em_tol=1e-5))]
+    #[pyo3(signature = (data, *, iters=500, em_tol=1e-5))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
-        em_iters: usize,
+        iters: usize,
         em_tol: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -4179,7 +4179,7 @@ impl CTM {
 
         let (model, corpus) = py.allow_threads(move || {
             let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, em_iters, em_tol, shrink, None, None, spectral,
+                &corpus.docs, k, num_types, iters, em_tol, shrink, None, None, spectral,
                 &mut rng,
             );
             (m, corpus)
@@ -4247,7 +4247,7 @@ impl CTM {
     }
 
     /// ``True`` if EM stopped on the `em_tol` criterion; ``False`` if it hit the
-    /// `em_iters` cap first (the fit may not have converged).
+    /// `iters` cap first (the fit may not have converged).
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
@@ -4530,12 +4530,12 @@ impl STM {
     /// `prevalence`/`content` should be given (else use :class:`CTM`).
     ///
     /// EM runs until the relative change in the variational bound drops below
-    /// `em_tol` (R `stm`'s `emtol`) or `em_iters` iterations are reached,
+    /// `em_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
     /// whichever comes first — matching `stm`'s convergence behavior rather than
-    /// a fixed iteration count. Pass ``em_tol=0`` to always run `em_iters`
+    /// a fixed iteration count. Pass ``em_tol=0`` to always run `iters`
     /// steps. Inspect :attr:`converged` and :attr:`bound` after fitting.
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
-                        content=None, content_names=None, em_iters=500, em_tol=1e-5))]
+                        content=None, content_names=None, iters=500, em_tol=1e-5))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -4545,7 +4545,7 @@ impl STM {
         prevalence_names: Option<Vec<String>>,
         content: Option<&Bound<'_, PyAny>>,
         content_names: Option<Vec<String>>,
-        em_iters: usize,
+        iters: usize,
         em_tol: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -4654,7 +4654,7 @@ impl STM {
             let prev_ref = prevalence_x.as_deref();
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
             let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, em_iters, em_tol, shrink, prev_ref, cont_ref,
+                &corpus.docs, k, num_types, iters, em_tol, shrink, prev_ref, cont_ref,
                 spectral, &mut rng,
             );
             (m, corpus)
@@ -4735,7 +4735,7 @@ impl STM {
     }
 
     /// ``True`` if EM stopped on the `em_tol` criterion; ``False`` if it hit the
-    /// `em_iters` cap first (the fit may not have converged).
+    /// `iters` cap first (the fit may not have converged).
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
@@ -5541,13 +5541,13 @@ impl DTM {
     /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`;
     /// `times` gives each document's integer time-slice index (0-based,
     /// contiguous). The number of slices is inferred as ``max(times) + 1``.
-    #[pyo3(signature = (data, times, *, em_iters=20))]
+    #[pyo3(signature = (data, times, *, iters=20))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         times: Vec<i64>,
-        em_iters: usize,
+        iters: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -5590,7 +5590,7 @@ impl DTM {
 
         let (model, corpus) = py.allow_threads(move || {
             let m = dtm::fit_dtm(
-                &corpus.docs, &times_u, num_types, k, num_times, alpha, cv, ov, em_iters, &mut rng,
+                &corpus.docs, &times_u, num_types, k, num_times, alpha, cv, ov, iters, &mut rng,
             );
             (m, corpus)
         });
@@ -5845,13 +5845,13 @@ impl SupervisedLDA {
 
     /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`;
     /// `y` is the per-document real-valued response (length = number of docs).
-    #[pyo3(signature = (data, y, *, em_iters=25, var_iters=15))]
+    #[pyo3(signature = (data, y, *, iters=25, var_iters=15))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         y: Vec<f64>,
-        em_iters: usize,
+        iters: usize,
         var_iters: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -5878,7 +5878,7 @@ impl SupervisedLDA {
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         let (model, corpus) = py.allow_threads(move || {
-            let m = slda::fit_slda(&corpus.docs, &y, num_types, k, alpha, em_iters, var_iters, &mut rng);
+            let m = slda::fit_slda(&corpus.docs, &y, num_types, k, alpha, iters, var_iters, &mut rng);
             (m, corpus)
         });
 

@@ -102,7 +102,7 @@ def bench_stm() -> dict:
     # topica: same fixed EM iterations (em_tol=0 disables early stop).
     t0 = time.perf_counter()
     TopicaSTM(num_topics=STM_K, init="spectral").fit(
-        docs, X, prevalence_names=feat, em_iters=STM_EM_ITERS, em_tol=0.0
+        docs, X, prevalence_names=feat, iters=STM_EM_ITERS, em_tol=0.0
     )
     tt_time = time.perf_counter() - t0
     return {
@@ -199,7 +199,7 @@ def bench_lda() -> dict:
     def topica_fit(threads):
         t0 = time.perf_counter()
         LDA(num_topics=LDA_K, seed=1, optimize_interval=0, num_threads=threads).fit(
-            docs, iterations=LDA_ITERS
+            docs, iters=LDA_ITERS
         )
         return time.perf_counter() - t0
 
