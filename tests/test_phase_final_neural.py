@@ -1,7 +1,8 @@
 """Phase-final conformance tests: coherence, doc_names, save/load, and iters
 for the neural and cluster models (ETM, FASTopic, ProdLDA, BERTopic, Top2Vec).
 
-All save/load scratch goes to /private/tmp (macOS temporary directory).
+Save/load scratch goes to the OS default temporary directory (portable across
+macOS, Linux, and Windows CI), not a hardcoded /private/tmp.
 """
 
 import inspect
@@ -101,7 +102,7 @@ class TestETM:
 
     def test_save_load_roundtrip(self):
         m, docs, vocab, word_emb = self._model()
-        with tempfile.NamedTemporaryFile(dir="/private/tmp", suffix=".topica", delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".topica", delete=False) as f:
             path = f.name
         try:
             m.save(path)
@@ -116,7 +117,7 @@ class TestETM:
         docs, vocab, word_emb = _planted_etm()
         m = topica.ETM(num_topics=3, inference="vae", hidden_size=32, batch_size=32, seed=1)
         m.fit(docs, word_emb, vocab, iters=10)
-        with tempfile.NamedTemporaryFile(dir="/private/tmp", suffix=".topica", delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".topica", delete=False) as f:
             path = f.name
         try:
             m.save(path)
@@ -158,7 +159,7 @@ class TestFASTopic:
 
     def test_save_load_roundtrip(self):
         m, *_ = self._model()
-        with tempfile.NamedTemporaryFile(dir="/private/tmp", suffix=".topica", delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".topica", delete=False) as f:
             path = f.name
         try:
             m.save(path)
@@ -190,7 +191,7 @@ class TestProdLDA:
 
     def test_save_load_roundtrip(self):
         m, *_ = self._model()
-        with tempfile.NamedTemporaryFile(dir="/private/tmp", suffix=".topica", delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".topica", delete=False) as f:
             path = f.name
         try:
             m.save(path)
