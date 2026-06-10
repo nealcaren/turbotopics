@@ -308,6 +308,117 @@ class TestSearchKHeldout:
 
 
 # ---------------------------------------------------------------------------
+# Issue #55: search_k(held_out=Heldout) used to raise TypeError
+# ---------------------------------------------------------------------------
+
+class TestSearchKWithHeldoutObject:
+    """Regression tests for the Heldout-dispatch bug in search_k (issue #55).
+
+    Before the fix, passing a Heldout dataclass as held_out raised
+    ``TypeError: 'list' object is not callable`` because search_k called
+    ``perplexity(m, held_out)`` which tried ``held_out.documents()`` — but
+    ``.documents`` on a Heldout is a plain list, not a method.
+    """
+
+    @pytest.fixture(scope="class")
+    def heldout_fixture(self):
+        rng = np.random.default_rng(0)
+        docs = [list(rng.choice(["alpha", "beta", "gamma", "delta"], size=12, replace=True))
+                for _ in range(30)]
+        ho = topica.make_heldout(docs, prop_docs=0.5, prop_words=0.5, seed=1)
+        prevalence = rng.normal(size=(len(docs), 1))
+        return docs, ho, prevalence
+
+    def test_lda_heldout_object_no_typeerror(self, heldout_fixture):
+        """search_k with a Heldout object must not raise TypeError."""
+        docs, ho, _ = heldout_fixture
+        rows = topica.search_k(ho.documents, [2], iters=80, held_out=ho, seed=0)
+        assert len(rows) == 1
+
+    def test_lda_heldout_object_uses_heldout_loglik_key(self, heldout_fixture):
+        """Heldout path stores the metric under 'heldout_loglik', not 'perplexity'."""
+        docs, ho, _ = heldout_fixture
+        rows = topica.search_k(ho.documents, [2], iters=80, held_out=ho, seed=0)
+        row = rows[0]
+        assert "heldout_loglik" in row, "expected 'heldout_loglik' key in result row"
+        assert "perplexity" not in row, "'perplexity' key must not appear for Heldout path"
+
+    def test_lda_heldout_loglik_is_finite_negative(self, heldout_fixture):
+        docs, ho, _ = heldout_fixture
+        rows = topica.search_k(ho.documents, [2], iters=80, held_out=ho, seed=0)
+        val = rows[0]["heldout_loglik"]
+        assert np.isfinite(val), f"heldout_loglik not finite: {val}"
+        assert val < 0.0, f"mean per-doc log-likelihood should be negative, got {val}"
+
+    def test_stm_heldout_object_no_typeerror(self, heldout_fixture):
+        """STM path also dispatches correctly through the Heldout branch."""
+        docs, ho, prevalence = heldout_fixture
+        rows = topica.search_k(
+            ho.documents, [2], model="stm", prevalence=prevalence,
+            iters=10, held_out=ho, seed=0,
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert "heldout_loglik" in row
+        assert "perplexity" not in row
+        assert np.isfinite(row["heldout_loglik"])
+        assert row["heldout_loglik"] < 0.0
+
+    def test_multiple_ks_all_rows_have_heldout_loglik(self, heldout_fixture):
+        """Every row produced for different K values must carry the metric."""
+        docs, ho, _ = heldout_fixture
+        rows = topica.search_k(ho.documents, [2, 3], iters=50, held_out=ho, seed=0)
+        assert len(rows) == 2
+        for row in rows:
+            assert "heldout_loglik" in row
+            assert np.isfinite(row["heldout_loglik"])
+
+    def test_legacy_corpus_list_still_produces_perplexity(self, heldout_fixture):
+        """The legacy path (token lists, not Heldout) still yields 'perplexity'."""
+        docs, ho, _ = heldout_fixture
+        rng = np.random.default_rng(42)
+        held_docs = [list(rng.choice(["alpha", "beta", "gamma", "delta"], size=12, replace=True))
+                     for _ in range(8)]
+        rows = topica.search_k(docs, [2], iters=80, held_out=held_docs, seed=0)
+        row = rows[0]
+        assert "perplexity" in row
+        assert "heldout_loglik" not in row
+        assert np.isfinite(row["perplexity"])
+        assert row["perplexity"] > 1.0
+
+
+# ---------------------------------------------------------------------------
+# plot_search_k with heldout_loglik metric
+# ---------------------------------------------------------------------------
+
+def test_plot_search_k_accepts_heldout_loglik_metric():
+    """plot_search_k must plot 'heldout_loglik' rows without raising."""
+    mpl = pytest.importorskip("matplotlib")
+    mpl.use("Agg")
+
+    rows = [
+        {"k": 2, "coherence": -10.0, "exclusivity": 0.6, "heldout_loglik": -5.2},
+        {"k": 3, "coherence": -12.0, "exclusivity": 0.5, "heldout_loglik": -4.8},
+    ]
+    ax = topica.plot_search_k(rows, metrics=("coherence", "heldout_loglik"))
+    assert ax is not None
+
+
+def test_plot_search_k_mixed_rows_no_error():
+    """plot_search_k must silently skip metrics absent from all rows."""
+    mpl = pytest.importorskip("matplotlib")
+    mpl.use("Agg")
+
+    rows = [
+        {"k": 2, "coherence": -10.0, "exclusivity": 0.6},
+        {"k": 3, "coherence": -12.0, "exclusivity": 0.5},
+    ]
+    # asking for heldout_loglik when no row has it should raise (no metrics left)
+    with pytest.raises(ValueError):
+        topica.plot_search_k(rows, metrics=("heldout_loglik",))
+
+
+# ---------------------------------------------------------------------------
 # Optional: better-fit model should score higher held-out LL
 # ---------------------------------------------------------------------------
 

@@ -720,10 +720,32 @@ def search_k(
 
     Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass,
     so negative; the metric is named in ``coherence_metric`` since ``plot_report``
-    reports c_v on a different scale), ``exclusivity`` (mean top-word
-    exclusivity), and — for ``model="lda"`` with ``held_out`` — ``perplexity``
-    (held-out). The coherence/exclusivity trade-off is the signal: there is rarely
-    a single best K, so read it alongside interpretability (see the K guide).
+    reports c_v on a different scale), ``exclusivity`` (mean top-word exclusivity),
+    and — when ``held_out`` is supplied — a held-out quality metric.
+
+    Two held-out paths are supported, determined by the type of ``held_out``:
+
+    - **Heldout object** (from :func:`make_heldout`): scored with
+      :func:`eval_heldout`; results stored under ``"heldout_loglik"``
+      (``mean_per_doc_loglik``, higher / less negative is better). Use this
+      path for the standard within-corpus word-heldout diagnostic.
+    - **Corpus or token lists** (legacy): scored with :func:`perplexity`;
+      results stored under ``"perplexity"`` (lower is better). This is the
+      document-completion perplexity on a separate held-out set.
+
+    Parameters
+    ----------
+    docs : training documents (``list[list[str]]`` or a ``Corpus``).
+    ks : sequence of topic counts to scan.
+    model : ``"lda"`` (default) or ``"stm"``.
+    prevalence : covariate design matrix for ``model="stm"``; ignored otherwise.
+    held_out : optional held-out set. Pass a :class:`Heldout` (from
+        :func:`make_heldout`) or a separate corpus / token lists.
+    iters : training iterations per fit.
+    num_samples : Gibbs samples per fit (LDA only).
+    sample_interval : iterations between Gibbs samples (LDA only).
+    seed : RNG seed for every fit and transform call.
+    coherence_n : top-word count used for coherence and exclusivity.
     """
     from . import LDA, STM  # local import to avoid a cycle at module load
 
@@ -746,7 +768,11 @@ def search_k(
             "exclusivity": _mean_exclusivity(m.topic_word, coherence_n),
         }
         if held_out is not None:
-            row["perplexity"] = float(perplexity(m, held_out, seed=seed))
+            if isinstance(held_out, Heldout):
+                result = eval_heldout(m, held_out, seed=seed)
+                row["heldout_loglik"] = float(result.mean_per_doc_loglik)
+            else:
+                row["perplexity"] = float(perplexity(m, held_out, seed=seed))
         rows.append(row)
     return rows
 
@@ -758,8 +784,9 @@ def plot_search_k(rows, *, metrics=("coherence", "exclusivity"), ax=None):
     trade off, so the goal is a knee, not a maximum. Each metric gets its own
     y-axis (they live on different scales). ``rows`` is the list returned by
     :func:`search_k`; ``metrics`` selects which of its keys to draw (any of
-    ``"coherence"``, ``"exclusivity"``, ``"perplexity"``). Returns the primary
-    matplotlib ``Axes``. Requires matplotlib.
+    ``"coherence"``, ``"exclusivity"``, ``"perplexity"``, ``"heldout_loglik"``).
+    Only metrics present in the rows are drawn; absent keys are silently skipped.
+    Returns the primary matplotlib ``Axes``. Requires matplotlib.
     """
     try:
         import matplotlib.pyplot as plt
