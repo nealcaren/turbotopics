@@ -89,4 +89,33 @@ print(corpus.num_docs, corpus.num_words, corpus.total_tokens)
 Report the document count, vocabulary size, and token count *after* pruning.
 Those three numbers belong in your methods section.
 
+## Choosing vocabulary thresholds with prep_documents
+
+`topica.prep_documents` prunes a `Corpus` by document frequency — dropping
+terms that appear in fewer than `lower_thresh` documents — and keeps the
+metadata frame aligned with the surviving documents. This is the analogue of
+R `stm`'s `prepDocuments`:
+
+```python
+import topica
+
+corpus_pruned, meta_pruned = topica.prep_documents(
+    corpus, meta=meta_df,
+    lower_thresh=5,   # drop terms appearing in fewer than 5 docs
+    rm_top=20,        # also drop the 20 most frequent residual terms
+)
+```
+
+Before committing to a threshold, sweep a range and visualize how many
+documents and vocabulary terms each level removes:
+
+```python
+topica.plot_removed(corpus, thresholds=range(1, 15))
+```
+
+The chart shows two lines: documents removed (left axis) and vocabulary terms
+removed (right axis). A threshold that removes many documents will corrupt a
+downstream covariate analysis; aim for the elbow where vocabulary shrinks
+rapidly but document loss stays near zero.
+
 → Next: [Choose and justify K](choosing-k.md).

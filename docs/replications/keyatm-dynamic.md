@@ -109,6 +109,26 @@ Unions rise, and Criminal procedure and First amendment decline. `time_prevalenc
 gives the smoothed proportion per year and `time_state` the regime each year
 occupies.
 
+To add credible bands to the time-trend figure, use `topica.time_prevalence_ci`,
+which reads the credible interval directly from the retained MCMC theta draws
+(pass `keep_theta_draws=True` at fit, which is the default):
+
+```python
+import topica
+
+ci = topica.time_prevalence_ci(model, timestamps=years, ci=0.95)
+# ci["labels"]   — list of period labels aligned with model.time_labels
+# ci["mean"]     — (T, K) posterior mean prevalence per period
+# ci["ci_low"]   — (T, K) lower 2.5th-percentile credible bound
+# ci["ci_high"]  — (T, K) upper 97.5th-percentile credible bound
+```
+
+This differs from `topica.keyatm.by_strata`: `by_strata` widens a descriptive
+normal interval using Rubin's rules; `time_prevalence_ci` reads the band
+directly off the posterior draw stack, which gives the HMM's own uncertainty
+without a normal approximation. Use `time_prevalence_ci` for ribbon plots that
+claim to show posterior uncertainty.
+
 ## What differs
 
 Two differences are worth stating plainly. First, this is a single chain of 1,000

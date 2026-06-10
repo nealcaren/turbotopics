@@ -14,6 +14,18 @@
 
 ::: topica.one_hot
 
+Prune rare (and optionally common) vocabulary from a corpus, keeping
+metadata row-aligned with the documents that survive — the analogue of R
+`stm`'s `prepDocuments`.
+
+::: topica.prep_documents
+
+Sweep document-frequency thresholds and visualize how many documents and
+vocabulary terms are removed at each level, to inform the choice of
+`lower_thresh`.
+
+::: topica.plot_removed
+
 ## DataFrames & metadata
 
 These accept pandas **or** Polars frames (and `align` also takes numpy arrays and

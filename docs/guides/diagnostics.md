@@ -80,6 +80,37 @@ topica.topic_stability([model_a, model_b], topn=10)       # cross-fit term overl
 topica.check_residuals(model, docs)                       # Taddy dispersion: is K too small?
 ```
 
+## Convergence
+
+Every iterative model exposes a uniform convergence interface. `model.fit_history`
+is a list of `(iteration, objective)` pairs — the ELBO/bound for variational
+models (STM, CTM, ProdLDA, ETM, FASTopic) and the per-token log-likelihood for
+collapsed-Gibbs models (LDA, keyATM, SeededLDA, …). `model.converged` is `True`
+if a tolerance criterion was met during `fit`, `False` if the model ran to the
+iteration cap, and `None` for models with no iterative objective (BERTopic,
+Top2Vec).
+
+```python
+model = topica.LDA(num_topics=20, seed=1)
+model.fit(docs, iters=500)
+
+model.converged        # True / False / None
+model.fit_history      # [(10, -7.43), (20, -7.31), ...]
+```
+
+On collapsed-Gibbs models you can enable early stopping by passing
+`convergence_tol` and `check_every` to `fit`:
+
+```python
+model.fit(docs, iters=1000, convergence_tol=1e-4, check_every=10)
+# stops as soon as the relative change in log-likelihood over one check
+# interval drops below 1e-4, rather than running all 1000 sweeps.
+```
+
+The cluster models (BERTopic, Top2Vec) and structurally non-iterative models
+(DTM, HLDA) return an empty `fit_history` and `converged` of `False` or `None`;
+they satisfy the contract without early-stop support.
+
 ## Visualization
 
 ```python

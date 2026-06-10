@@ -40,3 +40,44 @@ theta = dmr.transform(new_docs, features=new_X)
 # STM variational inference (no Gibbs parameters needed):
 theta = stm_model.transform(new_docs)
 ```
+
+## Covariate-aware transform for STM
+
+When new documents carry prevalence covariates, use `topica.stm.transform`
+rather than the model method directly. It sets the per-document prior mean to
+`mu_d = X_d @ gamma`, which is R `stm`'s `fitNewDocuments` behavior:
+
+```python
+import topica
+
+# Via a raw covariate matrix (without the intercept column):
+theta = topica.stm.transform(stm_model, new_docs, prevalence=X_new)
+
+# Via a formula and a DataFrame of new-document covariates:
+theta = topica.stm.transform(
+    stm_model, new_docs,
+    formula="~ party + author",
+    data=new_meta_df,
+)
+```
+
+The `formula=` path encodes the design matrix using the same column encoding
+as at fit time, then prepends an intercept to match `gamma`. Formulas
+containing a `spline()` term are rejected here because the knots would be
+recomputed on the new documents rather than reused from the training data.
+Build the design matrix manually with `design_matrix_predict` using the
+fit-time knot context and pass it as `X=` instead.
+
+## Aligning vocabulary before transform
+
+New documents may contain tokens not seen at fit time. Use `align_corpus` to
+drop out-of-vocabulary tokens before passing the documents to `transform`:
+
+```python
+aligned = topica.align_corpus(new_docs, stm_model)
+theta = topica.stm.transform(stm_model, aligned, prevalence=X_new)
+```
+
+`align_corpus` works on any model that exposes a `vocabulary` attribute, so
+it also applies before `stm_model.transform(new_docs)` or any other
+transform call.

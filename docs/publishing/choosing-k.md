@@ -72,6 +72,53 @@ frontier = topica.quality_frontier(model, n=10)   # per-topic coherence & exclus
 DMR, CTM, STM, HDP, …) by inferring each held-out document's topic mixture from
 half its tokens and scoring the other half, so it is comparable across `K`.
 
+### Document-completion held-out log-likelihood
+
+`make_heldout` and `eval_heldout` implement R `stm`'s held-out word scoring
+rather than the standard perplexity split. We hold out a random fraction of
+words from a random fraction of documents, fit the model on the reduced corpus,
+then score the withheld words:
+
+```python
+import topica
+
+h = topica.make_heldout(corpus, prop_docs=0.5, prop_words=0.5, seed=0)
+model = topica.STM(num_topics=20, seed=1)
+model.fit(h.documents, prevalence=X)
+
+result = topica.eval_heldout(model, h)
+print(f"mean per-doc held-out log-likelihood: {result.mean_per_doc_loglik:.3f}")
+```
+
+Higher (less negative) values indicate better fit. This metric is comparable
+across values of K fit on the same `h.documents` corpus.
+
+### Best-of-N at fixed K
+
+Gibbs models and STM can land on different local optima from different starting
+values. `select_model` runs `runs` initializations at a fixed K and returns all
+fitted models with their coherence and exclusivity scores:
+
+```python
+result = topica.select_model(
+    docs, K=20,
+    runs=20,           # number of random initializations
+    model="stm",       # "lda" or "stm"
+    prevalence=X,      # required when model="stm"
+    fraction=0.5,      # keep only the top 50% after a short burn-in
+)
+# inspect the coherence-exclusivity frontier across all runs:
+topica.plot_models(result)
+
+# pick the run in the upper-right corner and use that model:
+best_idx = result.coherence.argmax()   # or use exclusivity, or visual inspection
+model = result.models[best_idx]
+```
+
+The `fraction` argument mirrors R `stm`'s "run briefly, keep the best ~20%"
+heuristic: a short burn-in filters out clearly poor starts before the full
+training runs.
+
 A nonparametric model is a useful sanity check on your choice: it *infers* a
 topic count rather than taking one.
 
