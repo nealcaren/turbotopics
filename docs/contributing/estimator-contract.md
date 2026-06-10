@@ -63,10 +63,11 @@ def transform(self, docs) -> np.ndarray:  # shape (n_docs, K)
 
 `transform` infers the topic mixture for new documents (without updating the
 model). It is the basis for held-out perplexity, `eval_heldout`, and `search_k`.
-Models with structural reasons for not supporting held-out inference (keyword-
-constrained models such as `KeyATM` and `SeededLDA`, or group-anchored models
-such as `SAGE` and `PA`) are listed in `EXEMPT` in `topica.conformance` and are
-not required to implement `transform`.
+Only the models with no flat document-topic representation are structurally
+exempt: `HLDA` (a topic tree) and `DTM` (time-sliced). The keyword, seeded, and
+anchored Gibbs models (`KeyATM`, `SeededLDA`, `SAGE`, `PA`, `PT`) can infer a
+held-out theta from their fitted phi, so they are tracked in `KNOWN_GAPS` as
+work to do, not exempted.
 
 ### Tier 2 — family-specific attributes
 
@@ -93,6 +94,10 @@ differ structurally. These exemptions are recorded in
 a requirement it cannot honestly satisfy; add it to `EXEMPT` instead with a
 brief reason.
 
+`topica.conformance.EXEMPT` and `KNOWN_GAPS` are the authoritative lists; the
+table below is a snapshot. An exemption is permanent and principled; a gap is a
+fixable omission tracked for a later phase.
+
 Current permanent exemptions:
 
 | Model | Requirement | Reason |
@@ -106,16 +111,15 @@ Current permanent exemptions:
 | `DTM` | `doc_names` | No static per-document row index |
 | `DTM` | `coherence` | Time-varying phi is incompatible with flat (K, V) coherence |
 | `DTM` | `transform` | No time-slice-free held-out inference |
-| `BERTopic` | `coherence` | c-TF-IDF topic_word is not a probability; use `topica.coherence()` externally |
 | `BERTopic` | `doc_names` | Exposes cluster `labels`, not a doc_names property |
-| `Top2Vec` | `coherence` | Same as BERTopic |
-| `Top2Vec` | `doc_names` | Same as BERTopic |
-| `GSDMM` | `topic_names` | Mixture model (one topic per document); topic_names absent |
-| `SAGE` | `transform` | Keyword-anchored model; no held-out transform |
-| `PA` | `transform` | Super/sub-topic model; no held-out transform |
-| `PT` | `transform` | Pseudo-topic model; no held-out transform |
-| `KeyATM` | `transform` | Keyword-constrained; no held-out transform |
-| `SeededLDA` | `transform` | Seeded variant of KeyATM; no held-out transform |
+| `BERTopic` | `iters` | Not an iterative sampler (UMAP + HDBSCAN); no iteration count applies |
+| `Top2Vec` | `doc_names` | Exposes cluster `labels`, not a doc_names property |
+| `Top2Vec` | `iters` | Not an iterative sampler (UMAP + HDBSCAN); no iteration count applies |
+
+Everything else currently missing (for example `topic_names` on most models,
+`transform` on the keyword/seeded/anchored models, `theta_draws`/`doc_lengths`
+on the remaining Dirichlet models, `coherence`/`save`/`load` on the neural and
+cluster models) is a tracked gap in `KNOWN_GAPS`, not an exemption.
 
 ## Checking your model
 

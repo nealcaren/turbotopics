@@ -150,34 +150,20 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("DTM", "transform"):   "DTM has no time-slice-free held-out inference",
 
     # --- BERTopic / Top2Vec: embedding-cluster models ---
-    # topic_names and doc_names: these models DO expose them (already present).
-    # coherence: they do NOT expose it as a model method (no class attr).
-    ("BERTopic", "coherence"): "BERTopic c-TF-IDF topic_word is not a probability; model-level coherence() method absent (use topica.coherence() externally)",
-    ("Top2Vec",  "coherence"): "Top2Vec c-TF-IDF topic_word is not a probability; model-level coherence() method absent (use topica.coherence() externally)",
+    # topic_names and doc_names: topic_names is present; doc_names is not (these
+    # models expose cluster `labels`, and a names index is cluster-specific).
     ("BERTopic", "doc_names"): "BERTopic exposes labels (cluster ids) not a doc_names property; mapping to names is cluster-specific",
     ("Top2Vec",  "doc_names"): "Top2Vec exposes labels (cluster ids) not a doc_names property",
+    # iters: these models are not iterative samplers in the Gibbs/EM sense (the
+    # fit is UMAP + HDBSCAN clustering), so a standardized iteration count does
+    # not apply.
+    ("BERTopic", "iters"): "BERTopic is not an iterative sampler (UMAP + HDBSCAN); no iteration count applies",
+    ("Top2Vec",  "iters"): "Top2Vec is not an iterative sampler (UMAP + HDBSCAN); no iteration count applies",
     # transform: both DO expose transform; NOT exempted.
     # Tier 2: family is 'none'; no Tier 2 applies.
-    # iters: neither model is iterative in the Gibbs/EM sense; NOT exempted
-    # (they simply do not have iters, which is a KNOWN_GAP not an exemption
-    # because it is left open pending a decision on whether to standardize
-    # embedding models' epochs as 'iters').
-
-    # --- GSDMM: Dirichlet mixture (one topic per document) ---
-    # topic_names: not present at class level.
-    ("GSDMM", "topic_names"): "GSDMM is a mixture model (one topic per document); topic_names property absent",
-
-    # --- SAGE / PA / PT / DMR: no transform ---
-    # SAGE: anchored word counts; inference is not a simple projection.
-    ("SAGE", "transform"):  "SAGE keyword-anchored model has no held-out transform",
-    # PA: super/sub structure; no flat single-theta held-out path.
-    ("PA",   "transform"):  "PA super/sub-topic model has no held-out transform",
-    # PT: pseudo-topic prior; no held-out transform implemented.
-    ("PT",   "transform"):  "PT pseudo-topic model has no held-out transform",
-    # KeyATM: keyword-constrained; transform omitted by design.
-    ("KeyATM", "transform"): "KeyATM keyword-constrained model has no held-out transform",
-    # SeededLDA: seeded variant; transform omitted (same reasoning as KeyATM).
-    ("SeededLDA", "transform"): "SeededLDA seeded model has no held-out transform",
+    # coherence: a count-based UMass/NPMI is computable from any top-word list,
+    # so a model-level coherence() is a fixable gap (see KNOWN_GAPS), not an
+    # exemption — even though their topic_word is c-TF-IDF rather than P(w|t).
 }
 
 # ---------------------------------------------------------------------------
@@ -199,8 +185,6 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("ETM",          "iters"): "phase 2: expose iters in ETM.fit (currently none)",
     ("ProdLDA",      "iters"): "phase 2: expose iters in ProdLDA.fit (currently none)",
     ("FASTopic",     "iters"): "phase 2: expose iters in FASTopic.fit (currently none)",
-    ("BERTopic",     "iters"): "phase 2: expose iters in BERTopic.fit if applicable, or document non-iterative",
-    ("Top2Vec",      "iters"): "phase 2: expose iters in Top2Vec.fit if applicable, or document non-iterative",
 
     # --- Phase 3: add topic_names to all models that lack it ---
     ("LDA",          "topic_names"): "phase 3: add topic_names property to LDA",
@@ -215,8 +199,9 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("CTM",          "topic_names"): "phase 3: add topic_names property to CTM",
     ("HLDA",         "topic_names"): "phase 3: add topic_names property to HLDA (tree nodes)",
     ("DTM",          "topic_names"): "phase 3: add topic_names property to DTM",
+    ("GSDMM",        "topic_names"): "phase 3: add topic_names to GSDMM (it has doc_topic + num_topics)",
 
-    # --- Phase 4: add coherence + save/load + doc_names to neural models ---
+    # --- Phase 4: universal members on the neural / cluster models ---
     ("ETM",          "doc_names"):  "phase 4: add doc_names property to ETM",
     ("ETM",          "coherence"):  "phase 4: add coherence method to ETM",
     ("ETM",          "save"):       "phase 4: add save method to ETM",
@@ -227,6 +212,19 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("FASTopic",     "load"):       "phase 4: add load method to FASTopic",
     ("ProdLDA",      "save"):       "phase 4: add save method to ProdLDA",
     ("ProdLDA",      "load"):       "phase 4: add load method to ProdLDA",
+    # count-based UMass/NPMI is valid over c-TF-IDF top words.
+    ("BERTopic",     "coherence"):  "phase 4: add coherence method to BERTopic (UMass over top words)",
+    ("Top2Vec",      "coherence"):  "phase 4: add coherence method to Top2Vec (UMass over top words)",
+
+    # --- Phase 6: held-out transform for the remaining generative models ---
+    # All five are fittable Dirichlet models whose held-out theta can be inferred
+    # with the fitted phi (Gibbs inference for the keyword/seeded/pseudo models;
+    # a baseline, covariate-free projection for SAGE's sparse-additive phi).
+    ("KeyATM",       "transform"): "phase 6: add transform (Gibbs held-out inference with fitted phi)",
+    ("SeededLDA",    "transform"): "phase 6: add transform (Gibbs held-out inference with fitted phi)",
+    ("SAGE",         "transform"): "phase 6: add transform (baseline, covariate-free projection)",
+    ("PA",           "transform"): "phase 6: add transform (sub-topic held-out inference)",
+    ("PT",           "transform"): "phase 6: add transform (pseudo-topic held-out inference)",
 
     # --- Phase 5: add theta_draws + doc_lengths to remaining Gibbs models ---
     ("DMR",          "theta_draws"):    "phase 5: add theta_draws to DMR (retained MCMC draws)",
