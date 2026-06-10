@@ -171,29 +171,7 @@ EXEMPT: dict[tuple[str, str], str] = {
 # ---------------------------------------------------------------------------
 # Key: (model_name, requirement)   Value: phase note
 
-KNOWN_GAPS: dict[tuple[str, str], str] = {
-
-    # --- Phase 2: rename iteration param to iters (ETM/ProdLDA/FASTopic deferred) ---
-    ("ETM",          "iters"): "phase 2: expose iters in ETM.fit (currently none)",
-    ("ProdLDA",      "iters"): "phase 2: expose iters in ProdLDA.fit (currently none)",
-    ("FASTopic",     "iters"): "phase 2: expose iters in FASTopic.fit (currently none)",
-
-    # --- Phase 4: universal members on the neural / cluster models ---
-    ("ETM",          "doc_names"):  "phase 4: add doc_names property to ETM",
-    ("ETM",          "coherence"):  "phase 4: add coherence method to ETM",
-    ("ETM",          "save"):       "phase 4: add save method to ETM",
-    ("ETM",          "load"):       "phase 4: add load method to ETM",
-    ("FASTopic",     "doc_names"):  "phase 4: add doc_names property to FASTopic",
-    ("FASTopic",     "coherence"):  "phase 4: add coherence method to FASTopic",
-    ("FASTopic",     "save"):       "phase 4: add save method to FASTopic",
-    ("FASTopic",     "load"):       "phase 4: add load method to FASTopic",
-    ("ProdLDA",      "save"):       "phase 4: add save method to ProdLDA",
-    ("ProdLDA",      "load"):       "phase 4: add load method to ProdLDA",
-    # count-based UMass/NPMI is valid over c-TF-IDF top words.
-    ("BERTopic",     "coherence"):  "phase 4: add coherence method to BERTopic (UMass over top words)",
-    ("Top2Vec",      "coherence"):  "phase 4: add coherence method to Top2Vec (UMass over top words)",
-
-}
+KNOWN_GAPS: dict[tuple[str, str], str] = {}
 
 # ---------------------------------------------------------------------------
 # check_conformance helper

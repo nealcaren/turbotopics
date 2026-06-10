@@ -25,8 +25,8 @@ def _planted(k=3, block=6, h=8, n=150, seed=0):
 
 def test_fit_basic_shapes():
     docs, doc_emb, vocab, _ = _planted()
-    m = topica.FASTopic(num_topics=3, epochs=120, lr=0.05, seed=1)
-    m.fit(docs, doc_emb)
+    m = topica.FASTopic(num_topics=3, lr=0.05, seed=1)
+    m.fit(docs, doc_emb, iters=120)
     assert m.num_topics == 3
     assert m.topic_word.shape == (3, len(vocab))
     assert m.doc_topic.shape == (len(docs), 3)
@@ -39,17 +39,16 @@ def test_fit_basic_shapes():
 
 def test_loss_decreases():
     docs, doc_emb, _, _ = _planted()
-    m = topica.FASTopic(num_topics=3, epochs=150, lr=0.05, seed=1)
-    m.fit(docs, doc_emb)
+    m = topica.FASTopic(num_topics=3, lr=0.05, seed=1)
+    m.fit(docs, doc_emb, iters=150)
     assert len(m.loss_history) >= 2
     assert m.loss_history[-1] < m.loss_history[0]
 
 
 def test_recovers_planted_blocks():
     docs, doc_emb, vocab, _ = _planted()
-    block = 6
-    m = topica.FASTopic(num_topics=3, epochs=250, lr=0.05, seed=2)
-    m.fit(docs, doc_emb)
+    m = topica.FASTopic(num_topics=3, lr=0.05, seed=2)
+    m.fit(docs, doc_emb, iters=250)
     covered = set()
     for t in range(3):
         words = [w for w, _ in m.top_words(3, topic=t)]
@@ -61,8 +60,8 @@ def test_recovers_planted_blocks():
 
 def test_transform_held_out():
     docs, doc_emb, vocab, _ = _planted(h=8)
-    m = topica.FASTopic(num_topics=3, epochs=200, lr=0.05, seed=3)
-    m.fit(docs, doc_emb)
+    m = topica.FASTopic(num_topics=3, lr=0.05, seed=3)
+    m.fit(docs, doc_emb, iters=200)
     # One clean embedding per block; each should land on a distinct topic.
     new = np.array([np.eye(8)[b] * 3.0 for b in range(3)])
     theta = m.transform(new)
@@ -73,17 +72,17 @@ def test_transform_held_out():
 
 def test_fit_transform_matches_doc_topic():
     docs, doc_emb, _, _ = _planted()
-    m = topica.FASTopic(num_topics=3, epochs=120, lr=0.05, seed=4)
+    m = topica.FASTopic(num_topics=3, lr=0.05, seed=4)
     theta = m.fit_transform(docs, doc_emb)
     assert np.allclose(theta, m.doc_topic)
 
 
 def test_determinism():
     docs, doc_emb, _, _ = _planted()
-    a = topica.FASTopic(num_topics=3, epochs=80, lr=0.05, seed=7)
-    a.fit(docs, doc_emb)
-    b = topica.FASTopic(num_topics=3, epochs=80, lr=0.05, seed=7)
-    b.fit(docs, doc_emb)
+    a = topica.FASTopic(num_topics=3, lr=0.05, seed=7)
+    a.fit(docs, doc_emb, iters=80)
+    b = topica.FASTopic(num_topics=3, lr=0.05, seed=7)
+    b.fit(docs, doc_emb, iters=80)
     assert np.allclose(a.topic_word, b.topic_word)
     assert np.allclose(a.doc_topic, b.doc_topic)
 
@@ -94,7 +93,7 @@ def test_errors():
         topica.FASTopic(num_topics=1)
     with pytest.raises(ValueError):
         topica.FASTopic(num_topics=3, theta_temp=0.0)
-    m = topica.FASTopic(num_topics=3, epochs=10, seed=1)
+    m = topica.FASTopic(num_topics=3, seed=1)
     with pytest.raises(Exception):
         _ = m.topic_word  # not fitted
     with pytest.raises(ValueError):

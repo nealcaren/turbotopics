@@ -50,8 +50,8 @@ doc_emb.shape          # (704, 384)
 and word embeddings — mixed-membership, so every essay gets a topic distribution.
 
 ```python
-model = topica.FASTopic(num_topics=10, epochs=200, seed=1)
-model.fit(docs, doc_emb)
+model = topica.FASTopic(num_topics=10, seed=1)
+model.fit(docs, doc_emb, iters=200)
 
 for t in range(model.num_topics):
     print(t, " ".join(w for w, _ in model.top_words(6, topic=t)))

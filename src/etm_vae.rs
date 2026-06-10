@@ -271,7 +271,7 @@ pub struct EtmVaeModel {
     pub bound_history: Vec<f64>,
     pub converged: bool,
     pub epochs_run: usize,
-    encoder: Encoder,
+    pub encoder: Encoder,
 }
 
 impl EtmVaeModel {

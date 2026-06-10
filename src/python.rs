@@ -7880,6 +7880,36 @@ impl Top2Vec {
     /// Soft topic membership for new documents from their embeddings (cosine to
     /// each topic vector, normalized). `data` is accepted for API symmetry but
     /// Top2Vec assigns by embedding only. Returns `(num_docs, num_topics)`.
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        let tops = top_word_ids_phi(&phi, m.num_topics, n);
+        let corpus = corpus::Corpus {
+            id_to_word: self.id_to_word.clone(),
+            docs: self.docs.clone(),
+            doc_names: (0..self.docs.len()).map(|i| format!("doc_{i}")).collect(),
+            doc_labels: vec![String::new(); self.docs.len()],
+            doc_freqs: {
+                let v = self.id_to_word.len();
+                let mut df = vec![0u32; v];
+                for doc in &self.docs {
+                    let mut seen = std::collections::HashSet::new();
+                    for &w in doc { seen.insert(w as usize); }
+                    for w in seen { if w < v { df[w] += 1; } }
+                }
+                df
+            },
+            total_freqs: {
+                let v = self.id_to_word.len();
+                let mut tf = vec![0u32; v];
+                for doc in &self.docs { for &w in doc { if (w as usize) < v { tf[w as usize] += 1; } } }
+                tf
+            },
+        };
+        Ok(Array1::from(umass_coherence(&corpus, &tops)).to_pyarray_bound(py))
+    }
+
     #[pyo3(signature = (data, doc_embeddings))]
     fn transform<'py>(
         &self,
@@ -8227,6 +8257,37 @@ impl BERTopic {
         topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
     }
 
+    /// UMass coherence for each topic's top-`n` words, over the training corpus.
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        let tops = top_word_ids_phi(&phi, m.num_topics, n);
+        let corpus = corpus::Corpus {
+            id_to_word: self.id_to_word.clone(),
+            docs: self.docs.clone(),
+            doc_names: (0..self.docs.len()).map(|i| format!("doc_{i}")).collect(),
+            doc_labels: vec![String::new(); self.docs.len()],
+            doc_freqs: {
+                let v = self.id_to_word.len();
+                let mut df = vec![0u32; v];
+                for doc in &self.docs {
+                    let mut seen = std::collections::HashSet::new();
+                    for &w in doc { seen.insert(w as usize); }
+                    for w in seen { if w < v { df[w] += 1; } }
+                }
+                df
+            },
+            total_freqs: {
+                let v = self.id_to_word.len();
+                let mut tf = vec![0u32; v];
+                for doc in &self.docs { for &w in doc { if (w as usize) < v { tf[w as usize] += 1; } } }
+                tf
+            },
+        };
+        Ok(Array1::from(umass_coherence(&corpus, &tops)).to_pyarray_bound(py))
+    }
+
     /// The soft topic distribution for `data` (Corpus or token lists), as
     /// `(num_docs, num_topics)`. Words outside the fitted vocabulary are dropped;
     /// `window`/`stride` default to the values set on the model.
@@ -8385,13 +8446,11 @@ impl BERTopic {
 pub struct ETM {
     num_topics: usize,
     inference: String,
-    em_iters: usize,
     em_tol: f64,
     sigma_shrink: f64,
     prior_variance: f64,
     max_inner: usize,
     hidden_size: usize,
-    epochs: usize,
     batch_size: usize,
     lr: f64,
     wdecay: f64,
@@ -8401,6 +8460,52 @@ pub struct ETM {
     model: Option<etm::EtmModel>,
     vae: Option<etm_vae::EtmVaeModel>,
     id_to_word: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+}
+
+/// Serializable snapshot of a fitted ETM.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EtmState {
+    num_topics: usize,
+    inference: String,
+    em_tol: f64,
+    sigma_shrink: f64,
+    prior_variance: f64,
+    max_inner: usize,
+    hidden_size: usize,
+    batch_size: usize,
+    lr: f64,
+    wdecay: f64,
+    seed: u64,
+    fitted: bool,
+    topic_names: Vec<String>,
+    id_to_word: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+    // EM path fields (None when inference=="vae")
+    beta_em: Option<Vec<Vec<f64>>>,
+    alpha_em: Option<Vec<Vec<f64>>>,
+    mu_em: Option<Vec<f64>>,
+    sigma_em: Option<Vec<f64>>,
+    lambda_em: Option<Vec<Vec<f64>>>,
+    bound_em: Option<f64>,
+    converged_em: Option<bool>,
+    // VAE path fields (None when inference=="em")
+    beta_vae: Option<Vec<Vec<f64>>>,
+    alpha_vae: Option<Vec<Vec<f64>>>,
+    doc_topic_vae: Option<Vec<Vec<f64>>>,
+    bound_vae: Option<f64>,
+    converged_vae: Option<bool>,
+    // VAE encoder weights (None when inference=="em")
+    enc_v: Option<usize>,
+    enc_hidden: Option<usize>,
+    enc_w1: Option<Vec<f64>>,
+    enc_b1: Option<Vec<f64>>,
+    enc_w2: Option<Vec<f64>>,
+    enc_b2: Option<Vec<f64>>,
+    enc_w_mu: Option<Vec<f64>>,
+    enc_b_mu: Option<Vec<f64>>,
+    enc_w_ls: Option<Vec<f64>>,
+    enc_b_ls: Option<Vec<f64>>,
 }
 
 impl ETM {
@@ -8472,25 +8577,24 @@ impl ETM {
     /// Create an unfitted model. `inference` selects the engine: `"em"` (default)
     /// is per-document variational EM, accurate but not minibatched; `"vae"` is the
     /// reference's amortized autoencoder, which scales to large corpora and maps new
-    /// documents with a single encoder pass. `em_iters`/`em_tol`/`prior_variance`/
-    /// `max_inner`/`sigma_shrink` govern the EM path; `hidden_size`/`epochs`/
+    /// documents with a single encoder pass. `em_tol`/`prior_variance`/
+    /// `max_inner`/`sigma_shrink` govern the EM path; `hidden_size`/
     /// `batch_size`/`lr`/`wdecay`/`em_tol` govern the VAE path.
+    /// Pass `iters` to :meth:`fit` to set the iteration count.
     #[new]
-    #[pyo3(signature = (num_topics, *, inference="em", em_iters=100, em_tol=1e-4,
+    #[pyo3(signature = (num_topics, *, inference="em", em_tol=1e-4,
                         sigma_shrink=0.0, prior_variance=1e6, max_inner=25,
-                        hidden_size=800, epochs=150, batch_size=1000, lr=0.005,
+                        hidden_size=800, batch_size=1000, lr=0.005,
                         wdecay=1.2e-6, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         inference: &str,
-        em_iters: usize,
         em_tol: f64,
         sigma_shrink: f64,
         prior_variance: f64,
         max_inner: usize,
         hidden_size: usize,
-        epochs: usize,
         batch_size: usize,
         lr: f64,
         wdecay: f64,
@@ -8508,13 +8612,11 @@ impl ETM {
         Ok(ETM {
             num_topics,
             inference: inference.to_string(),
-            em_iters,
             em_tol,
             sigma_shrink,
             prior_variance,
             max_inner,
             hidden_size,
-            epochs,
             batch_size,
             lr,
             wdecay,
@@ -8524,31 +8626,35 @@ impl ETM {
             model: None,
             vae: None,
             id_to_word: Vec::new(),
+            corpus: None,
         })
     }
 
     /// Fit on `data` (a Corpus or list of token lists) with `word_embeddings`
     /// (`(len(vocabulary), E)`) and the aligned `vocabulary`. The vocabulary
     /// defines the word ids; tokens outside it are dropped.
-    #[pyo3(signature = (data, word_embeddings, vocabulary))]
+    /// `iters` sets the number of training iterations (EM iterations or VAE epochs).
+    #[pyo3(signature = (data, word_embeddings, vocabulary, *, iters=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         word_embeddings: &Bound<'_, PyAny>,
         vocabulary: Vec<String>,
+        iters: Option<usize>,
     ) -> PyResult<()> {
-        let docs_str: Vec<Vec<String>> = if let Ok(c) = data.extract::<Corpus>() {
-            c.inner
-                .docs
-                .iter()
-                .map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect())
-                .collect()
-        } else {
-            data.extract().map_err(|_| {
-                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
-            })?
-        };
+        let (docs_str, corpus_opt): (Vec<Vec<String>>, Option<corpus::Corpus>) =
+            if let Ok(c) = data.extract::<Corpus>() {
+                let strings = c.inner.docs.iter()
+                    .map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect())
+                    .collect();
+                (strings, Some(c.inner.clone()))
+            } else {
+                let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                    PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+                })?;
+                (docs, None)
+            };
         let rho = parse_features(word_embeddings)?;
         if rho.len() != vocabulary.len() {
             return Err(PyValueError::new_err(format!(
@@ -8570,12 +8676,13 @@ impl ETM {
             return Err(PyValueError::new_err("no in-vocabulary tokens in the documents"));
         }
         let num_types = vocabulary.len();
-        self.id_to_word = vocabulary;
+        self.id_to_word = vocabulary.clone();
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         if self.inference == "vae" {
-            let (k, h, ep, bs, lr, wd, et) = (
-                self.num_topics, self.hidden_size, self.epochs, self.batch_size,
+            let ep = iters.unwrap_or(150);
+            let (k, h, bs, lr, wd, et) = (
+                self.num_topics, self.hidden_size, self.batch_size,
                 self.lr, self.wdecay, self.em_tol,
             );
             let m = py.allow_threads(move || {
@@ -8584,8 +8691,9 @@ impl ETM {
             self.vae = Some(m);
             self.model = None;
         } else {
-            let (k, ei, et, ss, pv, mi) = (
-                self.num_topics, self.em_iters, self.em_tol, self.sigma_shrink,
+            let ei = iters.unwrap_or(100);
+            let (k, et, ss, pv, mi) = (
+                self.num_topics, self.em_tol, self.sigma_shrink,
                 self.prior_variance, self.max_inner,
             );
             let model = py.allow_threads(move || {
@@ -8594,6 +8702,35 @@ impl ETM {
             self.model = Some(model);
             self.vae = None;
         }
+        // Retain the corpus for coherence/doc_names; build a minimal one if raw docs were given.
+        self.corpus = Some(corpus_opt.unwrap_or_else(|| {
+            let n = docs_str.len();
+            let vocab_clone = vocabulary.clone();
+            let v = vocab_clone.len();
+            let mut df = vec![0u32; v];
+            let mut tf = vec![0u32; v];
+            let mut id_docs: Vec<Vec<u32>> = Vec::with_capacity(n);
+            for doc in &docs_str {
+                let ids: Vec<u32> = doc.iter()
+                    .filter_map(|w| map.get(w.as_str()).copied())
+                    .collect();
+                let mut seen = std::collections::HashSet::new();
+                for &id in &ids {
+                    tf[id as usize] += 1;
+                    seen.insert(id as usize);
+                }
+                for id in seen { df[id] += 1; }
+                id_docs.push(ids);
+            }
+            corpus::Corpus {
+                id_to_word: vocab_clone,
+                docs: id_docs,
+                doc_names: (0..n).map(|i| format!("doc_{i}")).collect(),
+                doc_labels: vec![String::new(); n],
+                doc_freqs: df,
+                total_freqs: tf,
+            }
+        }));
         self.topic_names = (0..self.num_topics).map(|i| format!("topic_{i}")).collect();
         self.fitted = true;
         Ok(())
@@ -8653,6 +8790,12 @@ impl ETM {
         self.ensure_fitted()?;
         Ok(self.id_to_word.clone())
     }
+    /// Document names from the training corpus, in corpus order.
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.ensure_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
     #[pyo3(signature = (n=10, *, topic=None))]
     fn top_words<'py>(
         &self,
@@ -8662,6 +8805,128 @@ impl ETM {
     ) -> PyResult<Bound<'py, PyAny>> {
         let phi = vecs_to_arr2(self.surf_beta()?);
         topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
+    }
+    /// UMass coherence for each topic's top-`n` words, over the training corpus.
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let phi = vecs_to_arr2(self.surf_beta()?);
+        let tops = top_word_ids_phi(&phi, self.num_topics, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path` (topica's binary format).
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.ensure_fitted()?;
+        let (beta_em, alpha_em, mu_em, sigma_em, lambda_em, bound_em, converged_em) =
+            if let Some(m) = &self.model {
+                (Some(m.beta.clone()), Some(m.alpha.clone()), Some(m.mu.clone()),
+                 Some(m.sigma.clone()), Some(m.lambda.clone()), Some(m.bound), Some(m.converged))
+            } else {
+                (None, None, None, None, None, None, None)
+            };
+        let (beta_vae, alpha_vae, doc_topic_vae, bound_vae, converged_vae,
+             enc_v, enc_hidden, enc_w1, enc_b1, enc_w2, enc_b2,
+             enc_w_mu, enc_b_mu, enc_w_ls, enc_b_ls) =
+            if let Some(m) = &self.vae {
+                let enc = &m.encoder;
+                (Some(m.beta.clone()), Some(m.alpha.clone()), Some(m.doc_topic.clone()),
+                 Some(m.bound), Some(m.converged),
+                 Some(enc.v), Some(enc.hidden),
+                 Some(enc.w1.clone()), Some(enc.b1.clone()),
+                 Some(enc.w2.clone()), Some(enc.b2.clone()),
+                 Some(enc.w_mu.clone()), Some(enc.b_mu.clone()),
+                 Some(enc.w_ls.clone()), Some(enc.b_ls.clone()))
+            } else {
+                (None, None, None, None, None, None, None,
+                 None, None, None, None, None, None, None, None)
+            };
+        write_state(path, &EtmState {
+            num_topics: self.num_topics,
+            inference: self.inference.clone(),
+            em_tol: self.em_tol,
+            sigma_shrink: self.sigma_shrink,
+            prior_variance: self.prior_variance,
+            max_inner: self.max_inner,
+            hidden_size: self.hidden_size,
+            batch_size: self.batch_size,
+            lr: self.lr,
+            wdecay: self.wdecay,
+            seed: self.seed,
+            fitted: self.fitted,
+            topic_names: self.topic_names.clone(),
+            id_to_word: self.id_to_word.clone(),
+            corpus: self.corpus.clone(),
+            beta_em, alpha_em, mu_em, sigma_em, lambda_em, bound_em, converged_em,
+            beta_vae, alpha_vae, doc_topic_vae, bound_vae, converged_vae,
+            enc_v, enc_hidden, enc_w1, enc_b1, enc_w2, enc_b2,
+            enc_w_mu, enc_b_mu, enc_w_ls, enc_b_ls,
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: EtmState = read_state(path)?;
+        let model = if s.inference == "em" {
+            s.beta_em.map(|beta| etm::EtmModel {
+                num_topics: s.num_topics,
+                num_types: s.id_to_word.len(),
+                beta,
+                alpha: s.alpha_em.unwrap_or_default(),
+                mu: s.mu_em.unwrap_or_default(),
+                sigma: s.sigma_em.unwrap_or_default(),
+                lambda: s.lambda_em.unwrap_or_default(),
+                bound: s.bound_em.unwrap_or(f64::NAN),
+                bound_history: Vec::new(),
+                converged: s.converged_em.unwrap_or(false),
+                em_iters_run: 0,
+            })
+        } else { None };
+        let vae = if s.inference == "vae" {
+            s.beta_vae.map(|beta| etm_vae::EtmVaeModel {
+                num_topics: s.num_topics,
+                num_types: s.id_to_word.len(),
+                beta,
+                alpha: s.alpha_vae.unwrap_or_default(),
+                doc_topic: s.doc_topic_vae.unwrap_or_default(),
+                bound: s.bound_vae.unwrap_or(f64::NAN),
+                bound_history: Vec::new(),
+                converged: s.converged_vae.unwrap_or(false),
+                epochs_run: 0,
+                encoder: etm_vae::Encoder {
+                    v: s.enc_v.unwrap_or(0),
+                    hidden: s.enc_hidden.unwrap_or(0),
+                    k: s.num_topics,
+                    w1: s.enc_w1.unwrap_or_default(),
+                    b1: s.enc_b1.unwrap_or_default(),
+                    w2: s.enc_w2.unwrap_or_default(),
+                    b2: s.enc_b2.unwrap_or_default(),
+                    w_mu: s.enc_w_mu.unwrap_or_default(),
+                    b_mu: s.enc_b_mu.unwrap_or_default(),
+                    w_ls: s.enc_w_ls.unwrap_or_default(),
+                    b_ls: s.enc_b_ls.unwrap_or_default(),
+                },
+            })
+        } else { None };
+        Ok(ETM {
+            num_topics: s.num_topics,
+            inference: s.inference,
+            em_tol: s.em_tol,
+            sigma_shrink: s.sigma_shrink,
+            prior_variance: s.prior_variance,
+            max_inner: s.max_inner,
+            hidden_size: s.hidden_size,
+            batch_size: s.batch_size,
+            lr: s.lr,
+            wdecay: s.wdecay,
+            seed: s.seed,
+            fitted: s.fitted,
+            topic_names: s.topic_names,
+            id_to_word: s.id_to_word,
+            corpus: s.corpus,
+            model,
+            vae,
+        })
     }
 
     /// Held-out topic proportions for new documents. For the EM path this is the
@@ -8684,15 +8949,16 @@ impl ETM {
     }
 
     /// Fit, then return the document-topic proportions (`fit_transform`).
-    #[pyo3(signature = (data, word_embeddings, vocabulary))]
+    #[pyo3(signature = (data, word_embeddings, vocabulary, *, iters=None))]
     fn fit_transform<'py>(
         &mut self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
         word_embeddings: &Bound<'py, PyAny>,
         vocabulary: Vec<String>,
+        iters: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data, word_embeddings, vocabulary)?;
+        self.fit(py, data, word_embeddings, vocabulary, iters)?;
         Ok(vecs_to_arr2(&self.surf_doc_topic()?).to_pyarray_bound(py))
     }
 
@@ -8720,7 +8986,6 @@ pub struct ProdLDA {
     hidden_size: usize,
     alpha: f64,
     dropout: f64,
-    epochs: usize,
     batch_size: usize,
     lr: f64,
     em_tol: f64,
@@ -8729,6 +8994,44 @@ pub struct ProdLDA {
     topic_names: Vec<String>,
     model: Option<prodlda::ProdldaModel>,
     corpus: Option<corpus::Corpus>,
+}
+
+/// Serializable snapshot of a fitted ProdLDA.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProdldaState {
+    num_topics: usize,
+    hidden_size: usize,
+    alpha: f64,
+    dropout: f64,
+    batch_size: usize,
+    lr: f64,
+    em_tol: f64,
+    seed: u64,
+    fitted: bool,
+    topic_names: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+    // Fitted model fields
+    doc_topic: Option<Vec<Vec<f64>>>,
+    bound: Option<f64>,
+    bound_history: Option<Vec<f64>>,
+    converged: Option<bool>,
+    epochs_run: Option<usize>,
+    // Weights
+    w_v: Option<usize>,
+    w_hidden: Option<usize>,
+    w_k: Option<usize>,
+    w_w1: Option<Vec<f64>>,
+    w_b1: Option<Vec<f64>>,
+    w_w2: Option<Vec<f64>>,
+    w_b2: Option<Vec<f64>>,
+    w_w_mu: Option<Vec<f64>>,
+    w_b_mu: Option<Vec<f64>>,
+    w_w_ls: Option<Vec<f64>>,
+    w_b_ls: Option<Vec<f64>>,
+    w_beta: Option<Vec<f64>>,
+    // BN mu running stats
+    bn_running_mean: Option<Vec<f64>>,
+    bn_running_var: Option<Vec<f64>>,
 }
 
 impl ProdLDA {
@@ -8744,19 +9047,18 @@ impl ProdLDA {
     /// Create an unfitted model. `alpha` is the symmetric Dirichlet prior
     /// concentration (reference 1.0); `hidden_size` is the encoder width (reference
     /// 100); `dropout` is the dropout rate on the hidden layer and on `theta`;
-    /// `epochs`/`batch_size`/`lr` drive Adam (reference 200/200/0.002, with
-    /// `beta1 = 0.99`); `em_tol > 0` stops early on the relative change in the
-    /// epoch ELBO (0 runs all epochs).
+    /// `batch_size`/`lr` drive Adam (reference 200/0.002, with `beta1 = 0.99`);
+    /// `em_tol > 0` stops early on the relative change in the epoch ELBO (0 runs
+    /// all epochs). Pass `iters` to :meth:`fit` to set the number of epochs.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=1.0, hidden_size=100, dropout=0.2,
-                        epochs=200, batch_size=200, lr=0.002, em_tol=0.0, seed=42))]
+                        batch_size=200, lr=0.002, em_tol=0.0, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha: f64,
         hidden_size: usize,
         dropout: f64,
-        epochs: usize,
         batch_size: usize,
         lr: f64,
         em_tol: f64,
@@ -8776,7 +9078,6 @@ impl ProdLDA {
             hidden_size,
             alpha,
             dropout,
-            epochs,
             batch_size,
             lr,
             em_tol,
@@ -8789,8 +9090,9 @@ impl ProdLDA {
     }
 
     /// Fit on `data` (a Corpus or list of token lists).
-    #[pyo3(signature = (data))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+    /// `iters` sets the number of training epochs (default 200).
+    #[pyo3(signature = (data, *, iters=None))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: Option<usize>) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -8806,8 +9108,9 @@ impl ProdLDA {
         if num_types < self.num_topics {
             return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
         }
-        let (k, h, a, dp, ep, bs, lr, et) = (
-            self.num_topics, self.hidden_size, self.alpha, self.dropout, self.epochs,
+        let ep = iters.unwrap_or(200);
+        let (k, h, a, dp, bs, lr, et) = (
+            self.num_topics, self.hidden_size, self.alpha, self.dropout,
             self.batch_size, self.lr, self.em_tol,
         );
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
@@ -8920,8 +9223,96 @@ impl ProdLDA {
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data)?;
+        self.fit(py, data, None)?;
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path` (topica's binary format).
+    fn save(&self, path: &str) -> PyResult<()> {
+        let m = self.fitted_model()?;
+        write_state(path, &ProdldaState {
+            num_topics: self.num_topics,
+            hidden_size: self.hidden_size,
+            alpha: self.alpha,
+            dropout: self.dropout,
+            batch_size: self.batch_size,
+            lr: self.lr,
+            em_tol: self.em_tol,
+            seed: self.seed,
+            fitted: self.fitted,
+            topic_names: self.topic_names.clone(),
+            corpus: self.corpus.clone(),
+            doc_topic: Some(m.doc_topic.clone()),
+            bound: Some(m.bound),
+            bound_history: Some(m.bound_history.clone()),
+            converged: Some(m.converged),
+            epochs_run: Some(m.epochs_run),
+            w_v: Some(m.weights.v),
+            w_hidden: Some(m.weights.hidden),
+            w_k: Some(m.weights.k),
+            w_w1: Some(m.weights.w1.clone()),
+            w_b1: Some(m.weights.b1.clone()),
+            w_w2: Some(m.weights.w2.clone()),
+            w_b2: Some(m.weights.b2.clone()),
+            w_w_mu: Some(m.weights.w_mu.clone()),
+            w_b_mu: Some(m.weights.b_mu.clone()),
+            w_w_ls: Some(m.weights.w_ls.clone()),
+            w_b_ls: Some(m.weights.b_ls.clone()),
+            w_beta: Some(m.weights.beta.clone()),
+            bn_running_mean: Some(m.bn_mu.running_mean.clone()),
+            bn_running_var: Some(m.bn_mu.running_var.clone()),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: ProdldaState = read_state(path)?;
+        let model = if s.fitted && s.w_v.is_some() {
+            let v = s.w_v.unwrap();
+            let hidden = s.w_hidden.unwrap();
+            let k = s.w_k.unwrap();
+            Some(prodlda::ProdldaModel {
+                num_topics: s.num_topics,
+                num_types: v,
+                doc_topic: s.doc_topic.unwrap_or_default(),
+                bound: s.bound.unwrap_or(f64::NAN),
+                bound_history: s.bound_history.unwrap_or_default(),
+                converged: s.converged.unwrap_or(false),
+                epochs_run: s.epochs_run.unwrap_or(0),
+                weights: prodlda::Weights {
+                    v, hidden, k,
+                    w1: s.w_w1.unwrap_or_default(),
+                    b1: s.w_b1.unwrap_or_default(),
+                    w2: s.w_w2.unwrap_or_default(),
+                    b2: s.w_b2.unwrap_or_default(),
+                    w_mu: s.w_w_mu.unwrap_or_default(),
+                    b_mu: s.w_b_mu.unwrap_or_default(),
+                    w_ls: s.w_w_ls.unwrap_or_default(),
+                    b_ls: s.w_b_ls.unwrap_or_default(),
+                    beta: s.w_beta.unwrap_or_default(),
+                },
+                bn_mu: prodlda::BatchNorm {
+                    running_mean: s.bn_running_mean.unwrap_or_else(|| vec![0.0; k]),
+                    running_var: s.bn_running_var.unwrap_or_else(|| vec![1.0; k]),
+                    momentum: 0.1,
+                },
+            })
+        } else { None };
+        Ok(ProdLDA {
+            num_topics: s.num_topics,
+            hidden_size: s.hidden_size,
+            alpha: s.alpha,
+            dropout: s.dropout,
+            batch_size: s.batch_size,
+            lr: s.lr,
+            em_tol: s.em_tol,
+            seed: s.seed,
+            fitted: s.fitted,
+            topic_names: s.topic_names,
+            model,
+            corpus: s.corpus,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -8943,7 +9334,6 @@ impl ProdLDA {
 #[pyclass(module = "topica")]
 pub struct FASTopic {
     num_topics: usize,
-    epochs: usize,
     lr: f64,
     dt_alpha: f64,
     tw_alpha: f64,
@@ -8956,6 +9346,34 @@ pub struct FASTopic {
     topic_names: Vec<String>,
     model: Option<fastopic::FastopicModel>,
     id_to_word: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+}
+
+/// Serializable snapshot of a fitted FASTopic.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FastopicState {
+    num_topics: usize,
+    lr: f64,
+    dt_alpha: f64,
+    tw_alpha: f64,
+    theta_temp: f64,
+    em_tol: f64,
+    sinkhorn_iters: usize,
+    sinkhorn_tol: f64,
+    seed: u64,
+    fitted: bool,
+    topic_names: Vec<String>,
+    id_to_word: Vec<String>,
+    corpus: Option<corpus::Corpus>,
+    // Fitted model fields
+    topic_word: Option<Vec<Vec<f64>>>,
+    doc_topic: Option<Vec<Vec<f64>>>,
+    topic_embeddings: Option<Vec<Vec<f64>>>,
+    word_embeddings: Option<Vec<Vec<f64>>>,
+    train_doc_embeddings: Option<Vec<Vec<f64>>>,
+    loss_history: Option<Vec<f64>>,
+    converged: Option<bool>,
+    epochs_run: Option<usize>,
 }
 
 impl FASTopic {
@@ -8968,18 +9386,18 @@ impl FASTopic {
 
 #[pymethods]
 impl FASTopic {
-    /// Create an unfitted model. `epochs`/`lr` drive the full-batch Adam optimizer;
+    /// Create an unfitted model. `lr` drives the full-batch Adam optimizer;
     /// `dt_alpha`/`tw_alpha` are the inverse entropic regularizations for the
     /// doc-topic and topic-word transport (reference defaults 3.0 and 2.0);
     /// `theta_temp` is the inference temperature; `em_tol` stops on the relative
     /// loss change. `sinkhorn_iters`/`sinkhorn_tol` cap each Sinkhorn solve.
+    /// Pass `iters` to :meth:`fit` to set the number of training epochs.
     #[new]
-    #[pyo3(signature = (num_topics, *, epochs=200, lr=0.002, dt_alpha=3.0, tw_alpha=2.0,
+    #[pyo3(signature = (num_topics, *, lr=0.002, dt_alpha=3.0, tw_alpha=2.0,
                         theta_temp=1.0, em_tol=1e-6, sinkhorn_iters=50, sinkhorn_tol=1e-4, seed=42))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
-        epochs: usize,
         lr: f64,
         dt_alpha: f64,
         tw_alpha: f64,
@@ -8997,7 +9415,6 @@ impl FASTopic {
         }
         Ok(FASTopic {
             num_topics,
-            epochs,
             lr,
             dt_alpha,
             tw_alpha,
@@ -9010,18 +9427,21 @@ impl FASTopic {
             topic_names: Vec::new(),
             model: None,
             id_to_word: Vec::new(),
+            corpus: None,
         })
     }
 
     /// Fit on `data` (a Corpus or list of token lists) with `doc_embeddings`
     /// (`(num_docs, E)`), one frozen row per document. The vocabulary is taken from
     /// the corpus; FASTopic learns the word embeddings itself, so none are passed.
-    #[pyo3(signature = (data, doc_embeddings))]
+    /// `iters` sets the number of training epochs (default 200).
+    #[pyo3(signature = (data, doc_embeddings, *, iters=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         doc_embeddings: &Bound<'_, PyAny>,
+        iters: Option<usize>,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -9048,9 +9468,10 @@ impl FASTopic {
         }
         self.id_to_word = corpus.id_to_word.clone();
         let docs_ids = corpus.docs.clone();
+        let ep = iters.unwrap_or(200);
 
-        let (k, ep, lr, dta, twa, tt, et, si, st) = (
-            self.num_topics, self.epochs, self.lr, self.dt_alpha, self.tw_alpha,
+        let (k, lr, dta, twa, tt, et, si, st) = (
+            self.num_topics, self.lr, self.dt_alpha, self.tw_alpha,
             self.theta_temp, self.em_tol, self.sinkhorn_iters, self.sinkhorn_tol,
         );
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
@@ -9061,6 +9482,7 @@ impl FASTopic {
         });
         self.topic_names = (0..self.num_topics).map(|i| format!("topic_{i}")).collect();
         self.model = Some(model);
+        self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
     }
@@ -9120,6 +9542,12 @@ impl FASTopic {
         self.fitted_model()?;
         Ok(self.id_to_word.clone())
     }
+    /// Document names from the training corpus, in corpus order.
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
     #[pyo3(signature = (n=10, *, topic=None))]
     fn top_words<'py>(
         &self,
@@ -9130,6 +9558,14 @@ impl FASTopic {
         let m = self.fitted_model()?;
         let phi = vecs_to_arr2(&m.topic_word);
         topic_words_helper(py, &phi, &self.id_to_word, self.num_topics, n, topic)
+    }
+    /// UMass coherence for each topic's top-`n` words, over the training corpus.
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        let m = self.fitted_model()?;
+        let phi = vecs_to_arr2(&m.topic_word);
+        let tops = top_word_ids_phi(&phi, self.num_topics, n);
+        Ok(Array1::from(umass_coherence(self.corpus.as_ref().unwrap(), &tops)).to_pyarray_bound(py))
     }
 
     /// Held-out topic proportions for new documents from their embeddings
@@ -9153,8 +9589,73 @@ impl FASTopic {
         data: &Bound<'py, PyAny>,
         doc_embeddings: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data, doc_embeddings)?;
+        self.fit(py, data, doc_embeddings, None)?;
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path` (topica's binary format).
+    fn save(&self, path: &str) -> PyResult<()> {
+        let m = self.fitted_model()?;
+        write_state(path, &FastopicState {
+            num_topics: self.num_topics,
+            lr: self.lr,
+            dt_alpha: self.dt_alpha,
+            tw_alpha: self.tw_alpha,
+            theta_temp: self.theta_temp,
+            em_tol: self.em_tol,
+            sinkhorn_iters: self.sinkhorn_iters,
+            sinkhorn_tol: self.sinkhorn_tol,
+            seed: self.seed,
+            fitted: self.fitted,
+            topic_names: self.topic_names.clone(),
+            id_to_word: self.id_to_word.clone(),
+            corpus: self.corpus.clone(),
+            topic_word: Some(m.topic_word.clone()),
+            doc_topic: Some(m.doc_topic.clone()),
+            topic_embeddings: Some(m.topic_embeddings.clone()),
+            word_embeddings: Some(m.word_embeddings.clone()),
+            train_doc_embeddings: Some(m.train_doc_embeddings.clone()),
+            loss_history: Some(m.loss_history.clone()),
+            converged: Some(m.converged),
+            epochs_run: Some(m.epochs_run),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: FastopicState = read_state(path)?;
+        let model = if s.fitted && s.topic_word.is_some() {
+            Some(fastopic::FastopicModel {
+                num_topics: s.num_topics,
+                num_types: s.id_to_word.len(),
+                topic_word: s.topic_word.unwrap_or_default(),
+                doc_topic: s.doc_topic.unwrap_or_default(),
+                topic_embeddings: s.topic_embeddings.unwrap_or_default(),
+                word_embeddings: s.word_embeddings.unwrap_or_default(),
+                train_doc_embeddings: s.train_doc_embeddings.unwrap_or_default(),
+                theta_temp: s.theta_temp,
+                loss_history: s.loss_history.unwrap_or_default(),
+                converged: s.converged.unwrap_or(false),
+                epochs_run: s.epochs_run.unwrap_or(0),
+            })
+        } else { None };
+        Ok(FASTopic {
+            num_topics: s.num_topics,
+            lr: s.lr,
+            dt_alpha: s.dt_alpha,
+            tw_alpha: s.tw_alpha,
+            theta_temp: s.theta_temp,
+            em_tol: s.em_tol,
+            sinkhorn_iters: s.sinkhorn_iters,
+            sinkhorn_tol: s.sinkhorn_tol,
+            seed: s.seed,
+            fitted: s.fitted,
+            topic_names: s.topic_names,
+            id_to_word: s.id_to_word,
+            corpus: s.corpus,
+            model,
+        })
     }
 
     fn __repr__(&self) -> String {

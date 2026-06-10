@@ -27,8 +27,8 @@ def _planted(k=3, block=8, e=3, seed=0):
 
 def test_etm_recovers_planted_blocks():
     docs, vocab, word_emb, truth = _planted()
-    m = topica.ETM(num_topics=3, em_iters=50, seed=1)
-    m.fit(docs, word_emb, vocab)
+    m = topica.ETM(num_topics=3, seed=1)
+    m.fit(docs, word_emb, vocab, iters=50)
 
     assert m.topic_word.shape == (3, len(vocab))
     assert m.doc_topic.shape == (len(docs), 3)
@@ -47,8 +47,8 @@ def test_etm_recovers_planted_blocks():
 
 def test_etm_top_words_all_topics_and_names():
     docs, vocab, word_emb, _ = _planted()
-    m = topica.ETM(num_topics=3, em_iters=20, seed=1)
-    m.fit(docs, word_emb, vocab)
+    m = topica.ETM(num_topics=3, seed=1)
+    m.fit(docs, word_emb, vocab, iters=20)
     allw = m.top_words(5)  # topic=None -> list per topic
     assert len(allw) == 3 and all(len(t) == 5 for t in allw)
     assert m.topic_names == ["topic_0", "topic_1", "topic_2"]
@@ -73,7 +73,7 @@ def test_etm_validation():
 
 def _vae(num_topics=3, **kw):
     return topica.ETM(
-        num_topics=num_topics, inference="vae", hidden_size=64, epochs=200,
+        num_topics=num_topics, inference="vae", hidden_size=64,
         batch_size=64, lr=0.01, **kw
     )
 
@@ -81,13 +81,12 @@ def _vae(num_topics=3, **kw):
 def test_etm_vae_recovers_planted_blocks():
     docs, vocab, word_emb, _ = _planted()
     m = _vae(seed=1)
-    theta = m.fit_transform(docs, word_emb, vocab)
+    theta = m.fit_transform(docs, word_emb, vocab, iters=200)
     assert m.inference == "vae"
     assert m.topic_word.shape == (3, len(vocab))
     assert theta.shape == (len(docs), 3)
     assert np.allclose(theta.sum(axis=1), 1.0)
     assert np.allclose(m.topic_word.sum(axis=1), 1.0)
-    block = 8
     covered = set()
     for t in range(3):
         words = [w for w, _ in m.top_words(4, topic=t)]
@@ -100,7 +99,7 @@ def test_etm_vae_recovers_planted_blocks():
 def test_etm_vae_transform_is_encoder_pass():
     docs, vocab, word_emb, _ = _planted()
     m = _vae(seed=2)
-    m.fit(docs, word_emb, vocab)
+    m.fit(docs, word_emb, vocab, iters=200)
     # transform takes token docs and returns a distribution per doc.
     new = [["b0w1", "b0w2"], ["b1w0", "b1w3"], ["b2w5", "b2w4"]]
     theta = m.transform(new)
@@ -112,8 +111,8 @@ def test_etm_vae_transform_is_encoder_pass():
 def test_etm_vae_determinism():
     docs, vocab, word_emb, _ = _planted()
     a = _vae(seed=7)
-    a.fit(docs, word_emb, vocab)
+    a.fit(docs, word_emb, vocab, iters=200)
     b = _vae(seed=7)
-    b.fit(docs, word_emb, vocab)
+    b.fit(docs, word_emb, vocab, iters=200)
     assert np.allclose(a.topic_word, b.topic_word)
     assert np.allclose(a.doc_topic, b.doc_topic)

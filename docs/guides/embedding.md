@@ -161,8 +161,8 @@ per-document optimization.
 
 ```python
 model = topica.ETM(num_topics=20, inference="vae",
-                   hidden_size=800, epochs=150, batch_size=1000, lr=0.005, seed=1)
-model.fit(docs, word_emb, vocab)
+                   hidden_size=800, batch_size=1000, lr=0.005, seed=1)
+model.fit(docs, word_emb, vocab, iters=150)
 model.transform(new_docs)              # fast: one encoder forward pass
 ```
 
