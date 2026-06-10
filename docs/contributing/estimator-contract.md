@@ -50,6 +50,17 @@ module's `_accepts_kwarg` helper checks for this at import time; do not hide
 | `coherence(n)` | array of K floats | Per-topic UMass coherence over top n words |
 | `save(path)` | — | Serialize to disk |
 | `load(path)` | — | Class method; restore from disk |
+| `fit_history` | list of `(int, float)` | Per-iteration `(iteration, objective)`: the ELBO/bound for variational models, the model log-likelihood for Gibbs models. Empty `[]` for models with no iterative objective |
+| `converged` | bool or None | `True` if a tolerance criterion was met during fit, `False` if it ran to the iteration cap, `None` for models with no iterative objective |
+
+The convergence interface is uniform: `model.fit_history` and `model.converged`
+answer the same question on every model. The collapsed-Gibbs samplers record the
+model log-likelihood every `check_every` sweeps and early-stop when
+`convergence_tol > 0` (default `0.0` runs the full `iters` unchanged); the
+variational models trace and early-stop on their ELBO. Models with no flat
+per-iteration objective return an empty `fit_history` and `converged` is `False`
+or `None`: the cluster models (BERTopic, Top2Vec, `converged` is `None`), the
+time-sliced `DTM`, and the tree-structured `HLDA`.
 
 ### Tier 1 — generative models
 
