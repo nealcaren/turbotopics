@@ -156,6 +156,7 @@ struct LdaState {
     phi: Option<Arr2>, theta: Option<Arr2>, model: Option<TopicModel>,
     corpus: Option<corpus::Corpus>,
     #[serde(default)] use_symmetric_alpha: bool,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DmrState {
@@ -163,12 +164,14 @@ struct DmrState {
     prior_variance: f64, lbfgs_iters: usize, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, feature_effects: Option<Arr2>,
     feature_names: Vec<String>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LabeledState {
     alpha: f64, beta: f64, seed: u64, fitted: bool, num_topics: usize,
     phi: Option<Arr2>, theta: Option<Arr2>, label_vocab: Vec<String>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SageState {
@@ -176,6 +179,7 @@ struct SageState {
     burn_in: usize, seed: u64, lbfgs_iters: usize, fitted: bool, num_groups: usize,
     beta: Vec<Vec<f64>>, theta: Option<Arr2>, group_names: Vec<String>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 /// serde default for the bound of a model saved before convergence tracking
 /// existed: NaN signals "unknown", distinct from a real bound of 0.
@@ -192,6 +196,7 @@ struct CtmState {
     #[serde(default = "nan")] bound: f64,
     #[serde(default)] bound_history: Vec<f64>,
     #[serde(default)] converged: bool,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StmState {
@@ -204,6 +209,7 @@ struct StmState {
     #[serde(default = "nan")] bound: f64,
     #[serde(default)] bound_history: Vec<f64>,
     #[serde(default)] converged: bool,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct HdpState {
@@ -211,23 +217,27 @@ struct HdpState {
     num_topics: usize, learned_alpha: f64, learned_gamma: f64,
     beta: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
     #[serde(default)] trace: Vec<(usize, usize, f64, f64, f64)>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DtmState {
     num_topics: usize, alpha: f64, chain_variance: f64, obs_variance: f64, seed: u64,
     fitted: bool, num_times: usize, bound: f64,
     topic_words: Option<Vec<Vec<Vec<f64>>>>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SldaState {
     num_topics: usize, alpha: f64, seed: u64, fitted: bool, sigma2: f64,
     eta: Option<Vec<f64>>, beta: Option<Arr2>, theta: Option<Arr2>,
     log_beta: Option<Vec<Vec<f64>>>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PtState {
     num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct GsdmmState {
@@ -235,6 +245,7 @@ struct GsdmmState {
     phi: Option<Arr2>, theta: Option<Arr2>, doc_cluster: Vec<usize>,
     corpus: Option<corpus::Corpus>,
     #[serde(default)] trace: Vec<(usize, usize, f64)>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SeededState {
@@ -257,12 +268,14 @@ struct PaState {
     num_super: usize, num_sub: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, super_sub: Option<Arr2>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct HldaState {
     depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64, fitted: bool,
     num_nodes: usize, node_topic_word: Option<Arr2>, node_levels: Vec<usize>,
     node_parents: Vec<i64>, doc_paths: Vec<Vec<usize>>, corpus: Option<corpus::Corpus>,
+    #[serde(default)] topic_names: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +728,7 @@ pub struct LDA {
 
     // Populated after fit().
     fitted: bool,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,   // (num_topics, num_words)
     theta: Option<Array2<f64>>, // (num_docs, num_topics)
     // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
@@ -751,6 +765,7 @@ impl LDA {
                 theta[[d, t]] = v;
             }
         }
+        self.topic_names = (0..num_topics).map(|i| format!("topic_{i}")).collect();
         self.phi = Some(phi);
         self.theta = Some(theta);
         self.model = Some(model);
@@ -893,6 +908,7 @@ impl LDA {
             mh_steps,
             use_symmetric_alpha,
             fitted: false,
+            topic_names: Vec::new(),
             phi: None,
             theta: None,
             theta_draws: None,
@@ -1188,6 +1204,27 @@ impl LDA {
         self.num_topics
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Top `n` words per topic as ``(word, probability)`` pairs.
     ///
     /// Returns a list of `n`-length lists (one per topic), or — when `topic`
@@ -1458,6 +1495,7 @@ impl LDA {
             mh_steps: 2,
             use_symmetric_alpha: false,
             fitted: true,
+            topic_names: (0..num_topics).map(|i| format!("topic_{i}")).collect(),
             phi: Some(phi),
             theta: Some(theta),
             theta_draws: None,
@@ -1823,6 +1861,7 @@ impl LDA {
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             model: self.model.clone(), corpus: self.corpus.clone(),
             use_symmetric_alpha: self.use_symmetric_alpha,
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -1830,11 +1869,17 @@ impl LDA {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: LdaState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
             num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
+            topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta), theta_draws: None,
             model: s.model, corpus: s.corpus,
         })
@@ -2661,6 +2706,7 @@ pub struct DMR {
     lbfgs_iters: usize,
 
     fitted: bool,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,            // (num_topics, num_words)
     theta: Option<Array2<f64>>,          // (num_docs, num_topics)
     feature_effects: Option<Array2<f64>>, // (num_topics, num_features)
@@ -2713,6 +2759,7 @@ impl DMR {
             prior_variance,
             lbfgs_iters,
             fitted: false,
+            topic_names: Vec::new(),
             phi: None,
             theta: None,
             feature_effects: None,
@@ -2912,6 +2959,7 @@ impl DMR {
             }
         }
 
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.phi = Some(phi);
         self.theta = Some(theta);
         self.feature_effects = Some(fe);
@@ -2980,6 +3028,27 @@ impl DMR {
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics
+    }
+
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
 
     /// Top `n` words per topic as ``(word, probability)`` pairs (all topics, or
@@ -3132,6 +3201,7 @@ impl DMR {
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             feature_effects: arr2_opt(&self.feature_effects),
             feature_names: self.feature_names.clone(), corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -3139,10 +3209,16 @@ impl DMR {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: DmrState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(DMR {
             num_topics: s.num_topics, beta: s.beta, optimize_interval: s.optimize_interval,
             burn_in: s.burn_in, seed: s.seed, prior_variance: s.prior_variance,
             lbfgs_iters: s.lbfgs_iters, fitted: s.fitted,
+            topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             feature_effects: arr2_back(s.feature_effects),
             feature_names: s.feature_names, corpus: s.corpus,
@@ -3171,6 +3247,7 @@ pub struct LabeledLDA {
 
     fitted: bool,
     num_topics: usize,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     label_vocab: Vec<String>,
@@ -3206,6 +3283,7 @@ impl LabeledLDA {
             seed,
             fitted: false,
             num_topics: 0,
+            topic_names: Vec::new(),
             phi: None,
             theta: None,
             label_vocab: Vec::new(),
@@ -3360,6 +3438,7 @@ impl LabeledLDA {
         }
 
         self.num_topics = k;
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.phi = Some(phi);
         self.theta = Some(theta);
         self.label_vocab = label_vocab;
@@ -3415,6 +3494,27 @@ impl LabeledLDA {
     fn num_topics(&self) -> PyResult<usize> {
         self.require_fitted()?;
         Ok(self.num_topics)
+    }
+
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
 
     /// Top `n` words for one topic (by label name or index) or all topics.
@@ -3498,6 +3598,7 @@ impl LabeledLDA {
             alpha: self.alpha, beta: self.beta, seed: self.seed, fitted: self.fitted,
             num_topics: self.num_topics, phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             label_vocab: self.label_vocab.clone(), corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -3505,9 +3606,15 @@ impl LabeledLDA {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: LabeledState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(LabeledLDA {
             alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
-            num_topics: s.num_topics, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            num_topics: s.num_topics, topic_names,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             label_vocab: s.label_vocab, corpus: s.corpus,
         })
     }
@@ -3552,6 +3659,7 @@ pub struct SAGE {
     lbfgs_iters: usize,
 
     fitted: bool,
+    topic_names: Vec<String>,
     num_groups: usize,
     beta: Vec<Vec<f64>>, // [K*G][V]
     theta: Option<Array2<f64>>,
@@ -3617,6 +3725,7 @@ impl SAGE {
             seed,
             lbfgs_iters,
             fitted: false,
+            topic_names: Vec::new(),
             num_groups: 0,
             beta: Vec::new(),
             theta: None,
@@ -3761,6 +3870,7 @@ impl SAGE {
             }
         }
 
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.num_groups = group_n;
         self.beta = beta;
         self.theta = Some(theta);
@@ -3835,6 +3945,27 @@ impl SAGE {
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics
+    }
+
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
 
     #[getter]
@@ -3933,6 +4064,7 @@ impl SAGE {
             lbfgs_iters: self.lbfgs_iters, fitted: self.fitted, num_groups: self.num_groups,
             beta: self.beta.clone(), theta: arr2_opt(&self.theta),
             group_names: self.group_names.clone(), corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -3940,10 +4072,16 @@ impl SAGE {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: SageState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(SAGE {
             num_topics: s.num_topics, alpha: s.alpha, prior_variance: s.prior_variance,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
             lbfgs_iters: s.lbfgs_iters, fitted: s.fitted, num_groups: s.num_groups,
+            topic_names,
             beta: s.beta, theta: arr2_back(s.theta), group_names: s.group_names, corpus: s.corpus,
         })
     }
@@ -4083,6 +4221,7 @@ pub struct CTM {
     init_spectral: bool,
 
     fitted: bool,
+    topic_names: Vec<String>,
     beta: Option<Array2<f64>>,  // (num_topics, num_words)
     theta: Option<Array2<f64>>, // (num_docs, num_topics)
     corr: Option<Array2<f64>>,  // (num_topics, num_topics)
@@ -4132,6 +4271,7 @@ impl CTM {
             seed,
             init_spectral,
             fitted: false,
+            topic_names: Vec::new(),
             beta: None,
             theta: None,
             corr: None,
@@ -4208,6 +4348,7 @@ impl CTM {
 
         let (eta_mean, eta_cov) = eta_posterior(&model);
 
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
@@ -4382,6 +4523,27 @@ impl CTM {
         Ok(theta.to_pyarray_bound(py))
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Save the fitted model to `path`. Reload with `CTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -4394,6 +4556,7 @@ impl CTM {
             corpus: self.corpus.clone(),
             bound: self.bound, bound_history: self.bound_history.clone(),
             converged: self.converged,
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -4401,9 +4564,15 @@ impl CTM {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: CtmState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(CTM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
             init_spectral: s.init_spectral, fitted: s.fitted,
+            topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
             mu: s.mu, sigma: s.sigma, corpus: s.corpus,
@@ -4433,6 +4602,7 @@ pub struct STM {
     init_spectral: bool,
 
     fitted: bool,
+    topic_names: Vec<String>,
     beta: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     corr: Option<Array2<f64>>,
@@ -4504,6 +4674,7 @@ impl STM {
             seed,
             init_spectral,
             fitted: false,
+            topic_names: Vec::new(),
             beta: None,
             theta: None,
             corr: None,
@@ -4693,6 +4864,7 @@ impl STM {
 
         let (eta_mean, eta_cov) = eta_posterior(&model);
 
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
@@ -4967,6 +5139,27 @@ impl STM {
         Ok(theta.to_pyarray_bound(py))
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Save the fitted model to `path`. Reload with `STM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -4982,6 +5175,7 @@ impl STM {
             corpus: self.corpus.clone(),
             bound: self.bound, bound_history: self.bound_history.clone(),
             converged: self.converged,
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -4989,9 +5183,15 @@ impl STM {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: StmState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(STM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
             init_spectral: s.init_spectral, fitted: s.fitted,
+            topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
             gamma: arr2_back(s.gamma), feature_names: s.feature_names,
@@ -5176,6 +5376,7 @@ pub struct HDP {
 
     fitted: bool,
     num_topics: usize,
+    topic_names: Vec<String>,
     learned_alpha: f64,
     learned_gamma: f64,
     beta: Option<Array2<f64>>,
@@ -5218,6 +5419,7 @@ impl HDP {
             resample_conc,
             fitted: false,
             num_topics: 0,
+            topic_names: Vec::new(),
             learned_alpha: alpha,
             learned_gamma: gamma,
             beta: None,
@@ -5279,6 +5481,7 @@ impl HDP {
         }
 
         self.num_topics = k;
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.learned_alpha = model.alpha;
         self.learned_gamma = model.gamma;
         self.beta = Some(beta);
@@ -5431,6 +5634,27 @@ impl HDP {
         )
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Save the fitted model to `path`. Reload with `HDP.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -5440,6 +5664,7 @@ impl HDP {
             learned_alpha: self.learned_alpha, learned_gamma: self.learned_gamma,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
             trace: self.trace.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -5447,9 +5672,15 @@ impl HDP {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: HdpState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(HDP {
             alpha: s.alpha, gamma: s.gamma, eta: s.eta, seed: s.seed,
             resample_conc: s.resample_conc, fitted: s.fitted, num_topics: s.num_topics,
+            topic_names,
             learned_alpha: s.learned_alpha, learned_gamma: s.learned_gamma,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corpus: s.corpus,
             trace: s.trace,
@@ -5484,6 +5715,7 @@ pub struct DTM {
     seed: u64,
 
     fitted: bool,
+    topic_names: Vec<String>,
     num_times: usize,
     bound: f64,
     // (num_times, num_topics, num_words): p(word | topic, time).
@@ -5531,6 +5763,7 @@ impl DTM {
             obs_variance,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             num_times: 0,
             bound: 0.0,
             topic_words: None,
@@ -5600,6 +5833,7 @@ impl DTM {
             (0..num_times).map(|t| model.topic_word_matrix(t)).collect();
 
         self.num_times = num_times;
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.bound = model.bound;
         self.topic_words = Some(tw);
         self.corpus = Some(corpus);
@@ -5748,6 +5982,27 @@ impl DTM {
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Save the fitted model to `path`. Reload with `DTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -5756,6 +6011,7 @@ impl DTM {
             obs_variance: self.obs_variance, seed: self.seed, fitted: self.fitted,
             num_times: self.num_times, bound: self.bound,
             topic_words: self.topic_words.clone(), corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -5763,9 +6019,15 @@ impl DTM {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: DtmState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(DTM {
             num_topics: s.num_topics, alpha: s.alpha, chain_variance: s.chain_variance,
             obs_variance: s.obs_variance, seed: s.seed, fitted: s.fitted,
+            topic_names,
             num_times: s.num_times, bound: s.bound, topic_words: s.topic_words, corpus: s.corpus,
         })
     }
@@ -5798,6 +6060,7 @@ pub struct SupervisedLDA {
     seed: u64,
 
     fitted: bool,
+    topic_names: Vec<String>,
     sigma2: f64,
     eta: Option<Array1<f64>>,
     beta: Option<Array2<f64>>,  // K × V
@@ -5834,6 +6097,7 @@ impl SupervisedLDA {
             alpha,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             sigma2: 0.0,
             eta: None,
             beta: None,
@@ -5897,6 +6161,7 @@ impl SupervisedLDA {
             }
         }
 
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.sigma2 = model.sigma2;
         self.eta = Some(Array1::from(model.eta.clone()));
         self.beta = Some(beta);
@@ -6075,6 +6340,27 @@ impl SupervisedLDA {
         )
     }
 
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+
     /// Save the fitted model to `path`. Reload with `SupervisedLDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
@@ -6083,6 +6369,7 @@ impl SupervisedLDA {
             sigma2: self.sigma2, eta: arr1_opt(&self.eta), beta: arr2_opt(&self.beta),
             theta: arr2_opt(&self.theta), log_beta: self.log_beta.clone(),
             corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
 
@@ -6090,8 +6377,14 @@ impl SupervisedLDA {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: SldaState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(SupervisedLDA {
             num_topics: s.num_topics, alpha: s.alpha, seed: s.seed, fitted: s.fitted,
+            topic_names,
             sigma2: s.sigma2, eta: arr1_back(s.eta), beta: arr2_back(s.beta),
             theta: arr2_back(s.theta), log_beta: s.log_beta, corpus: s.corpus,
         })
@@ -6118,6 +6411,7 @@ pub struct PT {
     beta: f64,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
     corpus: Option<corpus::Corpus>,
@@ -6151,7 +6445,7 @@ impl PT {
         }
         Ok(PT {
             num_topics, num_pseudo, alpha, beta, seed,
-            fitted: false, phi: None, theta: None, corpus: None,
+            fitted: false, topic_names: Vec::new(), phi: None, theta: None, corpus: None,
         })
     }
 
@@ -6176,6 +6470,7 @@ impl PT {
             let m = pt::fit_ptm(&corpus.docs, num_types, k, p, a, b, iters, &mut rng);
             (m, corpus)
         });
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.phi = Some(vecs_to_arr2(&model.topic_word()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
         self.corpus = Some(corpus);
@@ -6204,6 +6499,25 @@ impl PT {
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics
+    }
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
+    /// after fit; assign a list of the same length to override.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -6235,15 +6549,22 @@ impl PT {
             num_topics: self.num_topics, num_pseudo: self.num_pseudo, alpha: self.alpha,
             beta: self.beta, seed: self.seed, fitted: self.fitted,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+            topic_names: self.topic_names.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: PtState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(PT {
             num_topics: s.num_topics, num_pseudo: s.num_pseudo, alpha: s.alpha, beta: s.beta,
-            seed: s.seed, fitted: s.fitted, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            seed: s.seed, fitted: s.fitted, topic_names,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus,
         })
     }
@@ -6271,6 +6592,7 @@ pub struct GSDMM {
     seed: u64,
     fitted: bool,
     num_used: usize,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,        // num_used × V (used clusters only)
     theta: Option<Array2<f64>>,      // num_docs × num_used (soft assignment)
     doc_cluster: Vec<usize>,         // hard assignment per doc, remapped to 0..num_used
@@ -6306,7 +6628,8 @@ impl GSDMM {
         }
         Ok(GSDMM {
             k_max: num_topics, alpha, beta, seed,
-            fitted: false, num_used: 0, phi: None, theta: None,
+            fitted: false, num_used: 0, topic_names: Vec::new(),
+            phi: None, theta: None,
             doc_cluster: Vec::new(), corpus: None, trace: Vec::new(),
         })
     }
@@ -6371,6 +6694,7 @@ impl GSDMM {
         self.theta = Some(theta);
         self.doc_cluster = model.doc_cluster().iter().map(|&c| remap[c]).collect();
         self.num_used = num_used;
+        self.topic_names = (0..num_used).map(|i| format!("topic_{i}")).collect();
         self.corpus = Some(corpus);
         self.trace = model.trace.clone();
         self.fitted = true;
@@ -6422,6 +6746,23 @@ impl GSDMM {
         self.num_used
     }
     #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_used {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_used,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+    #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
@@ -6452,16 +6793,22 @@ impl GSDMM {
             fitted: self.fitted, num_used: self.num_used,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             doc_cluster: self.doc_cluster.clone(), corpus: self.corpus.clone(),
-            trace: self.trace.clone(),
+            trace: self.trace.clone(), topic_names: self.topic_names.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: GsdmmState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_used).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(GSDMM {
             k_max: s.k_max, alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
-            num_used: s.num_used, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            num_used: s.num_used, topic_names,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             doc_cluster: s.doc_cluster, corpus: s.corpus, trace: s.trace,
         })
     }
@@ -6702,11 +7049,24 @@ impl SeededLDA {
         Ok(Array1::from(vec![self.alpha; self.num_topics_val()]).to_pyarray_bound(py))
     }
     /// The topic labels: the seed names you gave, then ``residual_1`` … for any
-    /// unseeded topics.
+    /// unseeded topics. Settable after fit; length must equal ``num_topics``.
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        let k = self.num_topics_val();
+        if names.len() != k {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                k,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -6855,6 +7215,7 @@ pub struct Top2Vec {
     seed: u64,
     fitted: bool,
     has_word_vectors: bool,
+    topic_names: Vec<String>,
     model: Option<top2vec::Top2VecModel>,
     id_to_word: Vec<String>,
     docs: Vec<Vec<u32>>,
@@ -6872,6 +7233,7 @@ struct Top2VecState {
     seed: u64,
     fitted: bool,
     has_word_vectors: bool,
+    #[serde(default)] topic_names: Vec<String>,
     model: Option<top2vec::Top2VecModel>,
     id_to_word: Vec<String>,
     docs: Vec<Vec<u32>>,
@@ -6923,6 +7285,7 @@ impl Top2Vec {
             seed,
             fitted: false,
             has_word_vectors: false,
+            topic_names: Vec::new(),
             model: None,
             id_to_word: Vec::new(),
             docs: Vec::new(),
@@ -7016,7 +7379,9 @@ impl Top2Vec {
                  min_cluster_size, add data, or check the scale of your embeddings.",
             ))?;
         }
+        let k = model.num_topics;
         self.model = Some(model);
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.fitted = true;
         Ok(())
     }
@@ -7047,11 +7412,24 @@ impl Top2Vec {
     fn labels(&self) -> PyResult<Vec<i64>> {
         Ok(self.fitted_model()?.labels.clone())
     }
-    /// Topic labels ``topic_0`` … (Top2Vec topics are discovered, not named).
+    /// Topic labels (``topic_0`` … by default; settable after fit).
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
         let k = self.fitted_model()?.num_topics;
-        Ok((0..k).map(|i| format!("topic_{i}")).collect())
+        if names.len() != k {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                k,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -7214,6 +7592,7 @@ impl Top2Vec {
             seed: self.seed,
             fitted: self.fitted,
             has_word_vectors: self.has_word_vectors,
+            topic_names: self.topic_names.clone(),
             model: self.model.clone(),
             id_to_word: self.id_to_word.clone(),
             docs: self.docs.clone(),
@@ -7224,6 +7603,12 @@ impl Top2Vec {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: Top2VecState = read_state(path)?;
+        let num_topics = s.model.as_ref().map_or(0, |m| m.num_topics);
+        let topic_names = if s.topic_names.is_empty() {
+            (0..num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(Top2Vec {
             n_components: s.n_components,
             use_umap: s.use_umap,
@@ -7235,6 +7620,7 @@ impl Top2Vec {
             seed: s.seed,
             fitted: s.fitted,
             has_word_vectors: s.has_word_vectors,
+            topic_names,
             model: s.model,
             id_to_word: s.id_to_word,
             docs: s.docs,
@@ -7275,6 +7661,7 @@ pub struct BERTopic {
     num_clusters: Option<usize>,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     model: Option<bertopic::BertopicModel>,
     id_to_word: Vec<String>,
     docs: Vec<Vec<u32>>,
@@ -7296,6 +7683,7 @@ struct BertopicState {
     num_clusters: Option<usize>,
     seed: u64,
     fitted: bool,
+    #[serde(default)] topic_names: Vec<String>,
     model: Option<bertopic::BertopicModel>,
     id_to_word: Vec<String>,
     docs: Vec<Vec<u32>>,
@@ -7364,6 +7752,7 @@ impl BERTopic {
             num_clusters,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             model: None,
             id_to_word: Vec::new(),
             docs: Vec::new(),
@@ -7422,7 +7811,9 @@ impl BERTopic {
                  min_cluster_size, add data, or check the scale of your embeddings.",
             ))?;
         }
+        let k = model.num_topics;
         self.model = Some(model);
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.fitted = true;
         Ok(())
     }
@@ -7443,10 +7834,24 @@ impl BERTopic {
     fn labels(&self) -> PyResult<Vec<i64>> {
         Ok(self.fitted_model()?.labels.clone())
     }
+    /// Topic labels (``topic_0`` … by default; settable after fit).
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.fitted_model()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
         let k = self.fitted_model()?.num_topics;
-        Ok((0..k).map(|i| format!("topic_{i}")).collect())
+        if names.len() != k {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                k,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -7563,6 +7968,7 @@ impl BERTopic {
             num_clusters: self.num_clusters,
             seed: self.seed,
             fitted: self.fitted,
+            topic_names: self.topic_names.clone(),
             model: self.model.clone(),
             id_to_word: self.id_to_word.clone(),
             docs: self.docs.clone(),
@@ -7573,6 +7979,12 @@ impl BERTopic {
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: BertopicState = read_state(path)?;
+        let num_topics = s.model.as_ref().map_or(0, |m| m.num_topics);
+        let topic_names = if s.topic_names.is_empty() {
+            (0..num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(BERTopic {
             n_components: s.n_components,
             use_umap: s.use_umap,
@@ -7588,6 +8000,7 @@ impl BERTopic {
             num_clusters: s.num_clusters,
             seed: s.seed,
             fitted: s.fitted,
+            topic_names,
             model: s.model,
             id_to_word: s.id_to_word,
             docs: s.docs,
@@ -7629,6 +8042,7 @@ pub struct ETM {
     wdecay: f64,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     model: Option<etm::EtmModel>,
     vae: Option<etm_vae::EtmVaeModel>,
     id_to_word: Vec<String>,
@@ -7751,6 +8165,7 @@ impl ETM {
             wdecay,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             model: None,
             vae: None,
             id_to_word: Vec::new(),
@@ -7824,6 +8239,7 @@ impl ETM {
             self.model = Some(model);
             self.vae = None;
         }
+        self.topic_names = (0..self.num_topics).map(|i| format!("topic_{i}")).collect();
         self.fitted = true;
         Ok(())
     }
@@ -7863,7 +8279,19 @@ impl ETM {
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.ensure_fitted()?;
-        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -7943,6 +8371,7 @@ pub struct ProdLDA {
     em_tol: f64,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     model: Option<prodlda::ProdldaModel>,
     corpus: Option<corpus::Corpus>,
 }
@@ -7998,6 +8427,7 @@ impl ProdLDA {
             em_tol,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             model: None,
             corpus: None,
         })
@@ -8034,6 +8464,7 @@ impl ProdLDA {
         });
         self.model = Some(model);
         self.corpus = Some(corpus);
+        self.topic_names = (0..self.num_topics).map(|i| format!("topic_{i}")).collect();
         self.fitted = true;
         Ok(())
     }
@@ -8073,7 +8504,19 @@ impl ProdLDA {
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.fitted_model()?;
-        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -8155,6 +8598,7 @@ pub struct FASTopic {
     sinkhorn_tol: f64,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     model: Option<fastopic::FastopicModel>,
     id_to_word: Vec<String>,
 }
@@ -8208,6 +8652,7 @@ impl FASTopic {
             sinkhorn_tol,
             seed,
             fitted: false,
+            topic_names: Vec::new(),
             model: None,
             id_to_word: Vec::new(),
         })
@@ -8259,6 +8704,7 @@ impl FASTopic {
                 &docs_ids, &doc_emb, k, num_types, ep, lr, dta, twa, tt, et, si, st, &mut rng,
             )
         });
+        self.topic_names = (0..self.num_topics).map(|i| format!("topic_{i}")).collect();
         self.model = Some(model);
         self.fitted = true;
         Ok(())
@@ -8300,7 +8746,19 @@ impl FASTopic {
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.fitted_model()?;
-        Ok((0..self.num_topics).map(|i| format!("topic_{i}")).collect())
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -8918,10 +9376,24 @@ impl KeyATM {
     fn num_topics(&self) -> usize {
         self.num_topics
     }
+    /// The keyword topic labels (then any regular topic labels). Settable after
+    /// fit; length must equal ``num_topics``.
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -9000,6 +9472,7 @@ pub struct PA {
     beta: f64,
     seed: u64,
     fitted: bool,
+    topic_names: Vec<String>,
     phi: Option<Array2<f64>>,       // num_sub × V
     theta: Option<Array2<f64>>,     // num_docs × num_sub
     super_sub: Option<Array2<f64>>, // num_super × num_sub
@@ -9031,7 +9504,8 @@ impl PA {
         }
         Ok(PA {
             num_super, num_sub, alpha, beta, seed,
-            fitted: false, phi: None, theta: None, super_sub: None, corpus: None,
+            fitted: false, topic_names: Vec::new(),
+            phi: None, theta: None, super_sub: None, corpus: None,
         })
     }
 
@@ -9059,6 +9533,7 @@ impl PA {
         self.phi = Some(vecs_to_arr2(&model.topic_word()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
         self.super_sub = Some(vecs_to_arr2(&model.super_sub()));
+        self.topic_names = (0..self.num_sub).map(|i| format!("topic_{i}")).collect();
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -9105,6 +9580,23 @@ impl PA {
         self.num_sub
     }
     #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_sub {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (got {})",
+                self.num_sub,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+    #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
         self.require_fitted()?;
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
@@ -9134,16 +9626,22 @@ impl PA {
             num_super: self.num_super, num_sub: self.num_sub, alpha: self.alpha, beta: self.beta,
             seed: self.seed, fitted: self.fitted, phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), super_sub: arr2_opt(&self.super_sub),
-            corpus: self.corpus.clone(),
+            corpus: self.corpus.clone(), topic_names: self.topic_names.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: PaState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_sub).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(PA {
             num_super: s.num_super, num_sub: s.num_sub, alpha: s.alpha, beta: s.beta,
-            seed: s.seed, fitted: s.fitted, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            seed: s.seed, fitted: s.fitted, topic_names,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             super_sub: arr2_back(s.super_sub), corpus: s.corpus,
         })
     }
@@ -9171,6 +9669,7 @@ pub struct HLDA {
     seed: u64,
     fitted: bool,
     num_nodes: usize,
+    topic_names: Vec<String>,
     node_topic_word: Option<Array2<f64>>, // num_nodes × V
     node_levels: Vec<usize>,
     node_parents: Vec<i64>, // -1 for the root
@@ -9204,7 +9703,8 @@ impl HLDA {
         }
         Ok(HLDA {
             depth, gamma, eta, alpha, seed,
-            fitted: false, num_nodes: 0, node_topic_word: None,
+            fitted: false, num_nodes: 0, topic_names: Vec::new(),
+            node_topic_word: None,
             node_levels: Vec::new(), node_parents: Vec::new(), doc_paths: Vec::new(), corpus: None,
         })
     }
@@ -9239,6 +9739,7 @@ impl HLDA {
             }
         }
         self.num_nodes = nn;
+        self.topic_names = (0..nn).map(|i| format!("topic_{i}")).collect();
         self.node_topic_word = Some(tw);
         self.node_levels = (0..nn).map(|i| model.node_level(i)).collect();
         self.node_parents = (0..nn).map(|i| model.node_parent(i).map(|p| p as i64).unwrap_or(-1)).collect();
@@ -9253,6 +9754,23 @@ impl HLDA {
     fn num_nodes(&self) -> PyResult<usize> {
         self.require_fitted()?;
         Ok(self.num_nodes)
+    }
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_nodes {
+            return Err(PyValueError::new_err(format!(
+                "topic_names must have length {} (num_nodes, got {})",
+                self.num_nodes,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
     }
     /// Per-node word distributions, shape ``(num_nodes, num_words)``.
     #[getter]
@@ -9314,16 +9832,22 @@ impl HLDA {
             seed: self.seed, fitted: self.fitted, num_nodes: self.num_nodes,
             node_topic_word: arr2_opt(&self.node_topic_word), node_levels: self.node_levels.clone(),
             node_parents: self.node_parents.clone(), doc_paths: self.doc_paths.clone(),
-            corpus: self.corpus.clone(),
+            corpus: self.corpus.clone(), topic_names: self.topic_names.clone(),
         })
     }
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
         let s: HldaState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_nodes).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
         Ok(HLDA {
             depth: s.depth, gamma: s.gamma, eta: s.eta, alpha: s.alpha, seed: s.seed,
-            fitted: s.fitted, num_nodes: s.num_nodes, node_topic_word: arr2_back(s.node_topic_word),
+            fitted: s.fitted, num_nodes: s.num_nodes, topic_names,
+            node_topic_word: arr2_back(s.node_topic_word),
             node_levels: s.node_levels, node_parents: s.node_parents, doc_paths: s.doc_paths,
             corpus: s.corpus,
         })
