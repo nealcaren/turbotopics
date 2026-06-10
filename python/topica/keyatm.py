@@ -215,6 +215,113 @@ def visualize_keywords(docs, keywords):
     return out
 
 
+def time_prevalence_ci(model, timestamps, *, ci=0.95, normalize=True):
+    """Per-period topic prevalence with credible intervals from the dynamic keyATM posterior.
+
+    For a dynamic :class:`~topica.KeyATM` (fit with ``timestamps=`` and
+    ``keep_theta_draws=True``), this computes per-period prevalence uncertainty
+    directly from the retained MCMC ``theta_draws``. For each posterior draw and
+    each time period, the per-draw average of theta over the documents in that
+    period is computed, giving a (S, T, K) array of per-draw period-level
+    prevalences. The point estimate is the posterior mean over draws; ``ci_low``
+    and ``ci_high`` are the empirical (1-ci)/2 and (1+ci)/2 quantiles; ``sd`` is
+    the posterior standard deviation.
+
+    The periods are ordered to match ``model.time_labels`` exactly, so the result
+    aligns with ``model.time_prevalence``.
+
+    Parameters
+    ----------
+    model
+        A fitted dynamic :class:`~topica.KeyATM` with non-empty ``time_labels``
+        and non-``None`` ``theta_draws``. Refit with ``keep_theta_draws=True``
+        (the default) if draws are absent.
+    timestamps
+        One value per document — the same array passed to ``fit``.
+    ci
+        Credible interval coverage (default 0.95 gives a 95 percent interval).
+    normalize
+        When ``True`` (default), each per-draw per-period prevalence row is
+        normalized to sum to 1 before computing the summary statistics.
+
+    Returns
+    -------
+    dict with keys:
+        - ``labels``: list of period labels (equals ``model.time_labels``)
+        - ``mean``: ndarray shape (T, K), posterior mean prevalence per period
+        - ``ci_low``: ndarray shape (T, K), lower credible bound
+        - ``ci_high``: ndarray shape (T, K), upper credible bound
+        - ``sd``: ndarray shape (T, K), posterior standard deviation
+    """
+    time_labels = list(getattr(model, "time_labels", []))
+    if not time_labels:
+        raise ValueError(
+            "model does not have time_labels: this helper requires a dynamic KeyATM "
+            "(fit with timestamps= and num_states=)"
+        )
+    theta_draws = getattr(model, "theta_draws", None)
+    if theta_draws is None:
+        raise ValueError(
+            "model.theta_draws is None: refit with keep_theta_draws=True "
+            "(the default) to enable per-period posterior credible intervals"
+        )
+
+    draws = np.asarray(theta_draws, dtype=np.float64)  # (S, D, K)
+    if draws.ndim != 3:
+        raise ValueError(
+            f"theta_draws must be 3-D (num_draws, num_docs, num_topics); got shape {draws.shape}"
+        )
+    s, d, k = draws.shape
+
+    timestamps = np.asarray(timestamps)
+    if timestamps.shape[0] != d:
+        raise ValueError(
+            f"timestamps has length {timestamps.shape[0]} but theta_draws has {d} documents; "
+            "timestamps must be one value per document"
+        )
+
+    # Build a map from each distinct timestamp string to its index in time_labels.
+    # time_labels is Rust-sorted (the authoritative order); we must not rely on
+    # Python's str-sort matching it, so we build the index explicitly.
+    label_to_idx = {lbl: i for i, lbl in enumerate(time_labels)}
+    t_count = len(time_labels)
+
+    # Convert each timestamp to its string form and look up the period index.
+    ts_str = np.asarray([str(v) for v in timestamps])
+    period_idx = np.array([label_to_idx[s] for s in ts_str], dtype=np.intp)
+
+    # per_draw_period[s, t, k] = mean theta over documents in period t, draw s.
+    per_draw = np.zeros((s, t_count, k), dtype=np.float64)
+    for t_idx in range(t_count):
+        mask = period_idx == t_idx
+        if not mask.any():
+            continue
+        # draws[:, mask, :] has shape (S, n_period, K); mean over documents.
+        per_draw[:, t_idx, :] = draws[:, mask, :].mean(axis=1)
+
+    if normalize:
+        row_sums = per_draw.sum(axis=2, keepdims=True)
+        # Avoid division by zero for empty periods (row_sum == 0 stays 0).
+        nz = row_sums > 0
+        per_draw = np.where(nz, per_draw / np.where(nz, row_sums, 1.0), 0.0)
+
+    alpha_lo = (1.0 - ci) / 2.0
+    alpha_hi = 1.0 - alpha_lo
+
+    mean = per_draw.mean(axis=0)                          # (T, K)
+    ci_low = np.quantile(per_draw, alpha_lo, axis=0)      # (T, K)
+    ci_high = np.quantile(per_draw, alpha_hi, axis=0)     # (T, K)
+    sd = per_draw.std(axis=0, ddof=1) if s > 1 else np.zeros_like(mean)
+
+    return {
+        "labels": time_labels,
+        "mean": mean,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "sd": sd,
+    }
+
+
 def refine_keywords(docs, keywords, *, min_count=2, min_doc_freq=1, verbose=False):
     """Drop keywords too rare to anchor a topic (≈ ``keyATM::refine_keywords``).
 

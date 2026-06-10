@@ -42,6 +42,7 @@ from .effects import (
     standard_errors as standard_errors,
     model_family as model_family,
 )
+from .keyatm import time_prevalence_ci as time_prevalence_ci
 from .embedding import (
     EmbeddingLDA as EmbeddingLDA,
     embedding_seeds as embedding_seeds,
@@ -207,6 +208,22 @@ def topic_stability(runs: Any, *, topn: int = 10, metric: str = "cosine") -> flo
 
 def report(model: Any, topn: int = 8) -> str:
     """One-call overview of a fitted model. Alias for ``summary``."""
+    ...
+
+
+def time_prevalence_ci(
+    model: Any,
+    timestamps: Sequence[object],
+    *,
+    ci: float = 0.95,
+    normalize: bool = True,
+) -> dict:
+    """Per-period topic prevalence with credible intervals from the dynamic keyATM posterior.
+
+    Requires a dynamic KeyATM fit with keep_theta_draws=True (the default).
+    Returns a dict with keys: labels, mean, ci_low, ci_high, sd (all arrays
+    shape (T, K) except labels which is a list).
+    """
     ...
 
 

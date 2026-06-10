@@ -173,3 +173,100 @@ def test_num_states_validated():
     m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
     with pytest.raises(ValueError):
         m.fit(docs, timestamps=years, num_states=5, iters=10)  # only 3 timestamps
+
+
+# ---------------------------------------------------------------------------
+# time_prevalence_ci: per-period credible intervals from the HMM posterior
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def dyn_model_ci():
+    """Small dynamic KeyATM with theta_draws retained (the default)."""
+    docs, years = _corpus(seed=7, n_years=6, change_at=3, per_year=30)
+    m = topica.KeyATM(SEEDS, num_topics=2, seed=2)
+    m.fit(docs, timestamps=years, num_states=2, iters=300, keep_theta_draws=True)
+    return m, docs, years
+
+
+def test_time_prevalence_ci_shapes(dyn_model_ci):
+    m, _, years = dyn_model_ci
+    result = topica.time_prevalence_ci(m, years)
+    T = len(m.time_labels)
+    K = m.num_topics
+    assert result["labels"] == m.time_labels
+    assert result["mean"].shape == (T, K)
+    assert result["ci_low"].shape == (T, K)
+    assert result["ci_high"].shape == (T, K)
+    assert result["sd"].shape == (T, K)
+
+
+def test_time_prevalence_ci_ordering(dyn_model_ci):
+    m, _, years = dyn_model_ci
+    result = topica.time_prevalence_ci(m, years)
+    assert result["labels"] == m.time_labels
+
+
+def test_time_prevalence_ci_bounds(dyn_model_ci):
+    m, _, years = dyn_model_ci
+    result = topica.time_prevalence_ci(m, years)
+    # ci_low <= mean <= ci_high everywhere (elementwise, up to floating-point noise)
+    assert np.all(result["ci_low"] <= result["mean"] + 1e-12)
+    assert np.all(result["mean"] <= result["ci_high"] + 1e-12)
+    # sd is non-negative
+    assert np.all(result["sd"] >= 0.0)
+
+
+def test_time_prevalence_ci_requires_draws():
+    """Raises a clear error when theta_draws were not retained."""
+    docs, years = _corpus(seed=8, n_years=4, change_at=2, per_year=20)
+    m = topica.KeyATM(SEEDS, num_topics=2, seed=3)
+    m.fit(docs, timestamps=years, num_states=2, iters=200, keep_theta_draws=False)
+    assert m.theta_draws is None
+    with pytest.raises(ValueError, match="keep_theta_draws=True"):
+        topica.time_prevalence_ci(m, years)
+
+
+def test_time_prevalence_ci_requires_dynamic_model():
+    """Raises for a non-dynamic (base) KeyATM."""
+    docs, _ = _corpus(seed=9, n_years=3, per_year=20)
+    m = topica.KeyATM(SEEDS, num_topics=2, seed=4)
+    m.fit(docs, iters=100)
+    assert m.time_labels == []
+    with pytest.raises(ValueError, match="dynamic KeyATM"):
+        topica.time_prevalence_ci(m, [0] * len(docs))
+
+
+def test_time_prevalence_ci_wrong_length(dyn_model_ci):
+    """Raises when timestamps length does not match number of documents."""
+    m, _, years = dyn_model_ci
+    with pytest.raises(ValueError, match="timestamps"):
+        topica.time_prevalence_ci(m, years[:-5])
+
+
+def test_topics_over_time_dynamic_keyatm_has_ci(dyn_model_ci):
+    """TopicsOverTime for a dynamic KeyATM uses posterior bands automatically."""
+    pytest.importorskip("matplotlib")
+    import topica.viz as viz
+
+    m, _, years = dyn_model_ci
+    panel = viz.topics_over_time(m, years)
+    assert panel.has_ci is True
+    df = panel.to_frame()
+    assert "ci_low" in df.columns and "ci_high" in df.columns
+    # All lower bounds must be <= point estimates <= upper bounds
+    assert (df["ci_low"] <= df["prevalence"] + 1e-12).all()
+    assert (df["prevalence"] <= df["ci_high"] + 1e-12).all()
+
+
+def test_topics_over_time_non_dynamic_no_ci():
+    """TopicsOverTime for a plain LDA has no CI without nsims."""
+    pytest.importorskip("matplotlib")
+    import topica.viz as viz
+
+    rng = np.random.default_rng(0)
+    docs = [list(rng.choice(["a", "b", "c", "d"], size=8)) for _ in range(60)]
+    years = [2000 + i % 3 for i in range(60)]
+    m = topica.LDA(2, seed=1)
+    m.fit(docs, iters=100)
+    panel = viz.topics_over_time(m, years)
+    assert panel.has_ci is False

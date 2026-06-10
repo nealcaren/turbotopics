@@ -126,6 +126,7 @@ from .effects import (  # noqa: E402  general, work on any model's theta
     permutation_test,
     PermutationResult,
 )
+from .keyatm import time_prevalence_ci  # noqa: E402  (dynamic keyATM credible bands)
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
     coherence,
@@ -280,6 +281,7 @@ __all__ = [
     "PredictedPrevalence",
     "permutation_test",
     "PermutationResult",
+    "time_prevalence_ci",
     "EmbeddingLDA",
     "embedding_seeds",
     "llm_embed",

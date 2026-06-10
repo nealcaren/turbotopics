@@ -2,9 +2,21 @@
 
 The canonical dynamic-topic figure, and the design's deliberate replacement for the
 streamgraph (which destroys single-series readability). One small panel per topic,
-each a prevalence-over-time line; with ``corpus=`` and ``nsims=`` each line carries
-a method-of-composition CI ribbon, drawn per time point off the same ``by_strata``
-machinery the group panel uses.
+each a prevalence-over-time line.
+
+For a dynamic :class:`~topica.KeyATM` (fit with ``timestamps=`` and retaining
+``theta_draws``), the CI ribbon comes from the model's own HMM posterior: for each
+retained MCMC draw, per-period prevalences are averaged over the documents in that
+period, giving a (num_draws, T, K) posterior. This is the same posterior that
+keyATM's ``plot_timetrend`` uses, so the bands reflect genuine HMM uncertainty
+rather than an approximation.
+
+For all other models (or when ``theta_draws`` are absent), passing ``corpus=`` and
+``nsims=`` produces a method-of-composition ribbon via the generic :func:`by_strata`
+path: the model's theta posterior is drawn per document, stratified by timestamp,
+and the per-stratum means are pooled by Rubin's rules. Both paths respect the same
+``ci`` level and land in the same ``ci_low`` / ``ci_high`` columns of
+:meth:`TopicsOverTime.to_frame`.
 """
 
 from __future__ import annotations
@@ -24,8 +36,28 @@ def _numeric_axis(labels):
         return np.arange(len(labels), dtype=np.float64)
 
 
+def _is_dynamic_keyatm(model):
+    """Return True when model is a dynamic KeyATM with retained theta draws.
+
+    Detection criteria: the model has a non-empty ``time_labels`` list AND
+    ``theta_draws`` is not None. Both are defined only on a KeyATM fit with
+    ``timestamps=``; non-dynamic KeyATM has an empty ``time_labels``.
+    """
+    return (
+        bool(getattr(model, "time_labels", [])) and
+        getattr(model, "theta_draws", None) is not None
+    )
+
+
 class TopicsOverTime(Panel):
-    """Per-topic prevalence trajectories as small multiples."""
+    """Per-topic prevalence trajectories as small multiples.
+
+    For a dynamic :class:`~topica.KeyATM` with retained ``theta_draws``, the CI
+    ribbon is derived from the model's own HMM posterior via
+    :func:`topica.keyatm.time_prevalence_ci`. For all other models, passing
+    ``corpus=`` and ``nsims=`` produces a method-of-composition ribbon via
+    :func:`topica.keyatm.by_strata`. See the module docstring for the difference.
+    """
 
     title = "Topics over time"
 
@@ -34,6 +66,7 @@ class TopicsOverTime(Panel):
         from ..analysis import topic_labels, topics_over_time
 
         self.cap = capabilities(model)
+        self._model_ref = model
         self.ncols = int(ncols)
         ot = topics_over_time(model, timestamps, normalize=normalize)
         self._times = ot["labels"]
@@ -41,9 +74,23 @@ class TopicsOverTime(Panel):
         self._prev = np.asarray(ot["prevalence"], dtype=np.float64)  # (T, K)
         self._low = self._high = None
         self.has_ci = False
-        if nsims:
-            # Per-time-level method-of-composition CIs, reusing by_strata: stratify
-            # documents by their timestamp and pool the theta draws by Rubin's rules.
+
+        if _is_dynamic_keyatm(model):
+            # Dynamic KeyATM: derive CI ribbon from the model's own HMM posterior
+            # theta draws. This is the same posterior keyATM's plot_timetrend uses,
+            # aligned with time_labels exactly. No corpus or nsims required.
+            from ..keyatm import time_prevalence_ci
+
+            result = time_prevalence_ci(model, timestamps, ci=ci, normalize=normalize)
+            self._low = result["ci_low"]
+            self._high = result["ci_high"]
+            # Center the ribbon on the posterior mean, not the point-estimate
+            # time_prevalence, so that mean/ci_low/ci_high are mutually consistent.
+            self._prev = result["mean"]
+            self.has_ci = True
+        elif nsims:
+            # Generic method-of-composition path: stratify by timestamp and pool
+            # theta draws by Rubin's rules.
             from ..keyatm import by_strata
 
             strata = {s.stratum: s for s in
@@ -57,6 +104,7 @@ class TopicsOverTime(Panel):
                     hi[i] = np.asarray(s.ci_high)
             self._low, self._high = lo, hi
             self.has_ci = True
+
         k = self._prev.shape[1]
         labels = topic_labels(model)
         self._labels = [labels[t] if t < len(labels) else f"topic_{t}" for t in range(k)]
@@ -115,5 +163,10 @@ class TopicsOverTime(Panel):
             for ax in axes[-1]:
                 ax.set_xticks(self._x)
                 ax.set_xticklabels([str(v) for v in self._times], rotation=45, fontsize=6)
-        unc = " with composition CIs" if self.has_ci else ""
-        fig.suptitle(f"{self.title}{unc}", fontsize=10)
+        if self.has_ci:
+            # Label the CI source so the reader knows which posterior was used.
+            ci_label = " with HMM posterior CIs" if _is_dynamic_keyatm(self._model_ref) \
+                else " with composition CIs"
+        else:
+            ci_label = ""
+        fig.suptitle(f"{self.title}{ci_label}", fontsize=10)
