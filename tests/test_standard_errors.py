@@ -157,11 +157,11 @@ def test_composition_self_sufficient_for_gibbs_and_rejects_embedding():
     prev = topica.standard_errors(m, of="prevalence", nsims=10)  # no corpus needed
     assert len(prev) == 2
 
-    # HDP is Dirichlet-family but does not retain lengths, so it still needs one.
+    # HDP now retains doc_lengths, so it is also self-sufficient (phase 5).
     hdp = topica.HDP(seed=1)
     hdp.fit(corpus, iters=120)
-    with pytest.raises(ValueError, match="corpus"):
-        topica.standard_errors(hdp, of="prevalence", nsims=10)
+    prev_hdp = topica.standard_errors(hdp, of="prevalence", nsims=5)
+    assert len(prev_hdp) == hdp.num_topics
 
     bert = topica.BERTopic(min_cluster_size=5)
     with pytest.raises(ValueError, match="bootstrap"):

@@ -65,6 +65,9 @@ pub struct PamModel {
     pub ndsk: Vec<Vec<Vec<u32>>>, // D × S × K  doc ↦ (super, sub) counts
     pub zs: Vec<Vec<usize>>, // per-document token super-topic assignments
     pub zk: Vec<Vec<usize>>, // per-document token sub-topic assignments
+    /// Thinned θ draws (num_draws, D, K): sub-topic proportions marginalized
+    /// over super-topics at each snapshot. Empty when draw_cap=0.
+    pub theta_draws: Vec<Vec<Vec<f32>>>,
 }
 
 impl PamModel {
@@ -287,6 +290,7 @@ pub fn fit_pam<R: Rng>(
         ndsk: vec![vec![vec![0u32; num_sub]; num_super]; d],
         zs: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
         zk: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
+        theta_draws: Vec::new(),
     };
 
     // Initialization. Each *document* is assigned a single random super-topic for
@@ -317,6 +321,93 @@ pub fn fit_pam<R: Rng>(
         model.sweep(docs, rng);
         if it >= adapt_after {
             model.estimate_alpha_sk();
+        }
+    }
+
+    model
+}
+
+/// Fit a PAM with thinned θ snapshots (sub-topic proportions, marginalized over
+/// super-topics) collected every `thin` sweeps, ring-buffered to `cap` draws.
+/// `cap=0` disables collection entirely.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_pam_with_draws<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_super: usize,
+    num_sub: usize,
+    alpha: f64,
+    beta: f64,
+    iters: usize,
+    opts: crate::keyatm::ThetaDrawOpts,
+    rng: &mut R,
+) -> PamModel {
+    let d = docs.len();
+    let k = num_sub;
+
+    let alpha_sk: Vec<Vec<f64>> = (0..num_super)
+        .map(|s| {
+            (0..num_sub)
+                .map(|kk| {
+                    let owner = (kk * num_super) / num_sub;
+                    if owner == s { alpha * 5.0 } else { alpha }
+                })
+                .collect()
+        })
+        .collect();
+    let mut model = PamModel {
+        num_types,
+        num_super,
+        num_sub,
+        alpha,
+        beta,
+        alpha_sk,
+        nkw: vec![vec![0u32; num_types]; num_sub],
+        nk: vec![0u32; num_sub],
+        nds: vec![vec![0u32; num_super]; d],
+        ndsk: vec![vec![vec![0u32; num_sub]; num_super]; d],
+        zs: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
+        zk: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
+        theta_draws: Vec::new(),
+    };
+
+    for (di, doc) in docs.iter().enumerate() {
+        let s = (rng.gen::<f64>() * num_super as f64) as usize % num_super;
+        for (i, &w) in doc.iter().enumerate() {
+            let w = w as usize;
+            let sub = (rng.gen::<f64>() * num_sub as f64) as usize % num_sub;
+            model.nds[di][s] += 1;
+            model.ndsk[di][s][sub] += 1;
+            model.nkw[sub][w] += 1;
+            model.nk[sub] += 1;
+            model.zs[di][i] = s;
+            model.zk[di][i] = sub;
+        }
+    }
+
+    let adapt_after = iters - iters / 4;
+    for it in 0..iters {
+        model.sweep(docs, rng);
+        if it >= adapt_after {
+            model.estimate_alpha_sk();
+        }
+        let iter = it + 1;
+        if opts.thin > 0 && iter % opts.thin == 0 {
+            let snap: Vec<Vec<f32>> = model.ndsk.iter().map(|doc| {
+                let mut row = vec![0.0f64; k];
+                for sub in 0..k {
+                    let total: u32 = (0..model.num_super).map(|s| doc[s][sub]).sum();
+                    row[sub] = total as f64 + model.alpha;
+                }
+                let s: f64 = row.iter().sum();
+                row.iter().map(|&x| (if s > 0.0 { x / s } else { 1.0 / k as f64 }) as f32).collect()
+            }).collect();
+            if model.theta_draws.len() < opts.cap {
+                model.theta_draws.push(snap);
+            } else {
+                model.theta_draws.remove(0);
+                model.theta_draws.push(snap);
+            }
         }
     }
 

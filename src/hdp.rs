@@ -123,7 +123,7 @@ fn sample_normal<R: Rng>(rng: &mut R) -> f64 {
 }
 
 /// Gamma(shape, 1) variate (Marsaglia & Tsang; boosted for shape < 1).
-fn sample_gamma<R: Rng>(shape: f64, rng: &mut R) -> f64 {
+pub fn sample_gamma<R: Rng>(shape: f64, rng: &mut R) -> f64 {
     if shape < 1.0 {
         let g = sample_gamma(shape + 1.0, rng);
         let u: f64 = rng.gen::<f64>().max(1e-300);
