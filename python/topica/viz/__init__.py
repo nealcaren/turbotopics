@@ -30,6 +30,7 @@ from .embedding_map import DocumentMap
 from .inspector import DocumentInspector
 from .content import ContentCovariate
 from .dashboard import Dashboard, dashboard
+from .permtest import PermutationTestPlot
 
 
 def coherence_frontier(model, texts=None, *, n=10, coherence_type=None) -> CoherenceFrontier:
@@ -103,6 +104,14 @@ def content_covariate(model, *, topic, n=10) -> ContentCovariate:
     return ContentCovariate(model, topic=topic, n=n)
 
 
+def permutation_test_plot(results, *, covariate_name=None) -> PermutationTestPlot:
+    """Observed effect vs permutation null, one subplot per topic.
+
+    Pass the output of :func:`topica.permutation_test` as ``results``.
+    """
+    return PermutationTestPlot(results, covariate_name=covariate_name)
+
+
 __all__ = [
     "Panel",
     "Capabilities",
@@ -136,4 +145,6 @@ __all__ = [
     "term_topic_browser",
     "Dashboard",
     "dashboard",
+    "PermutationTestPlot",
+    "permutation_test_plot",
 ]
