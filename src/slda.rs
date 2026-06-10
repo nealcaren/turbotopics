@@ -157,7 +157,40 @@ pub fn predict_one(model: &SldaModel, doc: &[u32], var_iters: usize) -> f64 {
     (0..model.num_topics).map(|k| model.eta[k] * sum_phi[k] / n).sum()
 }
 
+/// Per-EM-iteration objective: the Gaussian log-likelihood of the response
+/// under the current variational E[z̄_d] and model parameters (η, σ²).
+/// This is a good scalar proxy for EM convergence.
+fn response_log_likelihood(
+    bags: &[Vec<(usize, f64)>],
+    y: &[f64],
+    log_beta: &[Vec<f64>],
+    eta: &[f64],
+    sigma2: f64,
+    alpha: f64,
+    var_iters: usize,
+) -> f64 {
+    let d = y.len();
+    let mut ll = 0.0f64;
+    for di in 0..d {
+        let bag = &bags[di];
+        if bag.is_empty() {
+            continue;
+        }
+        let (_, _, sum_phi) = infer_doc(bag, log_beta, eta, sigma2, alpha, None, var_iters);
+        let n: f64 = bag.iter().map(|&(_, c)| c).sum();
+        let ezbar: f64 = (0..eta.len()).map(|kk| eta[kk] * sum_phi[kk] / n).sum();
+        let resid = y[di] - ezbar;
+        ll -= resid * resid / (2.0 * sigma2);
+    }
+    ll -= d as f64 * 0.5 * (2.0 * std::f64::consts::PI * sigma2).ln();
+    ll
+}
+
 /// Fit a supervised-LDA model by variational EM.
+///
+/// Returns `(model, bound_history, converged)` where `bound_history` is a vector
+/// of `(em_iteration, response_log_likelihood)` pairs, one per EM iteration when
+/// `check_every > 0`.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_slda<R: Rng>(
     docs: &[Vec<u32>],
@@ -167,8 +200,10 @@ pub fn fit_slda<R: Rng>(
     alpha: f64,
     em_iters: usize,
     var_iters: usize,
+    convergence_tol: f64,
+    check_every: usize,
     rng: &mut R,
-) -> SldaModel {
+) -> (SldaModel, Vec<(usize, f64)>, bool) {
     let k = num_topics;
     let v = num_types;
     let d = docs.len();
@@ -190,7 +225,10 @@ pub fn fit_slda<R: Rng>(
     let bags: Vec<Vec<(usize, f64)>> = docs.iter().map(|doc| to_bag(doc)).collect();
     let yty: f64 = y.iter().map(|v| v * v).sum();
 
-    for _ in 0..em_iters {
+    let mut bound_history: Vec<(usize, f64)> = Vec::new();
+    let mut converged = false;
+
+    for em_iter in 1..=em_iters {
         let mut beta_ss = vec![vec![1e-6; v]; k]; // K × V, with smoothing
         let mut m_mat = vec![0.0f64; k * k]; // Σ_d E[z̄ z̄ᵀ]
         let mut b_vec = vec![0.0f64; k]; // Σ_d y_d E[z̄]
@@ -263,9 +301,26 @@ pub fn fit_slda<R: Rng>(
             let eta_dot_b: f64 = (0..k).map(|a| eta[a] * b_vec[a]).sum();
             sigma2 = ((yty - eta_dot_b) / d as f64).max(1e-6);
         }
+
+        // Bound trace and optional convergence check (uses current η/σ²/log_beta).
+        if check_every > 0 && em_iter % check_every == 0 {
+            let bnd = response_log_likelihood(
+                &bags, y, &log_beta, &eta, sigma2, alpha, var_iters,
+            );
+            bound_history.push((em_iter, bnd));
+            if convergence_tol > 0.0 && bound_history.len() >= 2 {
+                let prev = bound_history[bound_history.len() - 2].1;
+                let rel = (bnd - prev).abs() / (prev.abs() + 1e-12);
+                if rel < convergence_tol {
+                    converged = true;
+                    break;
+                }
+            }
+        }
     }
 
-    SldaModel { num_topics: k, num_types: v, alpha, log_beta, eta, sigma2, gamma }
+    (SldaModel { num_topics: k, num_types: v, alpha, log_beta, eta, sigma2, gamma },
+     bound_history, converged)
 }
 
 #[cfg(test)]
@@ -305,7 +360,7 @@ mod tests {
     fn recovers_predictive_topics() {
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let (docs, y, v) = supervised_corpus(&mut rng);
-        let model = fit_slda(&docs, &y, v, 2, 0.1, 25, 15, &mut rng);
+        let (model, _, _) = fit_slda(&docs, &y, v, 2, 0.1, 25, 15, 0.0, 0, &mut rng);
 
         // The two topics should separate the two vocabularies.
         let tw = model.topic_word();
@@ -339,8 +394,8 @@ mod tests {
         let (docs, y, v) = supervised_corpus(&mut r0);
         let mut r1 = ChaCha8Rng::seed_from_u64(9);
         let mut r2 = ChaCha8Rng::seed_from_u64(9);
-        let m1 = fit_slda(&docs, &y, v, 2, 0.1, 10, 10, &mut r1);
-        let m2 = fit_slda(&docs, &y, v, 2, 0.1, 10, 10, &mut r2);
+        let (m1, _, _) = fit_slda(&docs, &y, v, 2, 0.1, 10, 10, 0.0, 0, &mut r1);
+        let (m2, _, _) = fit_slda(&docs, &y, v, 2, 0.1, 10, 10, 0.0, 0, &mut r2);
         assert_eq!(m1.eta, m2.eta);
         assert_eq!(m1.sigma2, m2.sigma2);
     }

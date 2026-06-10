@@ -243,6 +243,46 @@ impl PamModel {
     }
 }
 
+impl PamModel {
+    /// Collapsed Gibbs log-likelihood for PAM marginalizing over super-topics.
+    /// Uses the sub-topic document counts summed over super-topics and the
+    /// sub-topic word counts, matching the marginal LDA-style formula.
+    pub fn log_likelihood(&self, docs: &[Vec<u32>]) -> f64 {
+        use crate::optimize::digamma;
+        let k = self.num_sub;
+        let v = self.num_types;
+        let k_alpha = k as f64 * self.alpha;
+        let v_beta = v as f64 * self.beta;
+        let mut ll = 0.0f64;
+
+        // Document-topic (marginal sub-topic) contribution.
+        for (d, doc) in docs.iter().enumerate() {
+            let n_d = doc.len() as f64;
+            for sub in 0..k {
+                let n_dk: u32 = (0..self.num_super).map(|s| self.ndsk[d][s][sub]).sum();
+                let n_dk = n_dk as f64;
+                if n_dk > 0.0 {
+                    ll += digamma(self.alpha + n_dk) - digamma(self.alpha);
+                }
+            }
+            ll -= digamma(k_alpha + n_d) - digamma(k_alpha);
+        }
+
+        // Sub-topic word contribution.
+        for sub in 0..k {
+            for w in 0..v {
+                let n_kw = self.nkw[sub][w] as f64;
+                if n_kw > 0.0 {
+                    ll += digamma(self.beta + n_kw) - digamma(self.beta);
+                }
+            }
+            ll -= digamma(v_beta + self.nk[sub] as f64) - digamma(v_beta);
+        }
+
+        ll
+    }
+}
+
 /// Fit a Pachinko Allocation model by collapsed Gibbs sampling. Each document is
 /// committed to a single random super-topic at initialization (with random
 /// sub-topics per token); the model is then refined by `iters` Gibbs sweeps. The
@@ -262,16 +302,20 @@ pub fn fit_pam<R: Rng>(
 ) -> PamModel {
     // Plain fit is the draw-collecting fit with collection disabled, so the
     // sampler lives in exactly one place (see `fit_pam_with_draws`).
-    fit_pam_with_draws(
+    let (model, _, _) = fit_pam_with_draws(
         docs, num_types, num_super, num_sub, alpha, beta, iters,
         crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+        0.0, 0,
         rng,
-    )
+    );
+    model
 }
 
 /// Fit a PAM with thinned θ snapshots (sub-topic proportions, marginalized over
 /// super-topics) collected every `thin` sweeps, ring-buffered to `cap` draws.
 /// `cap=0` disables collection entirely.
+///
+/// Returns `(model, ll_history, converged)`.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_pam_with_draws<R: Rng>(
     docs: &[Vec<u32>],
@@ -282,8 +326,10 @@ pub fn fit_pam_with_draws<R: Rng>(
     beta: f64,
     iters: usize,
     opts: crate::keyatm::ThetaDrawOpts,
+    convergence_tol: f64,
+    check_every: usize,
     rng: &mut R,
-) -> PamModel {
+) -> (PamModel, Vec<(usize, f64)>, bool) {
     let d = docs.len();
     let k = num_sub;
 
@@ -334,6 +380,9 @@ pub fn fit_pam_with_draws<R: Rng>(
     }
 
     let adapt_after = iters - iters / 4;
+    let mut ll_history: Vec<(usize, f64)> = Vec::new();
+    let mut converged = false;
+
     for it in 0..iters {
         model.sweep(docs, rng);
         if it >= adapt_after {
@@ -357,9 +406,22 @@ pub fn fit_pam_with_draws<R: Rng>(
                 model.theta_draws.push(snap);
             }
         }
+        // Trace recording and optional convergence check (never alters RNG).
+        if check_every > 0 && iter % check_every == 0 {
+            let ll = model.log_likelihood(docs);
+            ll_history.push((iter, ll));
+            if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                let prev = ll_history[ll_history.len() - 2].1;
+                let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                if rel < convergence_tol {
+                    converged = true;
+                    break;
+                }
+            }
+        }
     }
 
-    model
+    (model, ll_history, converged)
 }
 
 #[cfg(test)]

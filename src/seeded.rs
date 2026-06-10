@@ -95,6 +95,47 @@ impl SeededModel {
     // Public accessors
     // -----------------------------------------------------------------------
 
+    /// Collapsed Gibbs log-likelihood (same formula as LDA / MALLET) using the
+    /// seeded asymmetric β_{k,w} prior.  Cheap to call; does not allocate.
+    pub fn log_likelihood(&self, docs: &[Vec<u32>]) -> f64 {
+        use crate::optimize::digamma;
+        let k = self.num_topics;
+        let v = self.num_types;
+        let mut ll = 0.0f64;
+
+        // Document-topic contribution.
+        let k_alpha = k as f64 * self.alpha;
+        for (d, doc) in docs.iter().enumerate() {
+            let n_d = doc.len() as f64;
+            for t in 0..k {
+                let n_dt = self.ndk[d][t] as f64;
+                if n_dt > 0.0 {
+                    ll += digamma(self.alpha + n_dt) - digamma(self.alpha);
+                }
+            }
+            ll -= digamma(k_alpha + n_d) - digamma(k_alpha);
+        }
+
+        // Topic-word contribution.
+        for t in 0..k {
+            let beta_sum_t = v as f64 * self.beta + self.seeds[t].len() as f64 * self.seed_weight;
+            for w in 0..v {
+                let n_tw = self.nkw[t][w] as f64;
+                if n_tw > 0.0 {
+                    let beta_tw = if self.seeds[t].contains(&w) {
+                        self.beta + self.seed_weight
+                    } else {
+                        self.beta
+                    };
+                    ll += digamma(beta_tw + n_tw) - digamma(beta_tw);
+                }
+            }
+            ll -= digamma(beta_sum_t + self.nk[t] as f64) - digamma(beta_sum_t);
+        }
+
+        ll
+    }
+
     /// Row-normalised topic-word distribution φ for topic k.
     ///
     /// φ_{k,w} = (nkw[k][w] + β_{k,w}) / (nk[k] + β_sum[k])
@@ -215,8 +256,13 @@ fn seeded_theta_snapshot(
 /// * `seed_weight` — extra pseudocount added to a seed word in its topic.
 ///                   Set to 0.0 for ordinary LDA with symmetric priors.
 /// * `iters`       — number of full Gibbs sweeps.
-/// * `draws`       — thinned θ-draw retention schedule (issue #31).
-/// * `rng`         — random-number source; deterministic for a fixed seed.
+/// * `draws`            — thinned θ-draw retention schedule (issue #31).
+/// * `convergence_tol`  — relative-change tolerance for early stopping (0 = off).
+/// * `check_every`      — LL-trace cadence in sweeps (0 = no trace).
+/// * `rng`              — random-number source; deterministic for a fixed seed.
+///
+/// Returns `(model, ll_history, converged)` where `ll_history` is a vector of
+/// `(iteration, log_likelihood)` pairs recorded every `check_every` sweeps.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_seeded_lda<R: Rng>(
     docs: &[Vec<u32>],
@@ -229,8 +275,10 @@ pub fn fit_seeded_lda<R: Rng>(
     doc_alpha: Option<Vec<Vec<f64>>>,
     iters: usize,
     draws: crate::keyatm::ThetaDrawOpts,
+    convergence_tol: f64,
+    check_every: usize,
     rng: &mut R,
-) -> SeededModel {
+) -> (SeededModel, Vec<(usize, f64)>, bool) {
     let k = num_topics;
     let v = num_types;
     let d_count = docs.len();
@@ -313,8 +361,41 @@ pub fn fit_seeded_lda<R: Rng>(
     // --- Gibbs sweeps ---
     let mut scores: Vec<f64> = vec![0.0f64; k];
     let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut ll_history: Vec<(usize, f64)> = Vec::new();
+    let mut converged = false;
+
+    // Build a temporary SeededModel view for LL computation (borrows nkw/nk/ndk).
+    // We compute LL inline using the same formula as SeededModel::log_likelihood.
+    let compute_ll = |nkw: &[Vec<u32>], nk: &[u32], ndk: &[Vec<u32>]| -> f64 {
+        use crate::optimize::digamma;
+        let k_alpha = k as f64 * alpha;
+        let mut ll = 0.0f64;
+        for (d, doc) in docs.iter().enumerate() {
+            let n_d = doc.len() as f64;
+            for t in 0..k {
+                let n_dt = ndk[d][t] as f64;
+                if n_dt > 0.0 {
+                    ll += digamma(alpha + n_dt) - digamma(alpha);
+                }
+            }
+            ll -= digamma(k_alpha + n_d) - digamma(k_alpha);
+        }
+        for t in 0..k {
+            let beta_sum_t = v as f64 * beta + seeds_clean[t].len() as f64 * seed_weight;
+            for w in 0..v {
+                let n_tw = nkw[t][w] as f64;
+                if n_tw > 0.0 {
+                    let beta_tw = if seed_sets[t].contains(&w) { beta + seed_weight } else { beta };
+                    ll += digamma(beta_tw + n_tw) - digamma(beta_tw);
+                }
+            }
+            ll -= digamma(beta_sum_t + nk[t] as f64) - digamma(beta_sum_t);
+        }
+        ll
+    };
 
     for it in 0..iters {
+        let iter = it + 1;
         for d in 0..d_count {
             let doc = &docs[d];
             // The document's α row: per-document when supplied, else symmetric.
@@ -349,15 +430,28 @@ pub fn fit_seeded_lda<R: Rng>(
                 z[d][i] = new_t;
             }
         }
-        if draws.thin > 0 && (it + 1) % draws.thin == 0 {
+        if draws.thin > 0 && iter % draws.thin == 0 {
             theta_draw_buf.push(seeded_theta_snapshot(&ndk, doc_alpha.as_ref(), alpha, k));
             if theta_draw_buf.len() > draws.cap {
                 theta_draw_buf.remove(0);
             }
         }
+        // Trace recording and optional convergence check (never alters RNG).
+        if check_every > 0 && iter % check_every == 0 {
+            let ll = compute_ll(&nkw, &nk, &ndk);
+            ll_history.push((iter, ll));
+            if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                let prev = ll_history[ll_history.len() - 2].1;
+                let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                if rel < convergence_tol {
+                    converged = true;
+                    break;
+                }
+            }
+        }
     }
 
-    SeededModel {
+    let model = SeededModel {
         num_topics: k,
         num_types: v,
         alpha,
@@ -369,7 +463,8 @@ pub fn fit_seeded_lda<R: Rng>(
         ndk,
         doc_alpha,
         theta_draws: theta_draw_buf,
-    }
+    };
+    (model, ll_history, converged)
 }
 
 // ---------------------------------------------------------------------------
@@ -465,9 +560,10 @@ mod tests {
         let seed_blocks = [0usize, 1usize]; // expected dominant block for topics 0 and 1
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let model = fit_seeded_lda(
+        let (model, _, _) = fit_seeded_lda(
             &docs, v, 3, &seeds,
-            0.1, 0.01, 50.0, None, 300, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            0.1, 0.01, 50.0, None, 300, crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+            0.0, 0, &mut rng,
         );
 
         // For each seeded topic (0 and 1), the seed words' total φ mass should
@@ -510,7 +606,7 @@ mod tests {
         let seeds: Vec<Vec<usize>> = vec![vec![]; k];
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
-        let model = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 50, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut rng);
+        let (model, _, _) = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 50, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), 0.0, 0, &mut rng);
 
         // topic_word rows sum to 1.
         for t in 0..k {
@@ -548,8 +644,8 @@ mod tests {
 
         let mut r1 = ChaCha8Rng::seed_from_u64(55);
         let mut r2 = ChaCha8Rng::seed_from_u64(55);
-        let m1 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut r1);
-        let m2 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut r2);
+        let (m1, _, _) = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), 0.0, 0, &mut r1);
+        let (m2, _, _) = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), 0.0, 0, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),

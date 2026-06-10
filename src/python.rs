@@ -167,6 +167,8 @@ struct DmrState {
     phi: Option<Arr2>, theta: Option<Arr2>, feature_effects: Option<Arr2>,
     feature_names: Vec<String>, corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LabeledState {
@@ -174,6 +176,8 @@ struct LabeledState {
     phi: Option<Arr2>, theta: Option<Arr2>, label_vocab: Vec<String>,
     corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SageState {
@@ -182,6 +186,8 @@ struct SageState {
     beta: Vec<Vec<f64>>, theta: Option<Arr2>, group_names: Vec<String>,
     corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 /// serde default for the bound of a model saved before convergence tracking
 /// existed: NaN signals "unknown", distinct from a real bound of 0.
@@ -234,12 +240,16 @@ struct SldaState {
     eta: Option<Vec<f64>>, beta: Option<Arr2>, theta: Option<Arr2>,
     log_beta: Option<Vec<Vec<f64>>>, corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PtState {
     num_topics: usize, num_pseudo: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
     phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct GsdmmState {
@@ -254,6 +264,8 @@ struct SeededState {
     num_topics: usize, alpha: f64, beta: f64, weight: f64, seed: u64, fitted: bool,
     topic_names: Vec<String>, phi: Option<Arr2>, theta: Option<Arr2>,
     corpus: Option<corpus::Corpus>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyAtmState {
@@ -271,6 +283,8 @@ struct PaState {
     phi: Option<Arr2>, theta: Option<Arr2>, super_sub: Option<Arr2>,
     corpus: Option<corpus::Corpus>,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
+    #[serde(default)] converged: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct HldaState {
@@ -2813,6 +2827,8 @@ pub struct DMR {
     feature_effects: Option<Array2<f64>>, // (num_topics, num_features)
     feature_names: Vec<String>,
     corpus: Option<corpus::Corpus>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl DMR {
@@ -2867,6 +2883,8 @@ impl DMR {
             feature_effects: None,
             feature_names: Vec::new(),
             corpus: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -2876,7 +2894,8 @@ impl DMR {
     /// names the columns; an "intercept" name is prepended.
     #[pyo3(signature = (data, features, *, feature_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -2891,6 +2910,8 @@ impl DMR {
         progress_interval: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -2960,9 +2981,12 @@ impl DMR {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let (acc_phi, acc_theta, theta_draw_buf, feat_eff, model, corpus) = py.allow_threads(move || {
+        let (acc_phi, acc_theta, theta_draw_buf, feat_eff, ll_history, converged_flag, model, corpus) = py.allow_threads(move || {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
-            for iter in 1..=iters {
+            let mut ll_history: Vec<(usize, f64)> = Vec::new();
+            let mut converged_flag = false;
+
+            'outer: for iter in 1..=iters {
                 let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
                 dmr::run_sweep_dmr(
                     &mut model.type_topic_counts,
@@ -3013,6 +3037,20 @@ impl DMR {
                         });
                     }
                 }
+
+                // Trace recording and optional convergence check (never alters RNG).
+                if check_every > 0 && iter % check_every == 0 {
+                    let ll = output::model_log_likelihood(&model, &corpus);
+                    ll_history.push((iter, ll));
+                    if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                        let prev = ll_history[ll_history.len() - 2].1;
+                        let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                        if rel < convergence_tol {
+                            converged_flag = true;
+                            break 'outer;
+                        }
+                    }
+                }
             }
 
             // Sampling phase: λ is now fixed, so α per doc is fixed too.
@@ -3060,7 +3098,7 @@ impl DMR {
                 }
             }
 
-            (acc_phi, acc_theta, theta_draw_buf, lambda, model, corpus)
+            (acc_phi, acc_theta, theta_draw_buf, lambda, ll_history, converged_flag, model, corpus)
         });
         let _ = model;
 
@@ -3089,6 +3127,8 @@ impl DMR {
         self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, k, None);
         self.feature_effects = Some(fe);
         self.feature_names = names;
+        self.log_likelihood_history = ll_history;
+        self.converged = converged_flag;
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -3158,18 +3198,20 @@ impl DMR {
         Ok(self.feature_names.clone())
     }
 
-    /// DMR has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace. Returns one ``(iter, ll)`` pair for
+    /// every ``check_every`` sweeps (empty when ``check_every=0``, the default).
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
 
-    /// DMR does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the relative-change convergence criterion was satisfied before
+    /// all iterations completed. Always ``False`` when ``convergence_tol=0``.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
 
     #[getter]
@@ -3361,6 +3403,8 @@ impl DMR {
             feature_effects: arr2_opt(&self.feature_effects),
             feature_names: self.feature_names.clone(), corpus: self.corpus.clone(),
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -3382,6 +3426,8 @@ impl DMR {
             feature_effects: arr2_back(s.feature_effects),
             feature_names: s.feature_names, corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -3415,6 +3461,8 @@ pub struct LabeledLDA {
     // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
     // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
     theta_draws: Option<Array3<f32>>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl LabeledLDA {
@@ -3452,6 +3500,8 @@ impl LabeledLDA {
             label_vocab: Vec::new(),
             corpus: None,
             theta_draws: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -3459,9 +3509,13 @@ impl LabeledLDA {
     /// `labels` is a list (one per document) of label lists. The topic set is
     /// the union of all labels (or `label_names`, which also fixes topic order).
     /// An empty label list leaves that document unconstrained.
+    ///
+    /// `convergence_tol` (default 0.0, disabled) enables early stopping based
+    /// on the relative change in log-likelihood every `check_every` sweeps.
     #[pyo3(signature = (data, labels, *, label_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -3476,6 +3530,8 @@ impl LabeledLDA {
         progress_interval: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -3540,14 +3596,17 @@ impl LabeledLDA {
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         labeled::initialize_labeled(&mut model, &corpus.docs, &allowed, &mut rng);
 
+        let check_every_labeled = if check_every == 0 { 0 } else if convergence_tol > 0.0 { check_every.max(1) } else { check_every };
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let (acc_phi, acc_theta, theta_draw_buf, model, corpus) = py.allow_threads(move || {
+        let (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, model, corpus) = py.allow_threads(move || {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
             let all_topics: Vec<usize> = (0..k).collect();
+            let mut ll_history: Vec<(usize, f64)> = Vec::new();
+            let mut converged = false;
 
-            for iter in 1..=iters {
+            'outer: for iter in 1..=iters {
                 labeled::run_sweep_labeled(&mut model, &corpus.docs, &allowed, &mut rng);
                 if draws_opts.thin > 0 && iter % draws_opts.thin == 0 {
                     let counts = doc_topic_counts(&model.doc_topics, k);
@@ -3569,6 +3628,19 @@ impl LabeledLDA {
                         Python::with_gil(|py| {
                             let _ = cb.call1(py, (iter, ll));
                         });
+                    }
+                }
+                // Trace recording and optional convergence check (never alters RNG).
+                if check_every_labeled > 0 && iter % check_every_labeled == 0 {
+                    let ll = output::model_log_likelihood(&model, &corpus);
+                    ll_history.push((iter, ll));
+                    if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                        let prev = ll_history[ll_history.len() - 2].1;
+                        let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                        if rel < convergence_tol {
+                            converged = true;
+                            break 'outer;
+                        }
                     }
                 }
             }
@@ -3606,7 +3678,7 @@ impl LabeledLDA {
                     *v /= n;
                 }
             }
-            (acc_phi, acc_theta, theta_draw_buf, model, corpus)
+            (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, model, corpus)
         });
         let _ = model;
 
@@ -3630,6 +3702,8 @@ impl LabeledLDA {
         self.theta = Some(theta);
         self.label_vocab = label_vocab;
         self.corpus = Some(corpus);
+        self.log_likelihood_history = ll_history;
+        self.converged = converged;
         self.fitted = true;
         Ok(())
     }
@@ -3681,18 +3755,18 @@ impl LabeledLDA {
         Ok(self.label_vocab.clone())
     }
 
-    /// LabeledLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace recorded every ``check_every`` sweeps.
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
 
-    /// LabeledLDA does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the convergence criterion was met; ``False`` otherwise.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
 
     #[getter]
@@ -3816,6 +3890,8 @@ impl LabeledLDA {
             num_topics: self.num_topics, phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             label_vocab: self.label_vocab.clone(), corpus: self.corpus.clone(),
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -3834,6 +3910,8 @@ impl LabeledLDA {
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             label_vocab: s.label_vocab, corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -3886,6 +3964,8 @@ pub struct SAGE {
     // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
     // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
     theta_draws: Option<Array3<f32>>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl SAGE {
@@ -3953,6 +4033,8 @@ impl SAGE {
             group_names: Vec::new(),
             corpus: None,
             theta_draws: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
@@ -3961,7 +4043,8 @@ impl SAGE {
     /// document. `group_names` fixes the group order (defaults to sorted union).
     #[pyo3(signature = (data, groups, *, group_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -3976,6 +4059,8 @@ impl SAGE {
         progress_interval: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -4042,10 +4127,26 @@ impl SAGE {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let (beta, acc_theta, theta_draw_buf, corpus) = py.allow_threads(move || {
+        let (beta, acc_theta, theta_draw_buf, ll_history, converged_flag, corpus) = py.allow_threads(move || {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+            let mut ll_history: Vec<(usize, f64)> = Vec::new();
+            let mut converged_flag = false;
 
-            for iter in 1..=iters {
+            // Inline LL for SAGE: sum_c sum_v n_cv * ln(beta_cv).
+            let compute_ll = |model: &sage::SageModel| -> f64 {
+                let mut ll = 0.0f64;
+                for c in 0..(k * group_n) {
+                    for v in 0..num_types {
+                        let n = model.counts[c][v] as f64;
+                        if n > 0.0 {
+                            ll += n * model.beta[c][v].max(1e-300).ln();
+                        }
+                    }
+                }
+                ll
+            };
+
+            'outer: for iter in 1..=iters {
                 sage::run_sweep_sage(&mut model, &corpus.docs, &groups_idx, &mut rng);
                 if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                     sage::optimize_kappa(&mut model, lbfgs_iters);
@@ -4060,20 +4161,23 @@ impl SAGE {
                 }
                 if let Some(cb) = &progress {
                     if progress_interval > 0 && iter % progress_interval == 0 {
-                        // Data log-likelihood under the current β, per token.
-                        let mut ll = 0.0;
-                        for c in 0..(k * group_n) {
-                            for v in 0..num_types {
-                                let n = model.counts[c][v] as f64;
-                                if n > 0.0 {
-                                    ll += n * model.beta[c][v].max(1e-300).ln();
-                                }
-                            }
-                        }
-                        let llpt = ll / total_tokens;
+                        let llpt = compute_ll(&model) / total_tokens;
                         Python::with_gil(|py| {
                             let _ = cb.call1(py, (iter, llpt));
                         });
+                    }
+                }
+                // Trace recording and optional convergence check (never alters RNG).
+                if check_every > 0 && iter % check_every == 0 {
+                    let ll = compute_ll(&model);
+                    ll_history.push((iter, ll));
+                    if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                        let prev = ll_history[ll_history.len() - 2].1;
+                        let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                        if rel < convergence_tol {
+                            converged_flag = true;
+                            break 'outer;
+                        }
                     }
                 }
             }
@@ -4098,7 +4202,7 @@ impl SAGE {
                     *v /= n;
                 }
             }
-            (model.beta.clone(), acc_theta, theta_draw_buf, corpus)
+            (model.beta.clone(), acc_theta, theta_draw_buf, ll_history, converged_flag, corpus)
         });
 
         let mut theta = Array2::<f64>::zeros((num_docs, k));
@@ -4115,6 +4219,8 @@ impl SAGE {
         self.theta = Some(theta);
         self.group_names = group_vocab;
         self.corpus = Some(corpus);
+        self.log_likelihood_history = ll_history;
+        self.converged = converged_flag;
         self.fitted = true;
         Ok(())
     }
@@ -4185,18 +4291,20 @@ impl SAGE {
         Ok(self.group_names.clone())
     }
 
-    /// SAGE has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace. Returns one ``(iter, ll)`` pair for
+    /// every ``check_every`` sweeps (empty when ``check_every=0``, the default).
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
 
-    /// SAGE does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the relative-change convergence criterion was satisfied before
+    /// all iterations completed. Always ``False`` when ``convergence_tol=0``.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
 
     #[getter]
@@ -4334,6 +4442,8 @@ impl SAGE {
             beta: self.beta.clone(), theta: arr2_opt(&self.theta),
             group_names: self.group_names.clone(), corpus: self.corpus.clone(),
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -4353,6 +4463,8 @@ impl SAGE {
             topic_names,
             beta: s.beta, theta: arr2_back(s.theta), group_names: s.group_names, corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -6482,6 +6594,8 @@ pub struct SupervisedLDA {
     // Thinned θ draws (num_draws, num_docs, num_topics), f32; None when
     // keep_theta_draws=False. Each draw samples from Dirichlet(gamma_d).
     theta_draws: Option<Array3<f32>>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl SupervisedLDA {
@@ -6520,13 +6634,16 @@ impl SupervisedLDA {
             log_beta: None,
             corpus: None,
             theta_draws: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
     /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`;
     /// `y` is the per-document real-valued response (length = number of docs).
     #[pyo3(signature = (data, y, *, iters=25, var_iters=15,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=1_usize))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -6536,6 +6653,8 @@ impl SupervisedLDA {
         var_iters: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -6565,9 +6684,12 @@ impl SupervisedLDA {
 
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
-        let (model, corpus) = py.allow_threads(move || {
-            let m = slda::fit_slda(&corpus.docs, &y, num_types, k, alpha, iters, var_iters, &mut rng);
-            (m, corpus)
+        let (model, ll_history, converged_flag, corpus) = py.allow_threads(move || {
+            let (m, hist, conv) = slda::fit_slda(
+                &corpus.docs, &y, num_types, k, alpha, iters, var_iters,
+                convergence_tol, check_every, &mut rng,
+            );
+            (m, hist, conv, corpus)
         });
 
         let mut beta = Array2::<f64>::zeros((k, num_types));
@@ -6610,6 +6732,8 @@ impl SupervisedLDA {
         self.theta = Some(theta);
         self.log_beta = Some(model.log_beta.clone());
         self.corpus = Some(corpus);
+        self.log_likelihood_history = ll_history;
+        self.converged = converged_flag;
         self.fitted = true;
         Ok(())
     }
@@ -6716,18 +6840,20 @@ impl SupervisedLDA {
         self.num_topics
     }
 
-    /// SupervisedLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-EM-iteration response log-likelihood trace. Returns one ``(iter, ll)``
+    /// pair per ``check_every`` EM iterations (empty when ``check_every=0``).
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
 
-    /// SupervisedLDA does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the relative-change convergence criterion was satisfied before
+    /// all EM iterations completed. Always ``False`` when ``convergence_tol=0``.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
 
     #[getter]
@@ -6841,6 +6967,8 @@ impl SupervisedLDA {
             theta: arr2_opt(&self.theta), log_beta: self.log_beta.clone(),
             corpus: self.corpus.clone(),
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
 
@@ -6859,6 +6987,8 @@ impl SupervisedLDA {
             sigma2: s.sigma2, eta: arr1_back(s.eta), beta: arr2_back(s.beta),
             theta: arr2_back(s.theta), log_beta: s.log_beta, corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -6890,6 +7020,8 @@ pub struct PT {
     // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
     // keep_theta_draws=False. Each doc inherits its pseudo-doc's topic distribution.
     theta_draws: Option<Array3<f32>>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl PT {
@@ -6922,11 +7054,14 @@ impl PT {
             num_topics, num_pseudo, alpha, beta, seed,
             fitted: false, topic_names: Vec::new(), phi: None, theta: None, corpus: None,
             theta_draws: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
     /// Fit by collapsed Gibbs sampling for `iters` sweeps.
-    #[pyo3(signature = (data, *, iters=1000, keep_theta_draws=true, num_theta_draws=25))]
+    #[pyo3(signature = (data, *, iters=1000, keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -6934,6 +7069,8 @@ impl PT {
         iters: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -6954,16 +7091,19 @@ impl PT {
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
-        let (model, corpus) = py.allow_threads(move || {
-            let m = pt::fit_ptm_with_draws(
-                &corpus.docs, num_types, k, p, a, b, iters, draws_opts, &mut rng,
+        let (model, ll_history, converged_flag, corpus) = py.allow_threads(move || {
+            let (m, hist, conv) = pt::fit_ptm_with_draws(
+                &corpus.docs, num_types, k, p, a, b, iters, draws_opts,
+                convergence_tol, check_every, &mut rng,
             );
-            (m, corpus)
+            (m, hist, conv, corpus)
         });
         self.theta_draws = draws_to_array3(&model.theta_draws, num_docs, k, None);
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.phi = Some(vecs_to_arr2(&model.topic_word()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.log_likelihood_history = ll_history;
+        self.converged = converged_flag;
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -7003,17 +7143,19 @@ impl PT {
     fn num_topics(&self) -> usize {
         self.num_topics
     }
-    /// PT has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace. Returns one ``(iter, ll)`` pair for
+    /// every ``check_every`` sweeps (empty when ``check_every=0``, the default).
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
-    /// PT does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the relative-change convergence criterion was satisfied before
+    /// all iterations completed. Always ``False`` when ``convergence_tol=0``.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
     /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``
     /// after fit; assign a list of the same length to override.
@@ -7065,6 +7207,8 @@ impl PT {
             beta: self.beta, seed: self.seed, fitted: self.fitted,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
             topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -7082,6 +7226,8 @@ impl PT {
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -7440,6 +7586,8 @@ pub struct SeededLDA {
     // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
     theta_draws: Option<Array3<f32>>,
     corpus: Option<corpus::Corpus>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl SeededLDA {
@@ -7482,6 +7630,7 @@ impl SeededLDA {
             seed_names: names, seed_words: words, residual, alpha, beta, weight, seed,
             fitted: false, topic_names: Vec::new(), phi: None, theta: None,
             theta_draws: None, corpus: None,
+            log_likelihood_history: Vec::new(), converged: false,
         })
     }
 
@@ -7493,8 +7642,15 @@ impl SeededLDA {
     /// symmetric `alpha`, biasing each document's topic mixture toward chosen
     /// topics (e.g. from a document embedding). It is a prior, so the sampler
     /// can still move a document away from it.
+    ///
+    /// `convergence_tol` (default 0.0, disabled) enables early stopping: after
+    /// each `check_every` sweeps the relative change in the log-likelihood is
+    /// compared; if it falls below `convergence_tol` the loop stops and
+    /// :attr:`converged` is set to ``True``. When 0 (default), the full `iters`
+    /// run exactly as before.
     #[pyo3(signature = (data, *, iters=2000, doc_topic_prior=None,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -7503,6 +7659,8 @@ impl SeededLDA {
         doc_topic_prior: Option<&Bound<'_, PyAny>>,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -7543,15 +7701,16 @@ impl SeededLDA {
             None => None,
         };
 
+        let check_every = if check_every == 0 { 0 } else if convergence_tol > 0.0 { check_every.max(1) } else { check_every };
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
-        let (model, corpus) = py.allow_threads(move || {
-            let m = seeded::fit_seeded_lda(
+        let (model, ll_history, converged, corpus) = py.allow_threads(move || {
+            let (m, ll, conv) = seeded::fit_seeded_lda(
                 &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, doc_alpha,
-                iters, draws_opts, &mut rng,
+                iters, draws_opts, convergence_tol, check_every, &mut rng,
             );
-            (m, corpus)
+            (m, ll, conv, corpus)
         });
         self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
@@ -7562,6 +7721,8 @@ impl SeededLDA {
         }
         self.topic_names = names;
         self.corpus = Some(corpus);
+        self.log_likelihood_history = ll_history;
+        self.converged = converged;
         self.fitted = true;
         Ok(())
     }
@@ -7599,17 +7760,19 @@ impl SeededLDA {
     fn num_topics(&self) -> usize {
         self.num_topics_val()
     }
-    /// SeededLDA has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace. Each entry is ``(iteration, log_likelihood)``
+    /// recorded every ``check_every`` sweeps during :meth:`fit`. Non-empty after fitting.
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
-    /// SeededLDA does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the convergence criterion was met (``convergence_tol > 0``);
+    /// ``False`` if the full ``iters`` ran.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
     /// The symmetric document-topic Dirichlet prior α, broadcast to
     /// ``(num_topics,)``. Marks SeededLDA as a Dirichlet model for
@@ -7670,6 +7833,8 @@ impl SeededLDA {
             weight: self.weight, seed: self.seed, fitted: self.fitted,
             topic_names: self.topic_names.clone(), phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -7682,6 +7847,8 @@ impl SeededLDA {
             alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, fitted: s.fitted,
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             theta_draws: None, corpus: s.corpus,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
@@ -10701,6 +10868,8 @@ pub struct PA {
     // Thinned MCMC θ snapshots (num_draws, num_docs, num_sub), f32; None when
     // keep_theta_draws=False. Sub-topic proportions marginalized over super-topics.
     theta_draws: Option<Array3<f32>>,
+    log_likelihood_history: Vec<(usize, f64)>,
+    converged: bool,
 }
 
 impl PA {
@@ -10731,11 +10900,14 @@ impl PA {
             fitted: false, topic_names: Vec::new(),
             phi: None, theta: None, super_sub: None, corpus: None,
             theta_draws: None,
+            log_likelihood_history: Vec::new(),
+            converged: false,
         })
     }
 
     /// Fit by collapsed Gibbs sampling for `iters` sweeps.
-    #[pyo3(signature = (data, *, iters=1000, keep_theta_draws=true, num_theta_draws=25))]
+    #[pyo3(signature = (data, *, iters=1000, keep_theta_draws=true, num_theta_draws=25,
+                        convergence_tol=0.0_f64, check_every=10_usize))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -10743,6 +10915,8 @@ impl PA {
         iters: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
+        check_every: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -10763,15 +10937,20 @@ impl PA {
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
-        let (model, corpus) = py.allow_threads(move || {
-            let m = pa::fit_pam_with_draws(&corpus.docs, num_types, s, k, a, b, iters, draws_opts, &mut rng);
-            (m, corpus)
+        let (model, ll_history, converged_flag, corpus) = py.allow_threads(move || {
+            let (m, hist, conv) = pa::fit_pam_with_draws(
+                &corpus.docs, num_types, s, k, a, b, iters, draws_opts,
+                convergence_tol, check_every, &mut rng,
+            );
+            (m, hist, conv, corpus)
         });
         self.theta_draws = draws_to_array3(&model.theta_draws, num_docs, k, None);
         self.phi = Some(vecs_to_arr2(&model.topic_word()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
         self.super_sub = Some(vecs_to_arr2(&model.super_sub()));
         self.topic_names = (0..self.num_sub).map(|i| format!("topic_{i}")).collect();
+        self.log_likelihood_history = ll_history;
+        self.converged = converged_flag;
         self.corpus = Some(corpus);
         self.fitted = true;
         Ok(())
@@ -10829,17 +11008,19 @@ impl PA {
     fn num_topics(&self) -> usize {
         self.num_sub
     }
-    /// PA has no per-iteration trace yet (part B); always returns ``[]``.
+    /// Per-iteration log-likelihood trace. Returns one ``(iter, ll)`` pair for
+    /// every ``check_every`` sweeps (empty when ``check_every=0``, the default).
     #[getter]
     fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
         self.require_fitted()?;
-        Ok(Vec::new())
+        Ok(self.log_likelihood_history.clone())
     }
-    /// PA does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the relative-change convergence criterion was satisfied before
+    /// all iterations completed. Always ``False`` when ``convergence_tol=0``.
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
     #[getter]
     fn topic_names(&self) -> PyResult<Vec<String>> {
@@ -10889,6 +11070,8 @@ impl PA {
             seed: self.seed, fitted: self.fitted, phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), super_sub: arr2_opt(&self.super_sub),
             corpus: self.corpus.clone(), topic_names: self.topic_names.clone(),
+            log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -10906,6 +11089,8 @@ impl PA {
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             super_sub: arr2_back(s.super_sub), corpus: s.corpus,
             theta_draws: None,
+            log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
         })
     }
 
