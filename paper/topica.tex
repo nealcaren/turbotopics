@@ -265,8 +265,14 @@ topica.estimate_effect(m.doc_topic, X)   # ... and effect tool applies to m.
 \end{CodeInput}
 \end{CodeChunk}
 
-The built-in models are written to exactly this contract; the implementer's guide
-that ships with the package documents it for contributors.
+The built-in models are written to exactly this contract, and the contract is not
+left to convention. A machine-readable specification, \code{topica.check\_conformance},
+enumerates the attributes and methods every estimator must expose---the two
+matrices, the held-out \code{transform}, the per-iteration convergence trace, the
+family-specific posterior draws---and a parametrized test checks all of them on
+every continuous-integration run, so a model that drops part of the surface fails
+the suite rather than silently degrading the toolkit. The implementer's guide that
+ships with the package documents the contract for contributors.
 
 \subsection{Determinism as a constraint}
 
@@ -347,7 +353,9 @@ the SAGE mechanism, so the same topic can be worded differently across groups
 while its prevalence is regressed on metadata. The keyword-assisted model is also
 implemented in full, covering the base, covariate, and dynamic variants, the
 information-theoretic token weighting, and the change-point hidden Markov model
-\citep{chib1998changepoint} of the dynamic specification.
+\citep{chib1998changepoint} of the dynamic specification, whose smoothed time
+trend is reported with per-period credible bands drawn from the retained
+posterior rather than as a bare point estimate.
 
 %% ===========================================================================
 \section{A principled analysis workflow}\label{sec:workflow}
@@ -363,9 +371,11 @@ show where each one decides.
 
 The corpus fixes the scope of every later claim, so preprocessing is a
 substantive decision rather than a chore. \pkg{topica} provides the \code{Corpus}
-container and tokenization, phrase learning, and document-splitting tools, and the
-workflow documents every choice (stopwords, frequency thresholds, phrases) because
-the methods section has to report them.
+container and tokenization, phrase learning, and document-splitting tools, and
+\code{topica.prep\_documents} with \code{topica.plot\_removed} reports how many
+documents, words, and tokens each vocabulary threshold removes, so the pruning is
+quantified rather than guessed. The workflow documents every choice (stopwords,
+frequency thresholds, phrases) because the methods section has to report them.
 
 \subsection{Choose and justify the number of topics}
 
@@ -374,18 +384,27 @@ often get wrong, because the diagnostics tempt one to optimize it. $K$ is a
 research decision about granularity, not a hyperparameter to maximize: a model
 with fewer topics often scores higher on coherence while collapsing distinctions
 the researcher cares about. \code{topica.search\_k} fits a range of $K$ and
-reports coherence, exclusivity, and held-out perplexity for each, and
+reports coherence, exclusivity, and a held-out score for each; with
+\code{topica.make\_heldout} and \code{topica.eval\_heldout} that score is the
+document-completion held-out log-likelihood \pkg{stm} uses, available for every
+model that supports held-out inference rather than only \code{LDA}.
 \code{topica.quality\_frontier} plots the per-topic coherence-exclusivity
-trade-off. The honest procedure is to fit a small range around a theoretically
-plausible $K$, label the topics at each, count the uninterpretable ones, and let
-the researcher choose, reporting sensitivity to that choice.
+trade-off, and because a single fit of a non-convex model can land on a poor
+local optimum, \code{topica.select\_model} fits several models at a fixed $K$
+under different seeds and returns the most coherent. The honest procedure is to
+fit a small range around a theoretically plausible $K$, label the topics at each,
+count the uninterpretable ones, and let the researcher choose, reporting
+sensitivity to that choice.
 
 \subsection{Fit, read, and validate}
 
 Topics are read from several angles together, since top words alone underdetermine
 meaning: \code{label\_topics} reports the highest-probability, FREX
 \citep{bischof2012frex}, and lift words, and \code{find\_thoughts} returns the
-documents that load most heavily on a topic. Validation is not optional.
+documents that load most heavily on a topic. Every iterative model also exposes
+its convergence trace as \code{fit\_history} and a \code{converged} flag, so a fit
+that stopped at the iteration cap is not mistaken for one that met a tolerance.
+Validation is not optional.
 \code{topica.coherence} computes the windowed coherence measures
 \citep{lau2014coherence} in the core, \code{topica.exclusivity} and
 \code{topica.topic\_diversity} measure distinctness, \code{bootstrap\_stability}
@@ -414,10 +433,16 @@ effects = stm.estimate_effect(draws, X, feature_names=names, cluster=source_id)
 \end{CodeInput}
 \end{CodeChunk}
 
-The model-agnostic \code{topica.standard\_errors} extends this to any model and is
-explicit about the kind of uncertainty it reports. For a clustering of embeddings,
-which has no posterior over $\theta$, it declines to report confidence intervals
-and says so, rather than returning a number that looks like one.
+Beyond the coefficient table, \code{topica.predicted\_prevalence} reports predicted
+topic prevalence at chosen covariate values, with differences between settings and
+continuous prediction curves carried with simulation-based intervals---the
+quantity of interest \pkg{stm}'s \code{estimateEffect} plots---and
+\code{topica.permutation\_test} gives a distribution-free check of whether a
+topic's prevalence differs across a binary covariate. The model-agnostic
+\code{topica.standard\_errors} extends this to any model and is explicit about the
+kind of uncertainty it reports. For a clustering of embeddings, which has no
+posterior over $\theta$, it declines to report confidence intervals and says so,
+rather than returning a number that looks like one.
 
 \subsection{Visualization and reporting}
 
