@@ -533,7 +533,10 @@ def _bench_bertopic(
             f"docs = json.load(open({docs_path!r}))\n"
             f"emb = np.load({emb_path!r})\n"
             "t0 = time.perf_counter()\n"
-            "topica.BERTopic().fit_transform(docs, emb)\n"
+            # reducer="umap" to match reference BERTopic's UMAP -> HDBSCAN stage.
+            # topica defaults to PCA (a faster reducer); matching the reducer
+            # isolates implementation speed rather than reducer choice.
+            "topica.BERTopic(reducer='umap').fit_transform(docs, emb)\n"
             "print('FIT_TIME', time.perf_counter()-t0)\n"
         )
         stdout_t, topica_rss = peak_rss_mb([PYTHON, "-c", py_topica])
