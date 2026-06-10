@@ -126,11 +126,18 @@ def model_family(model):
 
 def _doc_lengths_for(model, corpus):
     if corpus is None:
-        raise ValueError(
-            "a Gibbs model needs corpus= (the Corpus it was fit on, or the token "
-            "lists) to recover per-document lengths for Dirichlet theta draws"
-        )
-    if hasattr(corpus, "doc_lengths"):
+        # A fitted Gibbs model retains its own per-document lengths (issue #32),
+        # so the Dirichlet fallback is self-sufficient without re-threading the
+        # corpus. Older / other models that did not retain them still need one.
+        own = getattr(model, "doc_lengths", None)
+        if own is None or len(own) == 0:
+            raise ValueError(
+                "a Gibbs model needs corpus= (the Corpus it was fit on, or the "
+                "token lists) to recover per-document lengths for Dirichlet theta "
+                "draws; this model did not retain its own doc_lengths"
+            )
+        lengths = np.asarray(own, dtype=np.float64)
+    elif hasattr(corpus, "doc_lengths"):
         lengths = np.asarray(corpus.doc_lengths, dtype=np.float64)
     else:
         lengths = np.asarray([len(d) for d in corpus], dtype=np.float64)

@@ -1141,6 +1141,19 @@ impl LDA {
         self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
     }
 
+    /// Per-document token counts (length D), in :attr:`doc_topic` row order. Lets
+    /// :func:`topica.composition_theta` recover the Dirichlet concentration N_d
+    /// without re-threading the original :class:`Corpus`.
+    #[getter]
+    fn doc_lengths(&self) -> PyResult<Vec<usize>> {
+        self.require_fitted()?;
+        Ok(self
+            .corpus
+            .as_ref()
+            .map(|c| c.docs.iter().map(|d| d.len()).collect())
+            .unwrap_or_default())
+    }
+
     /// The vocabulary: word for each column of :attr:`topic_word`.
     #[getter]
     fn vocabulary(&self) -> PyResult<Vec<String>> {
@@ -6665,6 +6678,17 @@ impl SeededLDA {
     fn theta_draws<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray3<f32>>> {
         self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
     }
+    /// Per-document token counts (length D), in ``doc_topic`` row order, so
+    /// ``composition_theta`` can recover N_d without re-threading the Corpus.
+    #[getter]
+    fn doc_lengths(&self) -> PyResult<Vec<usize>> {
+        self.require_fitted()?;
+        Ok(self
+            .corpus
+            .as_ref()
+            .map(|c| c.docs.iter().map(|d| d.len()).collect())
+            .unwrap_or_default())
+    }
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics_val()
@@ -8824,6 +8848,17 @@ impl KeyATM {
     #[getter]
     fn theta_draws<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray3<f32>>> {
         self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
+    }
+    /// Per-document token counts (length D), in ``doc_topic`` row order, so
+    /// ``composition_theta`` can recover N_d without re-threading the Corpus.
+    #[getter]
+    fn doc_lengths(&self) -> PyResult<Vec<usize>> {
+        self.require_fitted()?;
+        Ok(self
+            .corpus
+            .as_ref()
+            .map(|c| c.docs.iter().map(|d| d.len()).collect())
+            .unwrap_or_default())
     }
     /// Per-topic keyword switch rate ``π_k`` (the share of a keyword topic's mass
     /// drawn from its keyword distribution); 0 for regular topics.
