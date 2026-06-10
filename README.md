@@ -30,17 +30,17 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 | Model | What it's for |
 |-------|---------------|
 | **`LDA`** | Classic topics via fast collapsed-Gibbs (SparseLDA); optional multi-threaded and LightLDA alias samplers |
-| **`ProdLDA`** | Sharper, more coherent topics via a product-of-experts word model, fit as an amortized VAE (no PyTorch) |
-| **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
-| **`LabeledLDA`** | Supervised topics tied to document labels |
-| **`CTM`** | Correlated topics (logistic-normal) |
 | **`STM`** | The Structural Topic Model: correlated topics with prevalence **and** content covariates |
-| **`SAGE`** | Content-covariate topics: the same topic worded differently across groups |
-| **`HDP`** | Nonparametric LDA that *infers* the number of topics |
+| **`CTM`** | Correlated topics (logistic-normal) |
+| **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
 | **`DTM`** | Dynamic topics that evolve across time slices |
-| **`SupervisedLDA`** | Topics shaped to predict a per-document response |
+| **`HDP`** | Nonparametric LDA that *infers* the number of topics |
+| **`keyATM` / `seededlda`** | Guided topics steered by seed words |
+| **`ProdLDA`** | Sharper, more coherent topics via a product-of-experts word model, fit as an amortized VAE (no PyTorch) |
 | **`PT` / `GSDMM`** | Short-text models for tweets, survey answers, headlines |
-| **`SeededLDA` / `KeyATM`** | Guided topics steered by seed words |
+| **`SupervisedLDA`** | Topics shaped to predict a per-document response |
+| **`LabeledLDA`** | Supervised topics tied to document labels |
+| **`SAGE`** | Content-covariate topics: the same topic worded differently across groups |
 | **`PA` / `HLDA`** | Topic hierarchies (Pachinko, nested-CRP) |
 
 **Embedding-based models** start from document embeddings you supply (no PyTorch, no UMAP/numba in the wheel):

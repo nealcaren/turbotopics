@@ -17,7 +17,7 @@ Every model shares the same shape: construct with hyperparameters and a `seed`,
 | Track topics that drift over time | [`DTM`](#dtm) |
 | Tie topics to known labels | [`LabeledLDA`](#labeledlda) |
 | Shape topics to predict an outcome | [`SupervisedLDA`](#supervisedlda) |
-| Steer topics with known keywords | [`SeededLDA`, `KeyATM`](guided.md) |
+| Steer topics with known keywords | [`keyATM`, `seededlda`](guided.md) |
 | Sharper, more coherent topics at scale | [`ProdLDA`](#prodlda) |
 | Model short texts (tweets, answers) | [`PT`, `GSDMM`](short-text.md) |
 | Build a topic hierarchy | `PA`, `HLDA` |
@@ -61,6 +61,18 @@ coherence on shared corpora); LightLDA is also useful as an independent
 cross-check of a SparseLDA fit. Use the default unless you have a specific
 large-`K` reason not to.
 
+## STM
+
+The full Structural Topic Model: CTM core plus **prevalence** and **content**
+covariates. This is the workhorse for social science; it has its own
+[guide](covariates.md).
+
+## CTM
+
+The Correlated Topic Model (logistic-normal): topics can co-occur, unlike LDA's
+Dirichlet. This is the engine STM builds on; `topic_correlation` reports the
+learned structure. Fit by parallel variational EM.
+
 ## DMR
 
 Dirichlet-Multinomial Regression: each document's topic prior depends on its
@@ -74,22 +86,36 @@ model = topica.DMR(num_topics=20, seed=1)
 model.fit(docs, X, feature_names=names)
 ```
 
-## LabeledLDA
+## DTM
 
-Supervised: each label is a topic, and a document's tokens are restricted to its
-labels. Empty labels fall back to unconstrained LDA.
+The Dynamic Topic Model: a fixed number of topics whose word distributions
+**drift** across ordered time slices. `word_evolution(topic, word)` traces one
+word's probability through time, and `word_drift(topic)` reports *which* words
+rose and fell most within a topic — what makes its vocabulary evolve.
 
-## SAGE
+```python
+dtm = topica.DTM(num_topics=10, chain_variance=0.05, seed=1)
+dtm.fit(docs, times, iters=20)   # `times` = per-doc slice index
 
-Content-covariate topics via an additive log-linear model: the *same* topic is
-worded differently across groups. `word_contrast(topic, a, b)` shows the words
-that most distinguish two groups' phrasing.
+drift = dtm.word_drift(topic=3)     # first vs last slice by default
+print("rising: ", [w for w, _ in drift["rising"][:5]])
+print("falling:", [w for w, _ in drift["falling"][:5]])
+```
 
-## CTM
+## HDP
 
-The Correlated Topic Model (logistic-normal): topics can co-occur, unlike LDA's
-Dirichlet. This is the engine STM builds on; `topic_correlation` reports the
-learned structure. Fit by parallel variational EM.
+A nonparametric model that **infers** the number of topics rather than taking
+`K` as input. Useful as a sanity check on the `K` you chose elsewhere.
+
+```python
+hdp = topica.HDP(eta=0.3, seed=1)
+hdp.fit(docs, iters=300)
+print(hdp.num_topics, "topics inferred")
+```
+
+## Guided topics
+
+`keyATM` and `seededlda` steer named topics with a few seed words each, for when you know the themes you expect. See the [guided-topics guide](guided.md).
 
 ## ProdLDA
 
@@ -115,38 +141,10 @@ amortized, `transform` maps new documents with a single forward pass rather than
 re-running an optimizer. ProdLDA is bag-of-words (no embeddings); for the
 embedding-factored generative model see [`ETM`](embedding.md).
 
-## STM
+## Short-text models
 
-The full Structural Topic Model: CTM core plus **prevalence** and **content**
-covariates. This is the workhorse for social science; it has its own
-[guide](covariates.md).
-
-## HDP
-
-A nonparametric model that **infers** the number of topics rather than taking
-`K` as input. Useful as a sanity check on the `K` you chose elsewhere.
-
-```python
-hdp = topica.HDP(eta=0.3, seed=1)
-hdp.fit(docs, iters=300)
-print(hdp.num_topics, "topics inferred")
-```
-
-## DTM
-
-The Dynamic Topic Model: a fixed number of topics whose word distributions
-**drift** across ordered time slices. `word_evolution(topic, word)` traces one
-word's probability through time, and `word_drift(topic)` reports *which* words
-rose and fell most within a topic — what makes its vocabulary evolve.
-
-```python
-dtm = topica.DTM(num_topics=10, chain_variance=0.05, seed=1)
-dtm.fit(docs, times, iters=20)   # `times` = per-doc slice index
-
-drift = dtm.word_drift(topic=3)     # first vs last slice by default
-print("rising: ", [w for w, _ in drift["rising"][:5]])
-print("falling:", [w for w, _ in drift["falling"][:5]])
-```
+`PT` and `GSDMM` are built for short documents; see the
+[short-text guide](short-text.md).
 
 ## SupervisedLDA
 
@@ -154,12 +152,18 @@ Topics shaped to predict a per-document real-valued response (Blei & McAuliffe).
 `coefficients` give each topic's pull on the outcome, and `predict` scores new
 documents.
 
-## Guided topics
+## LabeledLDA
 
-`SeededLDA` and `KeyATM` steer named topics with a few seed words each, for when you know the themes you expect. See the [guided-topics guide](guided.md).
+Supervised: each label is a topic, and a document's tokens are restricted to its
+labels. Empty labels fall back to unconstrained LDA.
 
-## Short-text and hierarchy models
+## SAGE
 
-`PT` and `GSDMM` are built for short documents; see the
-[short-text guide](short-text.md). `PA` (Pachinko Allocation) and `HLDA`
-(hierarchical, nested-CRP) recover super-/sub-topic structure.
+Content-covariate topics via an additive log-linear model: the *same* topic is
+worded differently across groups. `word_contrast(topic, a, b)` shows the words
+that most distinguish two groups' phrasing.
+
+## Hierarchy models
+
+`PA` (Pachinko Allocation) and `HLDA` (hierarchical, nested-CRP) recover
+super-/sub-topic structure.
