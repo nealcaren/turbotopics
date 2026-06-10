@@ -6,6 +6,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-10
+
+This release makes the estimator interface uniform across the whole library and
+adds two publication-grade quantities of interest. Every estimator now meets a
+documented contract, checked in CI.
+
+### Added
+
+- `predicted_prevalence(model, ...)`: predicted topic prevalence at chosen
+  covariate values, with difference contrasts and continuous prediction curves,
+  and simulation-based confidence intervals. Model-agnostic (STM, CTM, the
+  covariate keyATM, LDA, ...), built on the method-of-composition draws, so it is
+  the same call regardless of model family. A `viz.predicted_prevalence_plot`
+  renders the forest and curve figures (#35, #43).
+- `make_heldout` / `eval_heldout`: R `stm`-style document-completion held-out
+  log-likelihood, model-agnostic via each model's `transform`; `search_k` now
+  reports a held-out metric for STM/CTM, not only LDA (#38).
+- Estimator conformance facility: `topica.check_conformance(model)`, a
+  registry-driven `tests/test_conformance.py`, and a contributor contract at
+  `docs/contributing/estimator-contract.md`. New estimators that drop part of
+  the contract fail CI.
+- `theta_draws` and `doc_lengths` on the remaining Dirichlet models (DMR, SAGE,
+  PA, PT, HDP, LabeledLDA, SupervisedLDA), so `composition_theta`,
+  `standard_errors`, and `predicted_prevalence` work for them with no `corpus=`
+  re-thread. SupervisedLDA draws from its variational Dirichlet posterior.
+- Held-out `transform` on KeyATM, SeededLDA, SAGE, PA, and PT, so held-out
+  perplexity, `eval_heldout`, and out-of-sample inference now work for the
+  keyword, seeded, and anchored models.
+- Settable `topic_names` on every estimator (default `["topic_0", ...]`).
+- `coherence`, `save`/`load`, and `doc_names` on the neural and cluster models
+  (ETM, FASTopic, ProdLDA, BERTopic, Top2Vec) where they were missing.
+
+### Changed
+
+- **Breaking:** the fit iteration count is the canonical keyword `iters` on every
+  estimator (previously `iterations` for the collapsed-Gibbs models and
+  `em_iters` for the variational ones); `search_k` likewise takes `iters`. No
+  deprecation aliases.
+- **Breaking:** ETM, ProdLDA, and FASTopic take the training length as
+  `fit(iters=...)` rather than a constructor `epochs` / `em_iters` argument.
+
 ## [0.13.0] - 2026-06-10
 
 ### Added
