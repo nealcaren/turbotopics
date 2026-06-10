@@ -65,6 +65,9 @@ pub struct PamModel {
     pub ndsk: Vec<Vec<Vec<u32>>>, // D × S × K  doc ↦ (super, sub) counts
     pub zs: Vec<Vec<usize>>, // per-document token super-topic assignments
     pub zk: Vec<Vec<usize>>, // per-document token sub-topic assignments
+    /// Thinned θ draws (num_draws, D, K): sub-topic proportions marginalized
+    /// over super-topics at each snapshot. Empty when draw_cap=0.
+    pub theta_draws: Vec<Vec<Vec<f32>>>,
 }
 
 impl PamModel {
@@ -257,18 +260,44 @@ pub fn fit_pam<R: Rng>(
     iters: usize,
     rng: &mut R,
 ) -> PamModel {
+    // Plain fit is the draw-collecting fit with collection disabled, so the
+    // sampler lives in exactly one place (see `fit_pam_with_draws`).
+    fit_pam_with_draws(
+        docs, num_types, num_super, num_sub, alpha, beta, iters,
+        crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+        rng,
+    )
+}
+
+/// Fit a PAM with thinned θ snapshots (sub-topic proportions, marginalized over
+/// super-topics) collected every `thin` sweeps, ring-buffered to `cap` draws.
+/// `cap=0` disables collection entirely.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_pam_with_draws<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_super: usize,
+    num_sub: usize,
+    alpha: f64,
+    beta: f64,
+    iters: usize,
+    opts: crate::keyatm::ThetaDrawOpts,
+    rng: &mut R,
+) -> PamModel {
     let d = docs.len();
+    let k = num_sub;
+
     // Break the super-topic label symmetry with a structured prior: super-topic
-    // `s` is seeded to mildly prefer the contiguous slice of sub-topics around
-    // `s·K/S`. This only biases *which super-topic owns which sub-topic slots* —
-    // the sub-topic ↔ vocabulary mapping is still learned from the data, and the
-    // asymmetric-α re-estimate is free to move the preference. Without some such
-    // break the two super-topics are a priori exchangeable and never specialize.
+    // `s` mildly prefers the contiguous slice of sub-topics around `s·K/S`. This
+    // only biases which super-topic owns which sub-topic slots; the sub-topic to
+    // vocabulary mapping is still learned, and the asymmetric-alpha re-estimate
+    // can move the preference. Without it the super-topics stay exchangeable and
+    // never specialize.
     let alpha_sk: Vec<Vec<f64>> = (0..num_super)
         .map(|s| {
             (0..num_sub)
-                .map(|k| {
-                    let owner = (k * num_super) / num_sub; // which super-topic "owns" sub k
+                .map(|kk| {
+                    let owner = (kk * num_super) / num_sub;
                     if owner == s { alpha * 5.0 } else { alpha }
                 })
                 .collect()
@@ -287,13 +316,9 @@ pub fn fit_pam<R: Rng>(
         ndsk: vec![vec![vec![0u32; num_sub]; num_super]; d],
         zs: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
         zk: docs.iter().map(|doc| vec![0usize; doc.len()]).collect(),
+        theta_draws: Vec::new(),
     };
 
-    // Initialization. Each *document* is assigned a single random super-topic for
-    // all of its tokens (committed-document init), while sub-topics are random per
-    // token. Committing a document to one super-topic at the start gives the
-    // super-topic layer something to specialize on; the Gibbs sweeps and the
-    // asymmetric-α estimate then sort out which super-topic owns which sub-topics.
     for (di, doc) in docs.iter().enumerate() {
         let s = (rng.gen::<f64>() * num_super as f64) as usize % num_super;
         for (i, &w) in doc.iter().enumerate() {
@@ -308,15 +333,29 @@ pub fn fit_pam<R: Rng>(
         }
     }
 
-    // Burn in with the structured prior fixed so the super-topics lock onto a
-    // stable, consistent labeling first; only then start sharpening each α_s
-    // toward the grouping the data has settled into (running the adaptive update
-    // from iteration 0 would merely reinforce the random initial labeling).
     let adapt_after = iters - iters / 4;
     for it in 0..iters {
         model.sweep(docs, rng);
         if it >= adapt_after {
             model.estimate_alpha_sk();
+        }
+        let iter = it + 1;
+        if opts.thin > 0 && iter % opts.thin == 0 {
+            let snap: Vec<Vec<f32>> = model.ndsk.iter().map(|doc| {
+                let mut row = vec![0.0f64; k];
+                for sub in 0..k {
+                    let total: u32 = (0..model.num_super).map(|s| doc[s][sub]).sum();
+                    row[sub] = total as f64 + model.alpha;
+                }
+                let s: f64 = row.iter().sum();
+                row.iter().map(|&x| (if s > 0.0 { x / s } else { 1.0 / k as f64 }) as f32).collect()
+            }).collect();
+            if model.theta_draws.len() < opts.cap {
+                model.theta_draws.push(snap);
+            } else {
+                model.theta_draws.remove(0);
+                model.theta_draws.push(snap);
+            }
         }
     }
 

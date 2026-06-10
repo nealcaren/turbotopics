@@ -203,21 +203,6 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("PA",           "transform"): "phase 6: add transform (sub-topic held-out inference)",
     ("PT",           "transform"): "phase 6: add transform (pseudo-topic held-out inference)",
 
-    # --- Phase 5: add theta_draws + doc_lengths to remaining Gibbs models ---
-    ("DMR",          "theta_draws"):    "phase 5: add theta_draws to DMR (retained MCMC draws)",
-    ("DMR",          "doc_lengths"):    "phase 5: add doc_lengths to DMR",
-    ("SAGE",         "theta_draws"):    "phase 5: add theta_draws to SAGE",
-    ("SAGE",         "doc_lengths"):    "phase 5: add doc_lengths to SAGE",
-    ("PA",           "theta_draws"):    "phase 5: add theta_draws to PA",
-    ("PA",           "doc_lengths"):    "phase 5: add doc_lengths to PA",
-    ("PT",           "theta_draws"):    "phase 5: add theta_draws to PT",
-    ("PT",           "doc_lengths"):    "phase 5: add doc_lengths to PT",
-    ("HDP",          "theta_draws"):    "phase 5: add theta_draws to HDP",
-    ("HDP",          "doc_lengths"):    "phase 5: add doc_lengths to HDP",
-    ("LabeledLDA",   "theta_draws"):    "phase 5: add theta_draws to LabeledLDA",
-    ("LabeledLDA",   "doc_lengths"):    "phase 5: add doc_lengths to LabeledLDA",
-    ("SupervisedLDA","theta_draws"):    "phase 5: add theta_draws to SupervisedLDA",
-    ("SupervisedLDA","doc_lengths"):    "phase 5: add doc_lengths to SupervisedLDA",
 }
 
 # ---------------------------------------------------------------------------

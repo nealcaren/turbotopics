@@ -64,6 +64,9 @@ pub struct PtmModel {
     pub l: Vec<usize>,
     /// z[d][i]: topic assignment for each token
     pub z: Vec<Vec<usize>>,
+    /// Thinned θ draws (num_draws, D, K): each doc inherits its pseudo-doc's
+    /// Dirichlet-smoothed distribution at each snapshot. Empty when draw_cap=0.
+    pub theta_draws: Vec<Vec<Vec<f32>>>,
 }
 
 impl PtmModel {
@@ -249,13 +252,34 @@ pub fn fit_ptm<R: Rng>(
     iters: usize,
     rng: &mut R,
 ) -> PtmModel {
+    // Plain fit is the draw-collecting fit with collection disabled, so the
+    // sampler lives in exactly one place (see `fit_ptm_with_draws`).
+    fit_ptm_with_draws(
+        docs, num_types, num_topics, num_pseudo, alpha, beta, iters,
+        crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+        rng,
+    )
+}
+
+/// Fit a PTM with thinned θ snapshots collected every `thin` sweeps (ring-buffered
+/// to `cap` total draws). `cap=0` disables collection entirely.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_ptm_with_draws<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_topics: usize,
+    num_pseudo: usize,
+    alpha: f64,
+    beta: f64,
+    iters: usize,
+    opts: crate::keyatm::ThetaDrawOpts,
+    rng: &mut R,
+) -> PtmModel {
     let d_count = docs.len();
     let k = num_topics;
     let p = num_pseudo;
     let v = num_types;
 
-    // --- Initialisation ---
-    // Each document is assigned to a random pseudo-doc; each token to a random topic.
     let l: Vec<usize> = (0..d_count).map(|_| (rng.gen::<f64>() * p as f64) as usize % p).collect();
     let z: Vec<Vec<usize>> = docs
         .iter()
@@ -294,10 +318,24 @@ pub fn fit_ptm<R: Rng>(
         np,
         l,
         z,
+        theta_draws: Vec::new(),
     };
 
-    for _ in 0..iters {
+    for iter in 1..=iters {
         model.sweep(docs, rng);
+        if opts.thin > 0 && iter % opts.thin == 0 {
+            let snap: Vec<Vec<f32>> = model.l.iter().map(|&pd| {
+                let denom = model.np[pd] as f64 + k as f64 * model.alpha;
+                (0..k).map(|kk| ((model.npk[pd][kk] as f64 + model.alpha) / denom) as f32).collect()
+            }).collect();
+            if model.theta_draws.len() < opts.cap {
+                model.theta_draws.push(snap);
+            } else {
+                // ring-buffer: pop oldest, push newest
+                model.theta_draws.remove(0);
+                model.theta_draws.push(snap);
+            }
+        }
     }
 
     model

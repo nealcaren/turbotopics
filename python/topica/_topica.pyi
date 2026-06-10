@@ -193,6 +193,8 @@ class DMR:
         sample_interval: int = 25,
         progress: object | None = None,
         progress_interval: int = 50,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit by collapsed Gibbs with the per-document Dirichlet prior
         alpha_{d,t} = exp(lambda_t . x_d). `features` is required: an (num_docs, F)
@@ -216,6 +218,17 @@ class DMR:
     def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
         """The baseline document-topic Dirichlet prior alpha, shape (num_topics,):
         exp(lambda_intercept), the per-topic prior at covariates = 0."""
+        ...
+
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), float32,
+        or None when keep_theta_draws=False."""
+        ...
+
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
 
     @property
@@ -524,6 +537,8 @@ class HDP:
         *,
         iters: int = 150,
         report_interval: int = 0,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`.
 
@@ -554,6 +569,16 @@ class HDP:
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
         """Document-topic matrix, shape (num_docs, num_topics); rows sum to 1."""
+        ...
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Theta draws sampled from Dirichlet(njk[d]+alpha*beta[k]) after the chain
+        ends, shape (num_draws, num_docs, num_topics), or None when
+        keep_theta_draws=False."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
     @property
     def num_topics(self) -> int:
@@ -692,6 +717,8 @@ class SupervisedLDA:
         *,
         iters: int = 25,
         var_iters: int = 15,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit by variational EM. `y` is the per-document response (length =
         number of documents)."""
@@ -711,6 +738,15 @@ class SupervisedLDA:
     @property
     def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
         """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Theta draws sampled from Dirichlet(gamma_d) at fit end, shape
+        (num_draws, num_docs, num_topics), or None when keep_theta_draws=False."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
     @property
     def coefficients(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -786,6 +822,8 @@ class SAGE:
         sample_interval: int = 25,
         progress: Optional[object] = None,
         progress_interval: int = 50,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit. groups is one group label per document (strings or ints);
         group_names fixes group order (default: sorted union)."""
@@ -811,6 +849,17 @@ class SAGE:
         """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,).
         SAGE's sparse additive parameterization is on the word side; the document
         side is an ordinary Dirichlet."""
+        ...
+
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), float32,
+        or None when keep_theta_draws=False."""
+        ...
+
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
 
     @property
@@ -868,6 +917,8 @@ class LabeledLDA:
         sample_interval: int = 25,
         progress: Optional[object] = None,
         progress_interval: int = 50,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit the model. labels is one label-list per document; the topic set is
         the union of all labels (or label_names, which fixes topic order). An
@@ -888,6 +939,17 @@ class LabeledLDA:
     @property
     def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
         """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), float32,
+        or None when keep_theta_draws=False."""
+        ...
+
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
 
     @property
@@ -1191,7 +1253,14 @@ class PT:
         beta: float = 0.01,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 1000) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 1000,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
+    ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1199,6 +1268,15 @@ class PT:
     @property
     def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
         """The symmetric document-topic Dirichlet prior alpha, shape (num_topics,)."""
+        ...
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), float32,
+        or None when keep_theta_draws=False."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -1298,7 +1376,14 @@ class PA:
         beta: float = 0.01,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 1000) -> None: ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int = 1000,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
+    ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
         """Sub-topic word matrix, shape (num_sub, num_words); rows sum to 1."""
@@ -1310,6 +1395,15 @@ class PA:
     @property
     def alpha(self) -> numpy.typing.NDArray[numpy.float64]:
         """The symmetric sub-topic Dirichlet prior alpha, shape (num_sub,)."""
+        ...
+    @property
+    def theta_draws(self) -> numpy.typing.NDArray[numpy.float32] | None:
+        """Thinned MCMC theta draws (sub-topic proportions), shape
+        (num_draws, num_docs, num_sub), or None when keep_theta_draws=False."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
         ...
     @property
     def super_sub(self) -> numpy.typing.NDArray[numpy.float64]:
