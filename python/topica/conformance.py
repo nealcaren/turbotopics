@@ -178,21 +178,6 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("ProdLDA",      "iters"): "phase 2: expose iters in ProdLDA.fit (currently none)",
     ("FASTopic",     "iters"): "phase 2: expose iters in FASTopic.fit (currently none)",
 
-    # --- Phase 3: add topic_names to all models that lack it ---
-    ("LDA",          "topic_names"): "phase 3: add topic_names property to LDA",
-    ("DMR",          "topic_names"): "phase 3: add topic_names property to DMR",
-    ("SAGE",         "topic_names"): "phase 3: add topic_names property to SAGE",
-    ("PA",           "topic_names"): "phase 3: add topic_names property to PA",
-    ("PT",           "topic_names"): "phase 3: add topic_names property to PT",
-    ("HDP",          "topic_names"): "phase 3: add topic_names property to HDP",
-    ("LabeledLDA",   "topic_names"): "phase 3: add topic_names property to LabeledLDA",
-    ("SupervisedLDA","topic_names"): "phase 3: add topic_names property to SupervisedLDA",
-    ("STM",          "topic_names"): "phase 3: add topic_names property to STM",
-    ("CTM",          "topic_names"): "phase 3: add topic_names property to CTM",
-    ("HLDA",         "topic_names"): "phase 3: add topic_names property to HLDA (tree nodes)",
-    ("DTM",          "topic_names"): "phase 3: add topic_names property to DTM",
-    ("GSDMM",        "topic_names"): "phase 3: add topic_names to GSDMM (it has doc_topic + num_topics)",
-
     # --- Phase 4: universal members on the neural / cluster models ---
     ("ETM",          "doc_names"):  "phase 4: add doc_names property to ETM",
     ("ETM",          "coherence"):  "phase 4: add coherence method to ETM",
