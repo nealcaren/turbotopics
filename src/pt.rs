@@ -230,6 +230,50 @@ impl PtmModel {
 // Public fit function
 // ---------------------------------------------------------------------------
 
+impl PtmModel {
+    /// Collapsed Gibbs log-likelihood for the sub-topic (word) layer.
+    /// Marginalizes the pseudo-document layer: uses Σ_p n_{pk} as the
+    /// pseudo-doc-pooled sub-topic prior. This is a cheap and informative
+    /// per-sweep objective; it does not integrate the pseudo-doc assignment.
+    pub fn log_likelihood(&self) -> f64 {
+        use crate::optimize::digamma;
+        let k = self.num_topics;
+        let v = self.num_types;
+        let p = self.num_pseudo;
+        let k_alpha = k as f64 * self.alpha;
+        let v_beta = v as f64 * self.beta;
+        let mut ll = 0.0f64;
+
+        // Pseudo-document contribution.
+        for pp in 0..p {
+            let n_p = self.np[pp] as f64;
+            if n_p == 0.0 {
+                continue;
+            }
+            for kk in 0..k {
+                let n_pk = self.npk[pp][kk] as f64;
+                if n_pk > 0.0 {
+                    ll += digamma(self.alpha + n_pk) - digamma(self.alpha);
+                }
+            }
+            ll -= digamma(k_alpha + n_p) - digamma(k_alpha);
+        }
+
+        // Topic-word contribution.
+        for kk in 0..k {
+            for w in 0..v {
+                let n_kw = self.nkw[kk][w] as f64;
+                if n_kw > 0.0 {
+                    ll += digamma(self.beta + n_kw) - digamma(self.beta);
+                }
+            }
+            ll -= digamma(v_beta + self.nk[kk] as f64) - digamma(v_beta);
+        }
+
+        ll
+    }
+}
+
 /// Fit a Pseudo-Document Topic Model (PTM) by collapsed Gibbs sampling.
 ///
 /// # Arguments
@@ -254,15 +298,19 @@ pub fn fit_ptm<R: Rng>(
 ) -> PtmModel {
     // Plain fit is the draw-collecting fit with collection disabled, so the
     // sampler lives in exactly one place (see `fit_ptm_with_draws`).
-    fit_ptm_with_draws(
+    let (model, _, _) = fit_ptm_with_draws(
         docs, num_types, num_topics, num_pseudo, alpha, beta, iters,
         crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+        0.0, 0,
         rng,
-    )
+    );
+    model
 }
 
 /// Fit a PTM with thinned θ snapshots collected every `thin` sweeps (ring-buffered
 /// to `cap` total draws). `cap=0` disables collection entirely.
+///
+/// Returns `(model, ll_history, converged)`.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_ptm_with_draws<R: Rng>(
     docs: &[Vec<u32>],
@@ -273,8 +321,10 @@ pub fn fit_ptm_with_draws<R: Rng>(
     beta: f64,
     iters: usize,
     opts: crate::keyatm::ThetaDrawOpts,
+    convergence_tol: f64,
+    check_every: usize,
     rng: &mut R,
-) -> PtmModel {
+) -> (PtmModel, Vec<(usize, f64)>, bool) {
     let d_count = docs.len();
     let k = num_topics;
     let p = num_pseudo;
@@ -321,6 +371,9 @@ pub fn fit_ptm_with_draws<R: Rng>(
         theta_draws: Vec::new(),
     };
 
+    let mut ll_history: Vec<(usize, f64)> = Vec::new();
+    let mut converged = false;
+
     for iter in 1..=iters {
         model.sweep(docs, rng);
         if opts.thin > 0 && iter % opts.thin == 0 {
@@ -336,9 +389,22 @@ pub fn fit_ptm_with_draws<R: Rng>(
                 model.theta_draws.push(snap);
             }
         }
+        // Trace recording and optional convergence check (never alters RNG).
+        if check_every > 0 && iter % check_every == 0 {
+            let ll = model.log_likelihood();
+            ll_history.push((iter, ll));
+            if convergence_tol > 0.0 && ll_history.len() >= 2 {
+                let prev = ll_history[ll_history.len() - 2].1;
+                let rel = (ll - prev).abs() / (prev.abs() + 1e-12);
+                if rel < convergence_tol {
+                    converged = true;
+                    break;
+                }
+            }
+        }
     }
 
-    model
+    (model, ll_history, converged)
 }
 
 // ---------------------------------------------------------------------------

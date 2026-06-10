@@ -1,4 +1,4 @@
-"""Uniform convergence interface tests (issue #46 Part A).
+"""Uniform convergence interface tests (issue #46 Parts A and B).
 
 Every topica estimator must expose:
   - fit_history: list[(int, float)] -- (iteration, objective) pairs
@@ -6,8 +6,7 @@ Every topica estimator must expose:
 
 Tier 0 class-level presence is verified by test_conformance.py.  This file
 does the fitted-model checks: correct types, non-empty trace where expected,
-early-stop semantics, and the Part B xfail markers for models whose trace is
-not yet wired.
+and early-stop semantics.
 """
 
 from __future__ import annotations
@@ -25,25 +24,12 @@ _ANIMAL = ["cat", "dog", "fish", "cat", "dog"]
 _SPACE  = ["planet", "star", "moon", "rocket", "planet"]
 _TOY    = [list(_ANIMAL) for _ in range(15)] + [list(_SPACE) for _ in range(15)]
 
-# ---------------------------------------------------------------------------
-# Models that return an empty fit_history by design (issue #46 part B)
-# ---------------------------------------------------------------------------
-
-# These seven parametric-Gibbs models have the fit_history attribute (hasattr
-# passes in test_conformance.py) but the per-iteration trace is not wired yet.
-# Each cell is xfail until part B ships.
-_PART_B_EMPTY_TRACE = {
-    "DMR", "SeededLDA", "LabeledLDA", "SAGE", "SupervisedLDA", "PA", "PT",
-}
-
 # Cluster models: fit_history == [] and converged is None by design (not a gap).
 _CLUSTER_MODELS = {"BERTopic", "Top2Vec"}
 
-# Models whose converged is always False (no early-stop logic yet in part A
-# beyond LDA, CTM, STM, ETM, ProdLDA, FASTopic).
+# Models whose converged is always False (no early-stop logic yet).
 # HDP and GSDMM stochastic Gibbs models return False (no tol criterion).
-# Part B gap models also return False.
-_CONVERGED_FALSE_ALWAYS = _PART_B_EMPTY_TRACE | {"HDP", "GSDMM", "KeyATM", "DTM", "HLDA"}
+_CONVERGED_FALSE_ALWAYS = {"HDP", "GSDMM", "KeyATM", "DTM", "HLDA"}
 
 # ---------------------------------------------------------------------------
 # Helpers to build a minimal fitted instance for any registry model
@@ -64,25 +50,25 @@ def _fit_model(name: str, factory):
     # LabeledLDA: `labels` is list[list[str]] (one label-list per document)
     if name == "LabeledLDA":
         labels = [["animal"]] * 15 + [["space"]] * 15
-        model.fit(_TOY, labels, iters=5)
+        model.fit(_TOY, labels, iters=20, check_every=10)
         return model
 
     # SupervisedLDA: positional `y` is a per-document real-valued response
     if name == "SupervisedLDA":
         y = [0.0] * 15 + [1.0] * 15
-        model.fit(_TOY, y, iters=5)
+        model.fit(_TOY, y, iters=10, check_every=1)
         return model
 
     # DMR: positional `features` is a numeric (num_docs, F) covariate matrix
     if name == "DMR":
         features = np.array([[1.0, 0.0]] * 15 + [[0.0, 1.0]] * 15)
-        model.fit(_TOY, features, iters=5)
+        model.fit(_TOY, features, iters=20, check_every=10)
         return model
 
     # SAGE: positional `groups` is a per-document group label
     if name == "SAGE":
         groups = ["animal"] * 15 + ["space"] * 15
-        model.fit(_TOY, groups, iters=5)
+        model.fit(_TOY, groups, iters=20, check_every=10)
         return model
 
     # STM: at minimum supply a prevalence covariate (else it errors)
@@ -209,10 +195,6 @@ def test_fit_history_non_empty(name, factory, family):
     # HLDA: no flat K-topic trace
     if name == "HLDA":
         pytest.skip("HLDA: no flat K-topic objective trace")
-
-    # Part B models: attribute exists, trace is empty (not yet wired)
-    if name in _PART_B_EMPTY_TRACE:
-        pytest.xfail(f"issue #46 part B: {name} per-iteration trace not yet wired")
 
     model = _fit_model(name, factory)
     h = model.fit_history
