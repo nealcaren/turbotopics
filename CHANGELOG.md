@@ -6,6 +6,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-10
+
+### Added
+
+- The Gibbs/Dirichlet models (`LDA`, `KeyATM` base/covariate/dynamic,
+  `SeededLDA`) retain thinned post-burn-in MCMC document-topic draws as
+  `model.theta_draws` (shape `(num_draws, num_docs, num_topics)`, f32). On by
+  default (`keep_theta_draws=True`, `num_theta_draws=25`); pass
+  `keep_theta_draws=False` to skip the store. `composition_theta` (and
+  `standard_errors` / `estimate_effect` with `method="composition"`) prefers
+  these real cross-sweep posterior samples over the within-document Dirichlet
+  approximation, and needs no `corpus=` when they are present. Retention rides
+  on sweeps that already run, so it adds negligible fit time (#31).
+- The same models expose `model.doc_lengths` (per-document token counts, in
+  `doc_topic` row order), so the Dirichlet-approximation fallback is also
+  self-sufficient: `composition_theta(model)` works without re-threading the
+  `Corpus`, even with `keep_theta_draws=False`. Passing `corpus=` still takes
+  precedence (#32).
+
+### Changed
+
+- Standard errors for the Gibbs models now reflect genuine topic-estimation
+  uncertainty (the cross-sweep posterior variance of theta), which grows when
+  topics overlap and shrinks when the model is confident. Values therefore
+  differ from 0.12.1, where the Dirichlet approximation added length-only
+  `1/N_d` sampling noise regardless of identifiability; the new intervals can be
+  wider or narrower depending on the corpus. Fit with `keep_theta_draws=False`
+  to recover the prior approximation behavior.
+
 ## [0.12.1] - 2026-06-08
 
 ### Fixed
