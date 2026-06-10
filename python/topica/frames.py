@@ -8,6 +8,8 @@ prevalence regression. These helpers keep text and metadata bound together.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from . import Corpus, tokenize
 
 
@@ -83,6 +85,176 @@ def from_dataframe(
     else:
         corpus.metadata = df.iloc[idx][cols].reset_index(drop=True)
     return corpus
+
+
+def prep_documents(
+    corpus,
+    meta=None,
+    *,
+    lower_thresh=1,
+    upper_thresh=None,
+    rm_top=0,
+):
+    """Filter rare (and optionally common) vocabulary from a corpus while keeping
+    metadata row-aligned with the documents that survive.
+
+    This is topica's analogue of R ``stm``'s ``prepDocuments``. Terms that appear
+    in fewer than ``lower_thresh`` documents are dropped from the vocabulary; after
+    dropping, documents that become empty are removed. The ``meta`` frame is
+    subsetted to exactly the rows of the surviving documents, so the returned
+    corpus and metadata stay one-to-one and in the same order. Feeding the returned
+    meta straight into an STM prevalence design requires no further alignment.
+
+    Parameters
+    ----------
+    corpus : Corpus
+        A :class:`~topica.Corpus` built by :func:`~topica.Corpus.from_documents`
+        or :func:`~topica.from_dataframe`.  The corpus may already carry a
+        ``corpus.metadata`` attribute; if ``meta`` is also supplied, ``meta``
+        takes precedence and ``corpus.metadata`` is ignored.
+    meta : pandas.DataFrame, polars.DataFrame, sequence, or numpy.ndarray, optional
+        Per-document covariates, one entry per document in ``corpus`` (before this
+        call's filtering).  Accepts a pandas or Polars DataFrame, a numpy array,
+        or a plain list/sequence. When ``None``, ``corpus.metadata`` is used if
+        present; the returned metadata may then be ``None`` if neither is set.
+    lower_thresh : int, default 1
+        Minimum document frequency for a term to be kept.  Terms appearing in
+        fewer than ``lower_thresh`` documents are removed.  ``lower_thresh=1``
+        keeps all terms (no filtering); ``lower_thresh=2`` drops hapax legomena.
+    upper_thresh : int or None, default None
+        Maximum document frequency for a term to be kept.  Terms appearing in more
+        than ``upper_thresh`` documents are removed.  ``None`` disables the upper
+        bound.  Passed as ``rm_top`` is handled separately; ``upper_thresh`` is a
+        raw count ceiling.
+    rm_top : int, default 0
+        Number of the most-frequent terms to remove (regardless of count).
+        Mirrors :func:`~topica.Corpus.from_documents`'s ``rm_top`` parameter.
+
+    Returns
+    -------
+    filtered_corpus : Corpus
+        A new corpus with the rare-term vocabulary and empty documents removed.
+        ``filtered_corpus.kept_indices`` reports which of the *input corpus's*
+        document positions survived; ``filtered_corpus.doc_lengths`` is parallel to
+        the returned ``filtered_meta`` rows.
+    filtered_meta : same type as ``meta``, or None
+        The subset of ``meta`` (or ``corpus.metadata``) rows corresponding to the
+        surviving documents, in the same order.  Guaranteed
+        ``len(filtered_meta) == len(filtered_corpus.doc_lengths)`` when meta is not
+        None.
+    """
+    # Resolve which metadata to use
+    if meta is None:
+        meta = getattr(corpus, "metadata", None)
+
+    # Get the token-list representation of the current corpus
+    docs = corpus.documents()
+
+    # Compute max_doc_fraction from upper_thresh
+    n_docs = len(docs)
+    if upper_thresh is not None and n_docs > 0:
+        max_doc_fraction = upper_thresh / n_docs
+    else:
+        max_doc_fraction = 1.0
+
+    # Build a new corpus applying the frequency thresholds
+    filtered = Corpus.from_documents(
+        docs,
+        min_doc_freq=lower_thresh,
+        max_doc_fraction=max_doc_fraction,
+        rm_top=rm_top,
+    )
+
+    # filtered.kept_indices are positions into `docs` (= the input corpus docs).
+    # Subset meta to those positions.
+    idx = filtered.kept_indices
+    if meta is not None:
+        if hasattr(meta, "iloc"):  # pandas DataFrame / Series
+            filtered_meta = meta.iloc[idx].reset_index(drop=True)
+        elif _is_polars(meta):  # polars DataFrame / Series
+            filtered_meta = meta[list(idx)]
+        else:
+            try:
+                import numpy as np
+                if isinstance(meta, np.ndarray):
+                    filtered_meta = meta[idx]
+                else:
+                    filtered_meta = [meta[i] for i in idx]
+            except ImportError:
+                filtered_meta = [meta[i] for i in idx]
+        filtered.metadata = filtered_meta
+    else:
+        filtered_meta = None
+
+    return filtered, filtered_meta
+
+
+def plot_removed(corpus, thresholds, *, ax=None):
+    """Sweep document-frequency thresholds and plot how many documents and words
+    are removed at each level (R ``stm``'s ``plotRemoved``).
+
+    For each threshold value in ``thresholds``, :func:`prep_documents` is called
+    and the number of removed documents and removed vocabulary terms is recorded.
+    The result is a two-line chart that helps you choose a threshold: a very low
+    threshold removes few items; a high threshold may eliminate many documents whose
+    only terms are rare, which would corrupt a downstream covariate analysis.
+
+    Parameters
+    ----------
+    corpus : Corpus
+        The corpus to sweep. Passed unchanged to :func:`prep_documents` at each
+        threshold.
+    thresholds : sequence of int
+        Document-frequency thresholds to evaluate (x-axis). Typically a range
+        such as ``range(1, 10)``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw into. When ``None`` a new figure is created.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The primary axes (left y-axis = documents removed; right y-axis = words
+        removed).
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "plot_removed needs matplotlib (pip install matplotlib)."
+        ) from e
+
+    thresholds = list(thresholds)
+    n_docs_orig = corpus.num_docs
+    n_words_orig = corpus.num_words
+
+    docs_removed = []
+    words_removed = []
+    for t in thresholds:
+        filtered, _ = prep_documents(corpus, lower_thresh=t)
+        docs_removed.append(n_docs_orig - filtered.num_docs)
+        words_removed.append(n_words_orig - filtered.num_words)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 4))
+
+    (line_docs,) = ax.plot(
+        thresholds, docs_removed, color="C0", marker="o", label="documents removed"
+    )
+    ax.set_xlabel("lower threshold (minimum document frequency)")
+    ax.set_ylabel("documents removed", color="C0")
+    ax.tick_params(axis="y", labelcolor="C0")
+
+    ax2 = ax.twinx()
+    (line_words,) = ax2.plot(
+        thresholds, words_removed, color="C1", marker="s", label="words removed"
+    )
+    ax2.set_ylabel("words removed", color="C1")
+    ax2.tick_params(axis="y", labelcolor="C1")
+
+    lines = [line_docs, line_words]
+    ax.legend(lines, [l.get_label() for l in lines], loc="upper left")
+    ax.figure.tight_layout()
+    return ax
 
 
 def align(x, corpus):
