@@ -422,6 +422,8 @@ class STM:
         content_names: list[str] | None = None,
         iters: int = 500,
         em_tol: float = 1e-5,
+        gamma_prior: str = "pooled",
+        gamma_enet: float = 1.0,
     ) -> None:
         """Fit. prevalence is (num_docs, F) covariates driving topic proportions
         (mu_d = X_d gamma; intercept prepended). content is one group label per
@@ -431,7 +433,13 @@ class STM:
         EM stops once the relative change in the variational bound falls below
         em_tol (R stm's emtol) or after iters iterations, whichever comes
         first. Pass em_tol=0 to always run iters steps. Check converged and
-        bound afterward."""
+        bound afterward.
+
+        gamma_prior controls the prevalence-coefficient regression in the M-step:
+        "pooled" (default) uses ridge regression; "l1" uses an elastic-net path
+        with AIC-selected penalty, recommended for high-dimensional prevalence
+        designs. gamma_enet is the elastic-net mix (1.0 = pure lasso, values in
+        (0,1) add ridge; R stm's gamma.enet). Ignored when gamma_prior="pooled"."""
         ...
 
     @property

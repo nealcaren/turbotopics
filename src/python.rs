@@ -4776,7 +4776,7 @@ impl CTM {
         let (model, corpus) = py.allow_threads(move || {
             let m = ctm::fit_ctm(
                 &corpus.docs, k, num_types, iters, em_tol, shrink, None, None, spectral,
-                &mut rng,
+                ctm::GammaPrior::Pooled, &mut rng,
             );
             (m, corpus)
         });
@@ -5171,11 +5171,20 @@ impl STM {
     ///
     /// EM runs until the relative change in the variational bound drops below
     /// `em_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
-    /// whichever comes first — matching `stm`'s convergence behavior rather than
-    /// a fixed iteration count. Pass ``em_tol=0`` to always run `iters`
+    /// whichever comes first. Pass ``em_tol=0`` to always run `iters`
     /// steps. Inspect :attr:`converged` and :attr:`bound` after fitting.
+    ///
+    /// `gamma_prior` controls the prevalence-coefficient (γ) regression in the
+    /// M-step. ``"pooled"`` (default) uses ridge regression, matching R `stm`'s
+    /// ``gamma.prior="Pooled"`` path. ``"l1"`` fits an elastic-net path by
+    /// coordinate descent with the penalty selected by AIC — recommended when the
+    /// prevalence design is high-dimensional (many one-hot levels). `gamma_enet`
+    /// is the elastic-net mix: 1.0 is pure lasso, values in (0, 1) add a ridge
+    /// component (R `stm`'s ``gamma.enet``). `gamma_enet` is ignored when
+    /// `gamma_prior="pooled"`.
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
-                        content=None, content_names=None, iters=500, em_tol=1e-5))]
+                        content=None, content_names=None, iters=500, em_tol=1e-5,
+                        gamma_prior="pooled", gamma_enet=1.0))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5187,6 +5196,8 @@ impl STM {
         content_names: Option<Vec<String>>,
         iters: usize,
         em_tol: f64,
+        gamma_prior: &str,
+        gamma_enet: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -5284,6 +5295,19 @@ impl STM {
             content_groups = Some((idx, group_vocab.len()));
         }
 
+        let gprior = match gamma_prior {
+            "pooled" => ctm::GammaPrior::Pooled,
+            "l1" => {
+                if !(gamma_enet > 0.0 && gamma_enet <= 1.0) {
+                    return Err(PyValueError::new_err("gamma_enet must be in (0, 1]"));
+                }
+                ctm::GammaPrior::L1 { alpha: gamma_enet }
+            }
+            other => return Err(PyValueError::new_err(format!(
+                "gamma_prior must be \"pooled\" or \"l1\", got {:?}", other
+            ))),
+        };
+
         let k = self.num_topics;
         let num_types = corpus.num_types();
         let shrink = self.sigma_shrink;
@@ -5295,7 +5319,7 @@ impl STM {
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
             let m = ctm::fit_ctm(
                 &corpus.docs, k, num_types, iters, em_tol, shrink, prev_ref, cont_ref,
-                spectral, &mut rng,
+                spectral, gprior, &mut rng,
             );
             (m, corpus)
         });
