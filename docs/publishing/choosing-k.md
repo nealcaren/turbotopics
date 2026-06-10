@@ -44,7 +44,7 @@ import numpy as np
 held_out = test_docs                     # a held-out split for perplexity
 results = topica.search_k(
     train_docs, ks=[10, 15, 20, 25, 30],
-    held_out=held_out, iterations=800,
+    held_out=held_out, iters=800,
 )
 for r in results:
     print(f"K={r['k']:>3}  coherence={r['coherence']:.3f}  "

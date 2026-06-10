@@ -36,7 +36,7 @@ treatment = np.array([float(r["treatment"]) for r in rows]).reshape(-1, 1)
 print("treated:", int(treatment.sum()), "control:", int((1 - treatment).sum()))
 
 model = topica.STM(num_topics=3, seed=1)
-model.fit(docs, treatment, prevalence_names=["treatment"], em_iters=40)
+model.fit(docs, treatment, prevalence_names=["treatment"], iters=40)
 ```
 
 ```

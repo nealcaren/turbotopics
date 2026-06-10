@@ -69,7 +69,7 @@ class TestApi:
     def test_accepts_fitted_model(self, reference):
         docs = [["cat", "dog", "pet"]] * 20 + [["star", "moon", "sky"]] * 20
         m = LDA(num_topics=2, seed=1)
-        m.fit(docs, iterations=300)
+        m.fit(docs, iters=300)
         s = topica.coherence(m, docs, coherence_type="c_npmi", topn=3)
         assert s.shape == (2,)
         assert np.all(np.isfinite(s))
@@ -100,7 +100,7 @@ class TestDiversity:
     def test_accepts_model(self):
         docs = [["cat", "dog", "pet"]] * 20 + [["star", "moon", "sky"]] * 20
         m = LDA(num_topics=2, seed=1)
-        m.fit(docs, iterations=300)
+        m.fit(docs, iters=300)
         d = topica.topic_diversity(m, topn=3)
         assert 0.0 < d <= 1.0
 
@@ -115,7 +115,7 @@ class TestAnalysisContract:
     def test_duck_typed_model_works_without_top_words(self):
         docs = [["cat", "dog", "pet"]] * 30 + [["star", "moon", "sky"]] * 30
         m = LDA(num_topics=2, seed=1)
-        m.fit(docs, iterations=300)
+        m.fit(docs, iters=300)
 
         class Contract:  # the four members, NO top_words
             topic_word = m.topic_word

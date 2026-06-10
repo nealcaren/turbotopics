@@ -73,7 +73,7 @@ def main():
     # [3] Fit STM with prevalence covariates (treatment + party id).
     K = 3
     model = STM(num_topics=K, seed=1)
-    model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], em_iters=80)
+    model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], iters=80)
     print(f"[3] Fit STM with K={K}, prevalence = ~treatment + pid_rep")
 
     # [4] labelTopics: prob + FREX words per topic.

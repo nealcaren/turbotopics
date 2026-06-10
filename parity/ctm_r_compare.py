@@ -91,7 +91,7 @@ def run(verbose: bool = True) -> dict:
         r_rand2 = _read_r_beta(os.path.join(d, "r_rand2.csv"), r_vocab)
 
         model = CTM(num_topics=K, init="spectral")
-        model.fit(docs, em_iters=EM_ITERS)
+        model.fit(docs, iters=EM_ITERS)
         idx = {w: i for i, w in enumerate(model.vocabulary)}
         raw = np.asarray(model.topic_word)
         tt = np.zeros((K, len(r_vocab)))

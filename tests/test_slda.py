@@ -30,7 +30,7 @@ def _supervised_corpus(n=200, seed=0):
 def fitted():
     docs, y = _supervised_corpus()
     m = SupervisedLDA(num_topics=2, seed=7)
-    m.fit(docs, y, em_iters=25, var_iters=15)
+    m.fit(docs, y, iters=25, var_iters=15)
     return m, docs, y
 
 
@@ -96,9 +96,9 @@ class TestApi:
     def test_deterministic(self):
         docs, y = _supervised_corpus()
         a = SupervisedLDA(num_topics=2, seed=3)
-        a.fit(docs, y, em_iters=10, var_iters=10)
+        a.fit(docs, y, iters=10, var_iters=10)
         b = SupervisedLDA(num_topics=2, seed=3)
-        b.fit(docs, y, em_iters=10, var_iters=10)
+        b.fit(docs, y, iters=10, var_iters=10)
         assert np.array_equal(a.coefficients, b.coefficients)
         assert np.array_equal(a.topic_word, b.topic_word)
 
@@ -106,7 +106,7 @@ class TestApi:
         docs, y = _supervised_corpus(n=80)
         c = Corpus.from_documents(docs)
         m = SupervisedLDA(num_topics=2, seed=1)
-        m.fit(c, y, em_iters=8)
+        m.fit(c, y, iters=8)
         assert m.topic_word.shape[0] == 2
 
     def test_predict_ignores_oov(self, fitted):

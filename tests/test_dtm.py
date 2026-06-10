@@ -33,7 +33,7 @@ def fitted():
     # Looser chain_variance: the planted drift is abrupt, so the topic chain
     # needs room to move between slices.
     m = DTM(num_topics=2, chain_variance=0.5, seed=1)
-    m.fit(docs, times, em_iters=20)
+    m.fit(docs, times, iters=20)
     return m
 
 
@@ -122,9 +122,9 @@ class TestApi:
     def test_deterministic(self):
         docs, times, _ = _drift_corpus()
         a = DTM(num_topics=2, chain_variance=0.5, seed=2)
-        a.fit(docs, times, em_iters=12)
+        a.fit(docs, times, iters=12)
         b = DTM(num_topics=2, chain_variance=0.5, seed=2)
-        b.fit(docs, times, em_iters=12)
+        b.fit(docs, times, iters=12)
         for t in range(a.num_times):
             assert np.array_equal(a.topic_word(t), b.topic_word(t))
 
@@ -132,19 +132,19 @@ class TestApi:
         docs, times, _ = _drift_corpus()
         c = Corpus.from_documents(docs)
         m = DTM(num_topics=2, seed=1)
-        m.fit(c, times, em_iters=5)
+        m.fit(c, times, iters=5)
         assert m.num_times == 3
 
     def test_times_length_mismatch_raises(self):
         docs, times, _ = _drift_corpus()
         with pytest.raises(ValueError):
-            DTM(num_topics=2).fit(docs, times[:-1], em_iters=2)
+            DTM(num_topics=2).fit(docs, times[:-1], iters=2)
 
     def test_noncontiguous_slices_raise(self):
         docs, times, _ = _drift_corpus()
         bad = [t if t != 1 else 3 for t in times]  # slice 1 empty, slice 3 used
         with pytest.raises(ValueError):
-            DTM(num_topics=2).fit(docs, bad, em_iters=2)
+            DTM(num_topics=2).fit(docs, bad, iters=2)
 
     def test_unfitted_raises(self):
         m = DTM(num_topics=2)

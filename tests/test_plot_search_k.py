@@ -36,6 +36,6 @@ def test_missing_metric_raises():
 
 def test_real_search_k_output_plots():
     docs = [["cat", "dog", "fish"]] * 30 + [["sun", "moon", "star"]] * 30
-    rows = topica.search_k(docs, ks=[2, 3], iterations=80)
+    rows = topica.search_k(docs, ks=[2, 3], iters=80)
     ax = topica.plot_search_k(rows)
     assert ax is not None

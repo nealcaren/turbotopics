@@ -173,15 +173,7 @@ EXEMPT: dict[tuple[str, str], str] = {
 
 KNOWN_GAPS: dict[tuple[str, str], str] = {
 
-    # --- Phase 2: rename iteration param to iters ---
-    ("LDA",          "iters"): "phase 2: rename 'iterations' -> 'iters' in LDA.fit",
-    ("DMR",          "iters"): "phase 2: rename 'iterations' -> 'iters' in DMR.fit",
-    ("SAGE",         "iters"): "phase 2: rename 'iterations' -> 'iters' in SAGE.fit",
-    ("LabeledLDA",   "iters"): "phase 2: rename 'iterations' -> 'iters' in LabeledLDA.fit",
-    ("SupervisedLDA","iters"): "phase 2: rename 'em_iters' -> 'iters' in SupervisedLDA.fit",
-    ("STM",          "iters"): "phase 2: rename 'em_iters' -> 'iters' in STM.fit",
-    ("CTM",          "iters"): "phase 2: rename 'em_iters' -> 'iters' in CTM.fit",
-    ("DTM",          "iters"): "phase 2: rename 'em_iters' -> 'iters' in DTM.fit",
+    # --- Phase 2: rename iteration param to iters (ETM/ProdLDA/FASTopic deferred) ---
     ("ETM",          "iters"): "phase 2: expose iters in ETM.fit (currently none)",
     ("ProdLDA",      "iters"): "phase 2: expose iters in ProdLDA.fit (currently none)",
     ("FASTopic",     "iters"): "phase 2: expose iters in FASTopic.fit (currently none)",

@@ -20,7 +20,7 @@ def split():
 def test_perplexity_is_positive_and_finite(split):
     train, held = split
     m = topica.LDA(4, seed=1)
-    m.fit(train, iterations=300)
+    m.fit(train, iters=300)
     pp = topica.perplexity(m, held)
     assert np.isfinite(pp) and pp > 1.0
 
@@ -33,7 +33,7 @@ def test_perplexity_discriminates_k(split):
     pp = {}
     for k in (2, 4):
         m = topica.LDA(k, seed=1)
-        m.fit(train, iterations=300)
+        m.fit(train, iters=300)
         pp[k] = topica.perplexity(m, held)
     assert pp[4] < pp[2]
 
@@ -41,7 +41,7 @@ def test_perplexity_discriminates_k(split):
 def test_perplexity_accepts_corpus_and_variational(split):
     train, held = split
     m = topica.CTM(4, seed=1)
-    m.fit(train, em_iters=20)
+    m.fit(train, iters=20)
     corpus = topica.Corpus.from_documents(held)
     assert np.isfinite(topica.perplexity(m, corpus))
 
@@ -60,6 +60,6 @@ def test_perplexity_rejects_clustering_models(split):
 def test_perplexity_needs_scorable_documents(split):
     train, _ = split
     m = topica.LDA(4, seed=1)
-    m.fit(train, iterations=150)
+    m.fit(train, iters=150)
     with pytest.raises(ValueError, match="at least 2 tokens"):
         topica.perplexity(m, [["a0"], ["b1"]])  # single-token docs cannot be split

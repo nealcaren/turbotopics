@@ -52,14 +52,14 @@ class TestVariationalTransform:
     def test_ctm(self):
         docs, _ = _two_topic_corpus()
         m = topica.CTM(num_topics=2, seed=1)
-        m.fit(docs, em_iters=60)
+        m.fit(docs, iters=60)
         _check_basic(m.transform(NEW))
 
     def test_ctm_reproduces_training_theta(self):
         # The held-out E-step on the training docs matches the stored θ.
         docs, _ = _two_topic_corpus()
         m = topica.CTM(num_topics=2, seed=1)
-        m.fit(docs, em_iters=60)
+        m.fit(docs, iters=60)
         np.testing.assert_allclose(m.transform(docs), m.doc_topic, atol=1e-3)
 
     def test_stm_prevalence(self):
@@ -72,7 +72,7 @@ class TestVariationalTransform:
     def test_save_load_parity(self, tmp_path):
         docs, _ = _two_topic_corpus()
         m = topica.CTM(num_topics=2, seed=1)
-        m.fit(docs, em_iters=40)
+        m.fit(docs, iters=40)
         p = str(tmp_path / "ctm.tt")
         m.save(p)
         loaded = topica.CTM.load(p)
@@ -83,7 +83,7 @@ class TestGibbsTransform:
     def test_lda(self):
         docs, _ = _two_topic_corpus()
         m = topica.LDA(num_topics=2, seed=1)
-        m.fit(docs, iterations=300)
+        m.fit(docs, iters=300)
         _check_basic(m.transform(NEW))
 
     def test_hdp(self):
@@ -142,7 +142,7 @@ class TestGibbsTransform:
 def test_transform_accepts_corpus_object():
     docs, _ = _two_topic_corpus()
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=200)
+    m.fit(docs, iters=200)
     corpus = topica.Corpus.from_documents(NEW)
     theta = m.transform(corpus)
     assert theta.shape[0] == len(NEW)
@@ -151,5 +151,5 @@ def test_transform_accepts_corpus_object():
 def test_transform_deterministic():
     docs, _ = _two_topic_corpus()
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=200)
+    m.fit(docs, iters=200)
     np.testing.assert_array_equal(m.transform(NEW, seed=7), m.transform(NEW, seed=7))

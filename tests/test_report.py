@@ -19,7 +19,7 @@ def lda_corpus():
     timestamps = ([2019] * 10 + [2020] * 10) + ([2019] * 10 + [2020] * 10)
     groups = (["pets"] * 20) + (["sky"] * 20)
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=200)
+    m.fit(docs, iters=200)
     return m, docs, texts, timestamps, groups
 
 

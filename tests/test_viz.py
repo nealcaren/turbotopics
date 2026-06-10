@@ -34,7 +34,7 @@ def covariate_lda():
         docs.append(list(rng.choice(block, size=12)))
     corpus = topica.Corpus.from_documents(docs)
     m = topica.LDA(2, seed=1)
-    m.fit(corpus, iterations=300)
+    m.fit(corpus, iters=300)
     return m, corpus, x, [" ".join(d) for d in docs]
 
 
@@ -76,7 +76,7 @@ def test_every_panel_frames_and_renders(covariate_lda):
     panels = [
         viz.coherence_frontier(m, texts),
         viz.search_k(topica.search_k(
-            [t.split() for t in texts], [2, 3], iterations=80, num_samples=1)),
+            [t.split() for t in texts], [2, 3], iters=80, num_samples=1)),
         viz.effect_plot(m, corpus, X=x[:, None], feature_names=["x"], nsims=15),
         viz.term_barchart(m, topic=0, mode="frex", n=6),
         viz.topic_similarity(m),
@@ -163,7 +163,7 @@ def lda_k4():
         group.append(["north", "south"][g % 2])
         year.append(2000 + int(rng.integers(0, 3)))
     m = topica.LDA(4, seed=1)
-    m.fit(docs, iterations=300)
+    m.fit(docs, iters=300)
     return m, group, year, docs
 
 
@@ -226,7 +226,7 @@ def test_topic_correlation_eta_uses_model_sigma():
         base = ["a", "a", "b", "c"] if rng.random() < 0.5 else ["x", "y", "y", "z"]
         docs.append(list(rng.choice(base, size=10)))
     m = topica.CTM(3, seed=1)
-    m.fit(docs, em_iters=15)
+    m.fit(docs, iters=15)
     cov = m.topic_covariance
     assert cov.shape == (2, 2)                      # K-1, reference dropped
     cc = viz.topic_correlation(m, method="eta")
@@ -347,7 +347,7 @@ def sage_content():
         docs.append(list(rng.choice(base, size=8)))
         groups.append(["north", "south"][g])
     m = topica.SAGE(2, seed=1)
-    m.fit(docs, groups, iterations=300, num_samples=2)
+    m.fit(docs, groups, iters=300, num_samples=2)
     return m, [" ".join(d) for d in docs]
 
 
@@ -394,7 +394,7 @@ def test_interactive_browser():
     rng = np.random.default_rng(0)
     docs = [["a", "b", "c"]] * 15 + [["x", "y", "z"]] * 15
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=100)
+    m.fit(docs, iters=100)
     fig = viz.term_topic_browser(m, n=5)
     html = fig.to_html(full_html=False)
     assert "plotly" in html.lower()

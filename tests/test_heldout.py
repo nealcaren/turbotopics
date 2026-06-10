@@ -142,13 +142,13 @@ class TestEvalHeldout:
 
     def test_returns_heldoutresult_dataclass(self, heldout):
         m = topica.LDA(2, seed=1)
-        m.fit(heldout.documents, iterations=100)
+        m.fit(heldout.documents, iters=100)
         result = topica.eval_heldout(m, heldout)
         assert isinstance(result, HeldoutResult)
 
     def test_lda_finite_negative_loglik(self, heldout):
         m = topica.LDA(2, seed=1)
-        m.fit(heldout.documents, iterations=100)
+        m.fit(heldout.documents, iters=100)
         result = topica.eval_heldout(m, heldout)
         assert np.isfinite(result.mean_per_doc_loglik)
         assert result.mean_per_doc_loglik < 0.0
@@ -158,14 +158,14 @@ class TestEvalHeldout:
         rng = np.random.default_rng(3)
         prevalence = rng.normal(size=(D, 2))
         m = topica.STM(2, seed=1)
-        m.fit(heldout.documents, prevalence, em_iters=20)
+        m.fit(heldout.documents, prevalence, iters=20)
         result = topica.eval_heldout(m, heldout)
         assert np.isfinite(result.mean_per_doc_loglik)
         assert result.mean_per_doc_loglik < 0.0
 
     def test_ctm_finite_negative_loglik(self, heldout):
         m = topica.CTM(2, seed=1)
-        m.fit(heldout.documents, em_iters=20)
+        m.fit(heldout.documents, iters=20)
         result = topica.eval_heldout(m, heldout)
         assert np.isfinite(result.mean_per_doc_loglik)
         assert result.mean_per_doc_loglik < 0.0
@@ -175,14 +175,14 @@ class TestEvalHeldout:
         rng = np.random.default_rng(5)
         feats = rng.normal(size=(D, 2))
         m = topica.DMR(2, seed=1)
-        m.fit(heldout.documents, feats, iterations=100)
+        m.fit(heldout.documents, feats, iters=100)
         result = topica.eval_heldout(m, heldout)
         assert np.isfinite(result.mean_per_doc_loglik)
         assert result.mean_per_doc_loglik < 0.0
 
     def test_shapes_and_counts_consistent(self, heldout):
         m = topica.LDA(2, seed=1)
-        m.fit(heldout.documents, iterations=100)
+        m.fit(heldout.documents, iters=100)
         result = topica.eval_heldout(m, heldout)
         assert result.n_docs == len(result.per_doc_loglik)
         assert result.n_docs > 0
@@ -216,7 +216,7 @@ class TestEvalHeldout:
 
     def test_per_doc_loglik_all_negative(self, heldout):
         m = topica.LDA(2, seed=1)
-        m.fit(heldout.documents, iterations=100)
+        m.fit(heldout.documents, iters=100)
         result = topica.eval_heldout(m, heldout)
         assert np.all(result.per_doc_loglik < 0.0)
 
@@ -229,7 +229,7 @@ def test_roundtrip_lda():
     docs = _planted(n_per=60, doc_len=20, seed=0)
     h = topica.make_heldout(docs, prop_docs=0.3, prop_words=0.5, seed=42)
     m = topica.LDA(2, seed=1)
-    m.fit(h.documents, iterations=150)
+    m.fit(h.documents, iters=150)
     result = topica.eval_heldout(m, h)
     assert isinstance(result, HeldoutResult)
     assert result.n_docs > 0
@@ -243,7 +243,7 @@ def test_roundtrip_stm():
     rng = np.random.default_rng(7)
     prevalence = rng.normal(size=(len(h.documents), 2))
     m = topica.STM(2, seed=1)
-    m.fit(h.documents, prevalence, em_iters=20)
+    m.fit(h.documents, prevalence, iters=20)
     result = topica.eval_heldout(m, h)
     assert isinstance(result, HeldoutResult)
     assert result.mean_per_doc_loglik < 0.0
@@ -253,7 +253,7 @@ def test_roundtrip_ctm():
     docs = _planted(n_per=60, doc_len=20, seed=2)
     h = topica.make_heldout(docs, prop_docs=0.4, prop_words=0.5, seed=13)
     m = topica.CTM(2, seed=1)
-    m.fit(h.documents, em_iters=20)
+    m.fit(h.documents, iters=20)
     result = topica.eval_heldout(m, h)
     assert isinstance(result, HeldoutResult)
     assert result.mean_per_doc_loglik < 0.0
@@ -277,33 +277,33 @@ class TestSearchKHeldout:
 
     def test_lda_reports_perplexity_with_held_out(self, small_corpus_held_prevalence):
         docs, held, _ = small_corpus_held_prevalence
-        rows = topica.search_k(docs, [2], iterations=80, held_out=held, seed=0)
+        rows = topica.search_k(docs, [2], iters=80, held_out=held, seed=0)
         assert "perplexity" in rows[0]
         assert np.isfinite(rows[0]["perplexity"]) and rows[0]["perplexity"] > 1.0
 
     def test_stm_reports_perplexity_with_held_out(self, small_corpus_held_prevalence):
         docs, held, prevalence = small_corpus_held_prevalence
         rows = topica.search_k(docs, [2], model="stm", prevalence=prevalence,
-                               em_iters=10, held_out=held, seed=0)
+                               iters=10, held_out=held, seed=0)
         assert "perplexity" in rows[0]
         assert np.isfinite(rows[0]["perplexity"]) and rows[0]["perplexity"] > 1.0
 
     def test_lda_no_held_out_no_perplexity(self, small_corpus_held_prevalence):
         docs, _, _ = small_corpus_held_prevalence
-        rows = topica.search_k(docs, [2], iterations=80, seed=0)
+        rows = topica.search_k(docs, [2], iters=80, seed=0)
         assert "perplexity" not in rows[0]
 
     def test_stm_no_held_out_no_perplexity(self, small_corpus_held_prevalence):
         docs, _, prevalence = small_corpus_held_prevalence
         rows = topica.search_k(docs, [2], model="stm", prevalence=prevalence,
-                               em_iters=10, seed=0)
+                               iters=10, seed=0)
         assert "perplexity" not in rows[0]
 
     def test_existing_coherence_metric_label_intact(self, small_corpus_held_prevalence):
         docs, held, prevalence = small_corpus_held_prevalence
         for m_type, prev in (("lda", None), ("stm", prevalence)):
             rows = topica.search_k(docs, [2], model=m_type, prevalence=prev,
-                                   held_out=held, iterations=60, em_iters=8, seed=0)
+                                   held_out=held, iters=10, seed=0)
             assert rows[0]["coherence_metric"] == "u_mass"
 
 
@@ -318,10 +318,10 @@ def test_better_fit_scores_higher_loglik():
     h = topica.make_heldout(docs, prop_docs=0.5, prop_words=0.5, seed=0)
 
     m_good = topica.LDA(2, seed=1)
-    m_good.fit(h.documents, iterations=300)
+    m_good.fit(h.documents, iters=300)
 
     m_bad = topica.LDA(1, seed=1)
-    m_bad.fit(h.documents, iterations=300)
+    m_bad.fit(h.documents, iters=300)
 
     r_good = topica.eval_heldout(m_good, h)
     r_bad = topica.eval_heldout(m_bad, h)

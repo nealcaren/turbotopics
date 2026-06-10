@@ -77,10 +77,10 @@ def _make_bilingual_corpus(n_per_cell: int = 50, seed: int = 42):
 
 @pytest.fixture(scope="module")
 def bilingual_content_model():
-    """STM(2, seed=1) fitted content-only on the bilingual corpus (em_iters=60)."""
+    """STM(2, seed=1) fitted content-only on the bilingual corpus (iters=60)."""
     docs, groups = _make_bilingual_corpus(n_per_cell=50, seed=42)
     m = STM(num_topics=2, seed=1)
-    m.fit(docs, content=groups, em_iters=60)
+    m.fit(docs, content=groups, iters=60)
     return m
 
 
@@ -331,7 +331,7 @@ class TestSTMCombinedPrevalenceContent:
         x = np.array([1.0] * 100 + [0.0] * 100, dtype=np.float64).reshape(-1, 1)
 
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x, prevalence_names=["x"], content=groups, em_iters=60)
+        m.fit(docs, x, prevalence_names=["x"], content=groups, iters=60)
         return m, x
 
     def test_topic_word_by_group_shape(self, combined_model_and_x):
@@ -381,14 +381,14 @@ class TestSTMContentIntegerGroups:
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = [0] * 10 + [1] * 10
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, em_iters=10)
+        m.fit(docs, content=groups, iters=10)
         assert m.groups == ["0", "1"]
 
     def test_int_groups_fit_succeeds(self):
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = [0] * 10 + [1] * 10
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, em_iters=10)
+        m.fit(docs, content=groups, iters=10)
         assert m.topic_word_by_group.shape == (2, 2, 4)
 
 
@@ -402,7 +402,7 @@ class TestSTMContentNames:
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = ["en"] * 10 + ["de"] * 10
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, content_names=["en", "de"], em_iters=10)
+        m.fit(docs, content=groups, content_names=["en", "de"], iters=10)
         assert m.groups == ["en", "de"]
 
     def test_content_names_de_en_fixes_order(self):
@@ -410,7 +410,7 @@ class TestSTMContentNames:
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = ["en"] * 10 + ["de"] * 10
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, content_names=["de", "en"], em_iters=10)
+        m.fit(docs, content=groups, content_names=["de", "en"], iters=10)
         assert m.groups == ["de", "en"]
 
     def test_default_order_is_sorted(self):
@@ -418,7 +418,7 @@ class TestSTMContentNames:
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = ["en"] * 10 + ["de"] * 10
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, em_iters=10)
+        m.fit(docs, content=groups, iters=10)
         assert m.groups == ["de", "en"]   # sorted
 
 
@@ -436,27 +436,27 @@ class TestSTMContentValidation:
     def test_neither_prevalence_nor_content_raises_value_error(self):
         m = STM(num_topics=2, seed=1)
         with pytest.raises(ValueError, match="STM needs prevalence and/or content"):
-            m.fit(self.docs, em_iters=5)
+            m.fit(self.docs, iters=5)
 
     def test_content_length_mismatch_raises_value_error(self):
         m = STM(num_topics=2, seed=1)
         with pytest.raises(ValueError):
-            m.fit(self.docs, content=self.groups[:-1], em_iters=5)  # 19 groups, 20 docs
+            m.fit(self.docs, content=self.groups[:-1], iters=5)  # 19 groups, 20 docs
 
     def test_group_not_in_content_names_raises_value_error(self):
         m = STM(num_topics=2, seed=1)
         with pytest.raises(ValueError):
-            m.fit(self.docs, content=self.groups, content_names=["x", "y"], em_iters=5)
+            m.fit(self.docs, content=self.groups, content_names=["x", "y"], iters=5)
 
     def test_word_contrast_bad_topic_raises_value_error(self):
         m = STM(num_topics=2, seed=1)
-        m.fit(self.docs, content=self.groups, em_iters=10)
+        m.fit(self.docs, content=self.groups, iters=10)
         with pytest.raises(ValueError):
             m.word_contrast(99, "a", "b")
 
     def test_word_contrast_unknown_group_raises_value_error(self):
         m = STM(num_topics=2, seed=1)
-        m.fit(self.docs, content=self.groups, em_iters=10)
+        m.fit(self.docs, content=self.groups, iters=10)
         with pytest.raises(ValueError):
             m.word_contrast(0, "z", "a")
 
@@ -469,9 +469,9 @@ class TestSTMContentDeterminism:
     def test_same_seed_identical_topic_word_by_group(self):
         docs, groups = _make_bilingual_corpus(n_per_cell=20, seed=7)
         m1 = STM(num_topics=2, seed=42)
-        m1.fit(docs, content=groups, em_iters=20)
+        m1.fit(docs, content=groups, iters=20)
         m2 = STM(num_topics=2, seed=42)
-        m2.fit(docs, content=groups, em_iters=20)
+        m2.fit(docs, content=groups, iters=20)
         assert np.array_equal(m1.topic_word_by_group, m2.topic_word_by_group), (
             "Same seed must produce identical topic_word_by_group"
         )
@@ -479,9 +479,9 @@ class TestSTMContentDeterminism:
     def test_same_seed_identical_doc_topic(self):
         docs, groups = _make_bilingual_corpus(n_per_cell=20, seed=7)
         m1 = STM(num_topics=2, seed=42)
-        m1.fit(docs, content=groups, em_iters=20)
+        m1.fit(docs, content=groups, iters=20)
         m2 = STM(num_topics=2, seed=42)
-        m2.fit(docs, content=groups, em_iters=20)
+        m2.fit(docs, content=groups, iters=20)
         assert np.array_equal(m1.doc_topic, m2.doc_topic), (
             "Same seed must produce identical doc_topic"
         )

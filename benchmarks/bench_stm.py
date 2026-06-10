@@ -67,7 +67,7 @@ def synthetic_corpus(v, d, k_true, seed=0, length=TOKENS_PER_DOC):
 def time_topica(docs, x, k, iters):
     t0 = time.perf_counter()
     m = STM(num_topics=k, init="spectral", seed=1)
-    m.fit(docs, x, prevalence_names=["cov"], em_iters=iters)
+    m.fit(docs, x, prevalence_names=["cov"], iters=iters)
     return time.perf_counter() - t0
 
 

@@ -24,7 +24,7 @@ def _toy_docs(n=40, vocab=12, lo=8, hi=15, seed=0):
 def _fit_each(docs, *, keep=True, num_draws=25):
     out = {}
     m = topica.LDA(num_topics=4, seed=1)
-    m.fit(docs, iterations=120, keep_theta_draws=keep, num_theta_draws=num_draws)
+    m.fit(docs, iters=120, keep_theta_draws=keep, num_theta_draws=num_draws)
     out["LDA"] = m
     m = topica.SeededLDA({"a": ["w0", "w1"], "b": ["w5", "w6"]}, residual=2, seed=1)
     m.fit(docs, iters=120, keep_theta_draws=keep, num_theta_draws=num_draws)
@@ -93,7 +93,7 @@ def test_real_draws_capture_cross_sweep_variance():
     vocab = [f"w{i}" for i in range(24)]
     docs = [list(rng.choice(vocab, size=int(rng.integers(160, 240)))) for _ in range(40)]
     m = topica.LDA(num_topics=4, seed=2)
-    m.fit(docs, iterations=300, num_theta_draws=40)
+    m.fit(docs, iters=300, num_theta_draws=40)
 
     real = np.asarray(m.theta_draws, dtype=float)
     lengths = np.array([len(d) for d in docs], dtype=float)
@@ -116,7 +116,7 @@ def test_real_draws_reflect_identifiability():
         block = a if rng.random() < 0.5 else b
         docs.append(list(rng.choice(block, size=40)))
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(docs, iterations=250, num_theta_draws=40)
+    m.fit(docs, iters=250, num_theta_draws=40)
 
     real = np.asarray(m.theta_draws, dtype=float)
     lengths = np.array([len(d) for d in docs], dtype=float)
@@ -129,7 +129,7 @@ def test_real_draws_reflect_identifiability():
 def test_num_theta_draws_bounds_count():
     docs = _toy_docs()
     m = topica.LDA(num_topics=3, seed=1)
-    m.fit(docs, iterations=200, num_theta_draws=10)
+    m.fit(docs, iters=200, num_theta_draws=10)
     assert np.asarray(m.theta_draws).shape[0] == 10
 
 

@@ -82,7 +82,7 @@ def _fit_bilingual(docs, groups, seed=1):
     model.fit(
         docs,
         groups,
-        iterations=300,
+        iters=300,
         num_samples=3,
         sample_interval=10,
     )
@@ -187,26 +187,26 @@ class TestSAGEFitValidation:
 
     def test_top_words_topic_out_of_range_raises(self):
         model = SAGE(2, seed=1)
-        model.fit(self.docs, self.groups, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
             model.top_words(99)
 
     def test_top_words_unknown_group_name_raises(self):
         model = SAGE(2, seed=1)
-        model.fit(self.docs, self.groups, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
             model.top_words(0, group="z")
 
     def test_top_words_group_index_out_of_range_raises(self):
         model = SAGE(2, seed=1)
-        model.fit(self.docs, self.groups, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
             model.top_words(0, group=99)
 
     def test_word_contrast_topic_out_of_range_raises(self):
         model = SAGE(2, seed=1)
         model.fit(self.docs + [["bird"]], self.groups + ["b"],
-                  iterations=50, num_samples=1, sample_interval=5)
+                  iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
             model.word_contrast(99, "a", "b")
 
@@ -395,14 +395,14 @@ class TestSAGEIntegerGroups:
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = [0] * 10 + [1] * 10
         model = SAGE(num_topics=2, seed=1)
-        model.fit(docs, groups, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(docs, groups, iters=50, num_samples=1, sample_interval=5)
         assert model.groups == ["0", "1"]
 
     def test_int_groups_fit_completes(self):
         docs   = [["cat", "dog"]] * 10 + [["bird", "fish"]] * 10
         groups = [0] * 10 + [1] * 10
         model = SAGE(num_topics=2, seed=1)
-        model.fit(docs, groups, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(docs, groups, iters=50, num_samples=1, sample_interval=5)
         assert model.doc_topic.shape == (20, 2)
 
 
@@ -417,7 +417,7 @@ class TestSAGEGroupNames:
         groups = ["en"] * 10 + ["de"] * 10
         model = SAGE(num_topics=2, seed=1)
         model.fit(docs, groups, group_names=["en", "de"],
-                  iterations=50, num_samples=1, sample_interval=5)
+                  iters=50, num_samples=1, sample_interval=5)
         assert model.groups == ["en", "de"]
         # Index 0 should be 'en'
         assert model.groups[0] == "en"
@@ -428,7 +428,7 @@ class TestSAGEGroupNames:
         groups = ["en"] * 10 + ["de"] * 10
         model = SAGE(num_topics=2, seed=1)
         model.fit(docs, groups, group_names=["de", "en"],
-                  iterations=50, num_samples=1, sample_interval=5)
+                  iters=50, num_samples=1, sample_interval=5)
         assert model.groups == ["de", "en"]
         assert model.groups[0] == "de"
 
@@ -438,10 +438,10 @@ class TestSAGEGroupNames:
         groups = ["en"] * 10 + ["de"] * 10
         m_en0 = SAGE(num_topics=2, seed=1)
         m_en0.fit(docs, groups, group_names=["en", "de"],
-                  iterations=50, num_samples=1, sample_interval=5)
+                  iters=50, num_samples=1, sample_interval=5)
         m_de0 = SAGE(num_topics=2, seed=1)
         m_de0.fit(docs, groups, group_names=["de", "en"],
-                  iterations=50, num_samples=1, sample_interval=5)
+                  iters=50, num_samples=1, sample_interval=5)
         # group_names ordering should change which slice is index 0
         tw_en0_g0 = m_en0.top_words(0, group=0, n=3)
         tw_en0_gname = m_en0.top_words(0, group="en", n=3)
@@ -459,10 +459,10 @@ class TestSAGEInputTypeParity:
         corpus = Corpus.from_documents(docs)
 
         m1 = SAGE(num_topics=2, seed=5)
-        m1.fit(docs, groups, iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, groups, iters=100, num_samples=2, sample_interval=5)
 
         m2 = SAGE(num_topics=2, seed=5)
-        m2.fit(corpus, groups, iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(corpus, groups, iters=100, num_samples=2, sample_interval=5)
 
         npt.assert_array_equal(m1.topic_word, m2.topic_word)
         npt.assert_array_equal(m1.doc_topic, m2.doc_topic)

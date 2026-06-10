@@ -52,7 +52,7 @@ def synthetic_model_and_x():
     rng = np.random.default_rng(0)
     docs, x = _make_synthetic_corpus(rng, n_per_class=80)
     model = LDA(num_topics=2, seed=1)
-    model.fit(docs, iterations=300, num_samples=3, sample_interval=10)
+    model.fit(docs, iters=300, num_samples=3, sample_interval=10)
     return model, x
 
 
@@ -461,7 +461,7 @@ class TestSearchK:
         results = stm.search_k(
             docs,
             ks=[2, 3],
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             seed=42,
@@ -506,7 +506,7 @@ class TestSearchK:
             docs,
             ks=[2],
             held_out=held,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             seed=42,

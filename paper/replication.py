@@ -97,11 +97,11 @@ def spanning_comparison(docs, conservative):
         return m
 
     run("LDA", lambda: topica.LDA(num_topics=K, seed=SEED),
-        lambda m: m.fit(docs, iterations=500))
+        lambda m: m.fit(docs, iters=500))
     run("CTM", lambda: topica.CTM(num_topics=K, seed=SEED),
-        lambda m: m.fit(docs, em_iters=25))
+        lambda m: m.fit(docs, iters=25))
     run("STM", lambda: topica.STM(num_topics=K, seed=SEED),
-        lambda m: m.fit(docs, conservative, prevalence_names=["conservative"], em_iters=25))
+        lambda m: m.fit(docs, conservative, prevalence_names=["conservative"], iters=25))
     try:
         emb = lsa_embeddings(docs)
         run("BERTopic", lambda: topica.BERTopic(reducer="pca", n_components=5,
@@ -127,7 +127,7 @@ def effect_figure(docs, conservative):
     print(f"  {corpus.num_docs} docs, vocab {corpus.num_words}")
 
     model = topica.STM(num_topics=K, seed=SEED)
-    model.fit(docs, conservative, prevalence_names=["conservative"], em_iters=25)
+    model.fit(docs, conservative, prevalence_names=["conservative"], iters=25)
 
     labeled = stm.label_topics(model.topic_word, model.vocabulary, n=3)
     topica.set_topic_labels(

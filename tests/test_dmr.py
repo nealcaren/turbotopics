@@ -34,7 +34,7 @@ def _make_corpus(n=120, doc_length=8, seed=0):
     return docs, covariate, features
 
 
-def _fit_dmr(docs, features, seed=1, iterations=300, feature_names=None, **kwargs):
+def _fit_dmr(docs, features, seed=1, iters=300, feature_names=None, **kwargs):
     """Return a fitted DMR with fast but reliable settings for the synthetic corpus."""
     model = DMR(
         num_topics=2,
@@ -47,7 +47,7 @@ def _fit_dmr(docs, features, seed=1, iterations=300, feature_names=None, **kwarg
         docs,
         features,
         feature_names=feature_names if feature_names is not None else ["is_A"],
-        iterations=iterations,
+        iters=iters,
         num_samples=3,
         sample_interval=10,
     )
@@ -161,7 +161,7 @@ class TestDMRFitValidation:
             self.docs,
             self.features,
             feature_names=["my_feature"],
-            iterations=50,
+            iters=50,
             num_samples=1,
             sample_interval=5,
         )
@@ -267,17 +267,17 @@ class TestDMRDeterminism:
     def test_identical_seed_gives_identical_feature_effects(self):
         docs, _, features = _make_corpus(n=40, seed=5)
         m1 = DMR(num_topics=2, seed=42)
-        m1.fit(docs, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
         m2 = DMR(num_topics=2, seed=42)
-        m2.fit(docs, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(docs, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
         assert np.array_equal(m1.feature_effects, m2.feature_effects)
 
     def test_identical_seed_gives_identical_topic_word(self):
         docs, _, features = _make_corpus(n=40, seed=5)
         m1 = DMR(num_topics=2, seed=42)
-        m1.fit(docs, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
         m2 = DMR(num_topics=2, seed=42)
-        m2.fit(docs, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(docs, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
         assert np.array_equal(m1.topic_word, m2.topic_word)
 
 
@@ -291,10 +291,10 @@ class TestDMRInputTypeParity:
         features_list = features_np.tolist()
 
         m1 = DMR(num_topics=2, seed=7)
-        m1.fit(docs, features_np, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, features_np, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
 
         m2 = DMR(num_topics=2, seed=7)
-        m2.fit(docs, features_list, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(docs, features_list, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
 
         assert np.array_equal(m1.feature_effects, m2.feature_effects)
         assert np.array_equal(m1.topic_word, m2.topic_word)
@@ -304,10 +304,10 @@ class TestDMRInputTypeParity:
         corpus = Corpus.from_documents(docs)
 
         m1 = DMR(num_topics=2, seed=7)
-        m1.fit(docs, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
 
         m2 = DMR(num_topics=2, seed=7)
-        m2.fit(corpus, features, feature_names=["is_A"], iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(corpus, features, feature_names=["is_A"], iters=100, num_samples=2, sample_interval=5)
 
         assert np.array_equal(m1.feature_effects, m2.feature_effects)
         assert np.array_equal(m1.topic_word, m2.topic_word)
@@ -322,7 +322,7 @@ class TestDMRTopWordsAndCoherence:
     def fitted_model(self):
         docs, _, features = _make_corpus(n=60, seed=0)
         model = DMR(num_topics=2, seed=1)
-        model.fit(docs, features, feature_names=["is_A"], iterations=200, num_samples=2, sample_interval=10)
+        model.fit(docs, features, feature_names=["is_A"], iters=200, num_samples=2, sample_interval=10)
         return model
 
     def test_top_words_all_topics_structure(self, fitted_model):
@@ -453,7 +453,7 @@ class TestOneHot:
             docs,
             matrix,
             feature_names=names,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
         )

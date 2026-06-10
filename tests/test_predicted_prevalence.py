@@ -64,7 +64,7 @@ def _make_docs_continuous(n=100, seed=1):
 def lda_model():
     docs, treat = _make_docs(n=100, seed=0)
     m = topica.LDA(2, seed=1)
-    m.fit(docs, iterations=200)
+    m.fit(docs, iters=200)
     return m, treat
 
 
@@ -73,7 +73,7 @@ def stm_model():
     docs, treat = _make_docs(n=100, seed=0)
     X = treat.reshape(-1, 1)
     m = topica.STM(2, seed=1)
-    m.fit(docs, X, prevalence_names=["treat"], em_iters=50)
+    m.fit(docs, X, prevalence_names=["treat"], iters=50)
     return m, treat
 
 
@@ -82,7 +82,7 @@ def stm_continuous_model():
     docs, x = _make_docs_continuous(n=100, seed=1)
     X = x.reshape(-1, 1)
     m = topica.STM(2, seed=2)
-    m.fit(docs, X, prevalence_names=["x"], em_iters=50)
+    m.fit(docs, X, prevalence_names=["x"], iters=50)
     return m, x
 
 

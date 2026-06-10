@@ -40,13 +40,13 @@ def _make_corpus(n=150, words_per_label=8, seed=1):
     return docs, labels
 
 
-def _fit_recovery(docs, labels, seed=1, iterations=300):
+def _fit_recovery(docs, labels, seed=1, iters=300):
     """Fit LabeledLDA with settings known to recover the 3-label corpus cleanly."""
     model = LabeledLDA(alpha=0.1, seed=seed)
     model.fit(
         docs,
         labels,
-        iterations=iterations,
+        iters=iters,
         num_samples=3,
         sample_interval=10,
     )
@@ -221,7 +221,7 @@ class TestLabeledLDALabelNames:
             docs,
             labels,
             label_names=["tech", "sports", "politics"],
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
         )
@@ -235,7 +235,7 @@ class TestLabeledLDALabelNames:
             docs,
             labels,
             label_names=["tech", "sports", "politics"],
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
         )
@@ -260,7 +260,7 @@ class TestLabeledLDAEmptyLabels:
             all_docs,
             all_labels,
             label_names=_ALL_LABELS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
         )
@@ -278,7 +278,7 @@ class TestLabeledLDAEmptyLabels:
             all_docs,
             all_labels,
             label_names=_ALL_LABELS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
         )
@@ -294,17 +294,17 @@ class TestLabeledLDADeterminism:
     def test_identical_seed_identical_topic_word(self):
         docs, labels = _make_corpus(n=60, seed=4)
         m1 = LabeledLDA(alpha=0.1, seed=7)
-        m1.fit(docs, labels, iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, labels, iters=100, num_samples=2, sample_interval=5)
         m2 = LabeledLDA(alpha=0.1, seed=7)
-        m2.fit(docs, labels, iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(docs, labels, iters=100, num_samples=2, sample_interval=5)
         assert np.array_equal(m1.topic_word, m2.topic_word)
 
     def test_identical_seed_identical_doc_topic(self):
         docs, labels = _make_corpus(n=60, seed=4)
         m1 = LabeledLDA(alpha=0.1, seed=7)
-        m1.fit(docs, labels, iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, labels, iters=100, num_samples=2, sample_interval=5)
         m2 = LabeledLDA(alpha=0.1, seed=7)
-        m2.fit(docs, labels, iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(docs, labels, iters=100, num_samples=2, sample_interval=5)
         assert np.array_equal(m1.doc_topic, m2.doc_topic)
 
 
@@ -319,10 +319,10 @@ class TestLabeledLDAInputTypeParity:
         corpus = Corpus.from_documents(docs)
 
         m1 = LabeledLDA(alpha=0.1, seed=99)
-        m1.fit(docs, labels, iterations=100, num_samples=2, sample_interval=5)
+        m1.fit(docs, labels, iters=100, num_samples=2, sample_interval=5)
 
         m2 = LabeledLDA(alpha=0.1, seed=99)
-        m2.fit(corpus, labels, iterations=100, num_samples=2, sample_interval=5)
+        m2.fit(corpus, labels, iters=100, num_samples=2, sample_interval=5)
 
         assert np.array_equal(m1.topic_word, m2.topic_word)
         assert np.array_equal(m1.doc_topic, m2.doc_topic)
@@ -333,7 +333,7 @@ class TestLabeledLDAInputTypeParity:
         assert isinstance(labels, list)
         assert all(isinstance(l, list) for l in labels)
         model = LabeledLDA(alpha=0.1, seed=1)
-        model.fit(docs, labels, iterations=50, num_samples=1, sample_interval=5)
+        model.fit(docs, labels, iters=50, num_samples=1, sample_interval=5)
         assert model.num_topics == 3
 
 
@@ -346,7 +346,7 @@ class TestLabeledLDATopWordsAndCoherence:
     def fitted(self):
         docs, labels = _make_corpus(n=60, seed=0)
         model = LabeledLDA(alpha=0.1, seed=1)
-        model.fit(docs, labels, iterations=200, num_samples=2, sample_interval=10)
+        model.fit(docs, labels, iters=200, num_samples=2, sample_interval=10)
         return model
 
     def test_top_words_all_topics_structure(self, fitted):

@@ -49,7 +49,7 @@ def test_vignette_recovers_treatment_effect():
     assert len(docs) > 300  # gadarian is 341 responses, a couple drop out
 
     model = STM(num_topics=3, seed=1)
-    model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], em_iters=80)
+    model.fit(docs, X, prevalence_names=["treatment", "pid_rep"], iters=80)
 
     # Outputs are well-formed.
     assert model.topic_word.shape == (3, len(model.vocabulary))
@@ -66,5 +66,5 @@ def test_vignette_recovers_treatment_effect():
 
     # Determinism.
     m2 = STM(num_topics=3, seed=1)
-    m2.fit(docs, X, prevalence_names=["treatment", "pid_rep"], em_iters=80)
+    m2.fit(docs, X, prevalence_names=["treatment", "pid_rep"], iters=80)
     assert np.array_equal(model.topic_word, m2.topic_word)

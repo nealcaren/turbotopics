@@ -25,15 +25,15 @@ def _fit_all():
     groups = ["a"] * 30 + ["b"] * 30
     times = [0] * 30 + [1] * 30
 
-    lda = topica.LDA(num_topics=2, seed=1); lda.fit(DOCS, iterations=200)
+    lda = topica.LDA(num_topics=2, seed=1); lda.fit(DOCS, iters=200)
     dmr = topica.DMR(num_topics=2, seed=1); dmr.fit(DOCS, X, feature_names=["g"])
     lab = topica.LabeledLDA(seed=1); lab.fit(DOCS, [["x"]] * 60)
     sage = topica.SAGE(num_topics=2, seed=1); sage.fit(DOCS, groups)
-    ctm = topica.CTM(num_topics=2, seed=1); ctm.fit(DOCS, em_iters=20)
-    stm = topica.STM(num_topics=2, seed=1); stm.fit(DOCS, X, prevalence_names=["g"], em_iters=20)
+    ctm = topica.CTM(num_topics=2, seed=1); ctm.fit(DOCS, iters=20)
+    stm = topica.STM(num_topics=2, seed=1); stm.fit(DOCS, X, prevalence_names=["g"], iters=20)
     hdp = topica.HDP(seed=1); hdp.fit(DOCS, iters=40)
-    dtm = topica.DTM(num_topics=2, seed=1); dtm.fit(DOCS, times, em_iters=8)
-    slda = topica.SupervisedLDA(num_topics=2, seed=1); slda.fit(DOCS, y, em_iters=10)
+    dtm = topica.DTM(num_topics=2, seed=1); dtm.fit(DOCS, times, iters=8)
+    slda = topica.SupervisedLDA(num_topics=2, seed=1); slda.fit(DOCS, y, iters=10)
     return {
         "LDA": lda, "DMR": dmr, "LabeledLDA": lab, "SAGE": sage, "CTM": ctm,
         "STM": stm, "HDP": hdp, "DTM": dtm, "SupervisedLDA": slda,
@@ -60,7 +60,7 @@ def test_roundtrip(name, tmp):
 
 def test_lda_transform_after_load(tmp):
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(DOCS, iterations=200)
+    m.fit(DOCS, iters=200)
     before = m.transform([["cat", "dog"], ["star", "moon"]])
     m.save(tmp)
     loaded = topica.LDA.load(tmp)
@@ -72,7 +72,7 @@ def test_lda_save_state_mallet_format(tmp_path):
     import gzip
 
     m = topica.LDA(num_topics=3, seed=1)
-    m.fit(DOCS, iterations=200)
+    m.fit(DOCS, iters=200)
     path = str(tmp_path / "state.gz")
     m.save_state(path)
 
@@ -99,7 +99,7 @@ def test_lda_save_state_mallet_format(tmp_path):
 
 def test_lda_save_state_after_load(tmp_path):
     m = topica.LDA(num_topics=2, seed=1)
-    m.fit(DOCS, iterations=150)
+    m.fit(DOCS, iters=150)
     model_path = str(tmp_path / "m.tt")
     m.save(model_path)
     loaded = topica.LDA.load(model_path)
@@ -116,7 +116,7 @@ def test_save_state_unfitted_raises(tmp_path):
 def test_stm_posterior_survives(tmp):
     m = topica.STM(num_topics=2, seed=1)
     X = np.array([[0.0]] * 30 + [[1.0]] * 30)
-    m.fit(DOCS, X, prevalence_names=["g"], em_iters=20)
+    m.fit(DOCS, X, prevalence_names=["g"], iters=20)
     m.save(tmp)
     loaded = topica.STM.load(tmp)
     assert np.array_equal(m.eta_mean, loaded.eta_mean)
@@ -127,7 +127,7 @@ def test_stm_posterior_survives(tmp):
 def test_slda_predict_after_load(tmp):
     m = topica.SupervisedLDA(num_topics=2, seed=1)
     y = np.array([0.0] * 30 + [1.0] * 30)
-    m.fit(DOCS, y, em_iters=10)
+    m.fit(DOCS, y, iters=10)
     m.save(tmp)
     loaded = topica.SupervisedLDA.load(tmp)
     assert np.allclose(m.coefficients, loaded.coefficients)

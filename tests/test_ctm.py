@@ -101,10 +101,10 @@ def _identify_topics(model):
 
 @pytest.fixture(scope="module")
 def fitted_ctm():
-    """CTM(3, seed=1) fitted on the 300-doc correlated corpus (em_iters=50)."""
+    """CTM(3, seed=1) fitted on the 300-doc correlated corpus (iters=50)."""
     docs = _make_correlated_corpus(n=300, seed=0)
     m = CTM(num_topics=3, seed=1)
-    m.fit(docs, em_iters=50)
+    m.fit(docs, iters=50)
     return m
 
 
@@ -291,9 +291,9 @@ class TestCTMDeterminism:
     def test_same_seed_identical_topic_word(self):
         docs = _make_correlated_corpus(n=60, seed=7)
         m1 = CTM(3, seed=42)
-        m1.fit(docs, em_iters=20)
+        m1.fit(docs, iters=20)
         m2 = CTM(3, seed=42)
-        m2.fit(docs, em_iters=20)
+        m2.fit(docs, iters=20)
         # Variational EM is deterministic; any divergence is pure floating-point noise (< 1e-14)
         npt.assert_allclose(
             m1.topic_word, m2.topic_word, atol=1e-14,
@@ -303,9 +303,9 @@ class TestCTMDeterminism:
     def test_same_seed_allclose_doc_topic(self):
         docs = _make_correlated_corpus(n=60, seed=7)
         m1 = CTM(3, seed=42)
-        m1.fit(docs, em_iters=20)
+        m1.fit(docs, iters=20)
         m2 = CTM(3, seed=42)
-        m2.fit(docs, em_iters=20)
+        m2.fit(docs, iters=20)
         npt.assert_allclose(
             m1.doc_topic, m2.doc_topic, atol=1e-14,
             err_msg="Identical seeds must produce identical doc_topic"
@@ -321,22 +321,22 @@ class TestCTMInputTypes:
         docs = [["cat", "dog", "fish"]] * 20 + [["planet", "star", "moon"]] * 20
         corpus = Corpus.from_documents(docs)
         m = CTM(2, seed=1)
-        m.fit(corpus, em_iters=10)
+        m.fit(corpus, iters=10)
         assert m.doc_topic.shape == (40, 2)
 
     def test_list_input_accepted(self):
         docs = [["cat", "dog", "fish"]] * 20 + [["planet", "star", "moon"]] * 20
         m = CTM(2, seed=1)
-        m.fit(docs, em_iters=10)
+        m.fit(docs, iters=10)
         assert m.doc_topic.shape == (40, 2)
 
     def test_corpus_and_list_give_same_topic_word(self):
         docs = [["cat", "dog", "fish"]] * 30 + [["planet", "star", "moon"]] * 30
         corpus = Corpus.from_documents(docs)
         m1 = CTM(2, seed=5)
-        m1.fit(corpus, em_iters=15)
+        m1.fit(corpus, iters=15)
         m2 = CTM(2, seed=5)
-        m2.fit(docs, em_iters=15)
+        m2.fit(docs, iters=15)
         # Results are identical up to floating-point precision (< 1e-14)
         npt.assert_allclose(
             m1.topic_word, m2.topic_word, atol=1e-14,
@@ -353,7 +353,7 @@ class TestCTMTopWords:
     def small_model(self):
         docs = [["cat", "dog", "fish"]] * 20 + [["planet", "star", "moon"]] * 20
         m = CTM(2, seed=1)
-        m.fit(docs, em_iters=20)
+        m.fit(docs, iters=20)
         return m
 
     def test_all_topics_returns_num_topics_lists(self, small_model):
@@ -452,7 +452,7 @@ class TestSpectralInit:
         # separate the three topics by their vocabularies.
         docs = _make_correlated_corpus(seed=5)
         m = CTM(3, init="spectral")
-        m.fit(docs, em_iters=30)
+        m.fit(docs, iters=30)
         labels = _identify_topics(m)
         assert set(labels) == {"A", "B", "C"}
 

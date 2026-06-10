@@ -18,7 +18,7 @@ def _fit(seed: int, **kwargs) -> np.ndarray:
     model = LDA(2, seed=seed, optimize_interval=0, **kwargs)
     model.fit(
         _TOY_DOCS,
-        iterations=100,
+        iters=100,
         num_samples=2,
         sample_interval=5,
     )
@@ -40,7 +40,7 @@ class TestSameSeed:
     def test_same_seed_identical_doc_topic(self):
         model_a = LDA(2, seed=7, optimize_interval=0)
         model_b = LDA(2, seed=7, optimize_interval=0)
-        kw = dict(iterations=100, num_samples=2, sample_interval=5)
+        kw = dict(iters=100, num_samples=2, sample_interval=5)
         model_a.fit(_TOY_DOCS, **kw)
         model_b.fit(_TOY_DOCS, **kw)
         assert np.array_equal(model_a.doc_topic, model_b.doc_topic)
@@ -75,7 +75,7 @@ class TestProgressCallback:
         model = LDA(2, seed=42, optimize_interval=0)
         model.fit(
             _TOY_DOCS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             progress=cb,
@@ -93,7 +93,7 @@ class TestProgressCallback:
         model = LDA(2, seed=42, optimize_interval=0)
         model.fit(
             _TOY_DOCS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             progress=cb,
@@ -111,7 +111,7 @@ class TestProgressCallback:
         model = LDA(2, seed=42, optimize_interval=0)
         model.fit(
             _TOY_DOCS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             progress=cb,
@@ -129,7 +129,7 @@ class TestProgressCallback:
         model = LDA(2, seed=42, optimize_interval=0)
         model.fit(
             _TOY_DOCS,
-            iterations=100,
+            iters=100,
             num_samples=2,
             sample_interval=5,
             progress=cb,
@@ -145,7 +145,7 @@ class TestProgressCallback:
         model = LDA(2, seed=42, optimize_interval=0)
         model.fit(
             _TOY_DOCS,
-            iterations=50,
+            iters=50,
             num_samples=2,
             sample_interval=5,
             progress=None,

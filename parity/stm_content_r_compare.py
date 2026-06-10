@@ -106,7 +106,7 @@ def run(verbose: bool = True) -> dict:
         levs = open(os.path.join(d, "r_levels.txt")).read().split()
 
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, content=groups, em_iters=80)
+        m.fit(docs, content=groups, iters=80)
         vidx = {w: i for i, w in enumerate(m.vocabulary)}
         twg = np.asarray(m.topic_word_by_group)
 
