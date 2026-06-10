@@ -50,3 +50,15 @@ parity/*.class
 
 # Internal development notes (kept local, not part of the public package)
 /notes/
+
+# Benchmark generated artifacts (commit the generators, not the data)
+benchmarks/poliblog5k_prepped.csv
+benchmarks/bench_results.json
+benchmarks/website_table.md
+paper/fig_thread_scaling.pdf
+paper/fig_memory.pdf
+
+# Misc local-only files
+API_FROZEN.md
+docs/stratm-design.md
+uv.lock
