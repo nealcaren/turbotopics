@@ -16,3 +16,10 @@ log-likelihood)` pairs (perplexity is `exp(-log_likelihood)`).
 ::: topica.keyatm.visualize_keywords
 
 ::: topica.keyatm.refine_keywords
+
+## Dynamic model: time-trend credible intervals
+
+Per-period topic prevalence with credible bands from the dynamic keyATM
+posterior's retained MCMC theta draws.
+
+::: topica.time_prevalence_ci

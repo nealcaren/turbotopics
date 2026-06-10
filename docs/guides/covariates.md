@@ -55,6 +55,76 @@ Build non-linear and interaction terms with `stm.spline` and `stm.interaction`.
 Full detail and the journal-grade treatment are in the
 [Publishing](../publishing/effects.md) track.
 
+## Predicted prevalence
+
+`topica.predicted_prevalence` computes predicted topic prevalence at chosen
+covariate values with simulation-based credible intervals — the direct
+counterpart of R `stm`'s `plot.estimateEffect`. Three modes mirror `stm`'s
+`method` argument:
+
+```python
+import topica
+
+# Point grid: predicted prevalence when party is "D" vs "R"
+pp = topica.predicted_prevalence(
+    model,
+    formula="~ party + year",
+    data=meta,
+    at={"party": ["D", "R"]},
+)
+for result in pp:
+    print(result.topic_name, result.estimate, result.ci_low, result.ci_high)
+
+# Continuous sweep: prevalence as year varies, other covariates at their means
+pp = topica.predicted_prevalence(
+    model, formula="~ party + year", data=meta,
+    continuous="year",
+)
+
+# Contrast: difference in prevalence between two covariate settings
+pp = topica.predicted_prevalence(
+    model, formula="~ party", data=meta,
+    contrast={"party": ["D", "R"]},
+)
+```
+
+## Permutation test for binary covariates
+
+`topica.permutation_test` assesses whether a binary covariate genuinely shifts
+topic prevalence, using permutation resampling rather than parametric
+assumptions:
+
+```python
+results = topica.permutation_test(
+    model, corpus=docs, covariate=treated,   # treated: 0/1 array
+    n_perm=100, seed=0,
+)
+for r in results:
+    print(f"Topic {r.topic_name}: observed={r.observed:.3f}  p={r.pvalue:.3f}")
+```
+
+Each `PermutationResult` carries the observed covariate effect, the full null
+distribution (`r.null`), and a two-sided p-value.
+
+## L1/elastic-net prior for high-dimensional designs
+
+When the prevalence design matrix has many columns (many dummies, interaction
+terms, or a wide feature matrix), add `gamma_prior="l1"` to `STM.fit` to
+penalize the prevalence coefficients:
+
+```python
+model = topica.STM(num_topics=20, seed=1)
+model.fit(
+    docs, prevalence=X, prevalence_names=names,
+    gamma_prior="l1",     # elastic-net with full L1 (lasso)
+    gamma_enet=1.0,       # alpha=1.0 is pure L1; 0 < alpha < 1 mixes L2
+)
+```
+
+The default `gamma_prior="pooled"` uses the OLS pooled regression from the
+original STM paper. Use `"l1"` when p (number of prevalence covariates)
+approaches or exceeds the number of documents.
+
 ## Choosing K for STM
 
 Use `search_k`, the coherence×exclusivity frontier, and an `HDP` sanity check.
