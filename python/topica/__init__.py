@@ -123,6 +123,8 @@ from .effects import (  # noqa: E402  general, work on any model's theta
     model_family,
     predicted_prevalence,
     PredictedPrevalence,
+    permutation_test,
+    PermutationResult,
 )
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
@@ -270,6 +272,8 @@ __all__ = [
     "model_family",
     "predicted_prevalence",
     "PredictedPrevalence",
+    "permutation_test",
+    "PermutationResult",
     "EmbeddingLDA",
     "embedding_seeds",
     "llm_embed",

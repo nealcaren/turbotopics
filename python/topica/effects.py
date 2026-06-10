@@ -32,6 +32,8 @@ __all__ = [
     "by_strata",
     "top_topics",
     "standard_errors",
+    "permutation_test",
+    "PermutationResult",
 ]
 
 
@@ -608,5 +610,237 @@ def _effect_bootstrap(model, docs, X, feature_names, names, z, n_boot, topn, see
         out.append(TopicEffect(
             topic=i, feature_names=fnames, coef=est, se=se, z=zz,
             ci_low=est - z * se, ci_high=est + z * se, r_squared=float("nan"),
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Permutation test for a single binary prevalence covariate (issue #36)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PermutationResult:
+    """Result of :func:`permutation_test` for one topic.
+
+    Attributes
+    ----------
+    topic : int
+        Topic index (aligned to the reference model).
+    topic_name : str
+        Topic label (or ``"topic_t"`` when no labels are set).
+    observed : float
+        Observed difference in mean prevalence between the two covariate groups.
+    null : numpy.ndarray, shape (n_perm,)
+        Per-permutation covariate effects (the null distribution).
+    pvalue : float
+        Two-sided p-value: proportion of permutations whose absolute effect
+        equals or exceeds the absolute observed effect.
+    """
+
+    topic: int
+    topic_name: str
+    observed: float
+    null: np.ndarray
+    pvalue: float
+
+    def as_dict(self) -> dict:
+        """Return a plain-dict summary (omits the full null array)."""
+        return {
+            "topic": self.topic,
+            "topic_name": self.topic_name,
+            "observed": self.observed,
+            "pvalue": self.pvalue,
+            "null_mean": float(self.null.mean()),
+            "null_std": float(self.null.std(ddof=1)) if len(self.null) > 1 else float("nan"),
+        }
+
+
+def _binary_covariate_effect(theta, covariate):
+    """Mean prevalence difference (group1 - group0) for each topic column.
+
+    Parameters
+    ----------
+    theta : array (num_docs, num_topics)
+    covariate : array (num_docs,), binary 0/1
+
+    Returns
+    -------
+    array (num_topics,) — effect per topic
+    """
+    c = np.asarray(covariate, dtype=np.float64)
+    mask1 = c == 1.0
+    mask0 = c == 0.0
+    if not mask1.any() or not mask0.any():
+        return np.zeros(theta.shape[1])
+    return theta[mask1].mean(axis=0) - theta[mask0].mean(axis=0)
+
+
+def permutation_test(
+    model,
+    corpus,
+    covariate,
+    *,
+    n_perm=100,
+    topics=None,
+    topn=10,
+    seed=0,
+    model_factory=None,
+    iters=None,
+):
+    """Permutation test for a binary prevalence covariate (R ``stm``'s ``permutationTest``).
+
+    Assesses whether a binary document-level covariate genuinely shifts topic
+    prevalence, or whether an apparent association could arise by chance. Each
+    permutation randomly reassigns the covariate at its empirical rate, refits
+    the model from fresh starting values, aligns the refit topics to the
+    reference (using the Hungarian top-word matcher from
+    :func:`~topica.validation._hungarian`), and records the covariate's effect
+    on every topic. The observed effect for each topic is then compared to the
+    permutation null to compute a two-sided p-value.
+
+    Parameters
+    ----------
+    model : a fitted topica model.
+        The reference fit. Its type is used to build each permutation refit
+        (``type(model)(num_topics=K, seed=s)``), unless ``model_factory`` is
+        given. The model must expose ``doc_topic``, ``topic_word``, and
+        ``vocabulary``.
+    corpus : list of token lists or a ``Corpus``.
+        The documents the model was fit on. Each permutation refits on the
+        same documents with a shuffled covariate.
+    covariate : array-like (num_docs,), binary (0/1 or True/False).
+        The binary prevalence covariate to test. Must have exactly two unique
+        values; they are mapped to 0 and 1 in sorted order.
+    n_perm : int
+        Number of permutation refits. Higher values give more stable p-values;
+        100 is enough for a screening test, 500 for publication.
+    topics : sequence of int, optional
+        Restrict the output to these topic indices. Defaults to all topics.
+    topn : int
+        Top-word count used for topic alignment across refits.
+    seed : int
+        Master RNG seed. Permutation seeds are derived as ``seed + perm_index``.
+    model_factory : callable(seed) -> unfitted model, optional
+        Override the default ``type(model)(num_topics=K, seed=s)`` builder. Use
+        this when the model's constructor needs extra arguments (e.g. keyword
+        lists for KeyATM, or content covariates for STM).
+    iters : int, optional
+        Iterations for each permutation refit. When ``None`` the refit's default
+        iteration count is used. Pass a smaller value (e.g. ``iters=100``) to
+        speed up screening tests.
+
+    Returns
+    -------
+    list of :class:`PermutationResult`
+        One entry per topic (restricted to ``topics`` when given), each with
+        the observed effect, the permutation null distribution, and a two-sided
+        p-value.
+    """
+    # --- resolve corpus to token lists ----------------------------------------
+    if hasattr(corpus, "documents"):
+        docs = corpus.documents()
+    else:
+        docs = [list(d) for d in corpus]
+
+    n_docs = len(docs)
+    theta_ref = np.asarray(model.doc_topic, dtype=np.float64)
+    if theta_ref.shape[0] != n_docs:
+        raise ValueError(
+            f"corpus has {n_docs} documents but model.doc_topic has "
+            f"{theta_ref.shape[0]} rows; pass the same documents the model "
+            "was fit on"
+        )
+
+    # --- validate and normalise the binary covariate --------------------------
+    cov_raw = np.asarray(covariate)
+    if cov_raw.shape != (n_docs,):
+        raise ValueError(
+            f"covariate must have shape ({n_docs},); got {cov_raw.shape}"
+        )
+    unique_vals = np.unique(cov_raw)
+    if len(unique_vals) != 2:
+        raise ValueError(
+            "covariate must be binary (exactly two unique values); "
+            f"got {len(unique_vals)}: {unique_vals.tolist()}"
+        )
+    # Map to 0/1 regardless of the input encoding (bool, {0,1}, {1,2}, …).
+    cov = np.where(cov_raw == unique_vals[0], 0.0, 1.0)
+
+    k = theta_ref.shape[1]
+    topic_list = list(range(k)) if topics is None else list(topics)
+    names = _topic_names(model, k)
+
+    # --- top-word sets for the reference model (for alignment) ----------------
+    _, ref_sets = _top_word_strings(model, topn)
+
+    # --- observed effect -------------------------------------------------------
+    obs_all = _binary_covariate_effect(theta_ref, cov)  # (k,)
+
+    # --- build the model factory and fit kwargs --------------------------------
+    if model_factory is None:
+        cls = type(model)
+
+        def model_factory(s, _cls=cls, _k=k):
+            try:
+                return _cls(num_topics=_k, seed=s)
+            except TypeError as exc:
+                raise TypeError(
+                    f"could not rebuild {_cls.__name__} for the permutation test; "
+                    "pass model_factory=callable(seed)->unfitted model"
+                ) from exc
+
+    fit_kwargs = {}
+    if iters is not None:
+        fit_kwargs["iters"] = iters
+
+    # --- permutation loop -----------------------------------------------------
+    rng = np.random.RandomState(seed)
+    rate = float(cov.mean())  # empirical rate of the positive class
+
+    # null_effects[i] holds one float per permutation for topic i
+    null_effects = {t: [] for t in topic_list}
+
+    for perm in range(n_perm):
+        perm_seed = seed + perm + 1
+        cov_perm = (rng.random(n_docs) < rate).astype(np.float64)
+
+        m_perm = model_factory(perm_seed)
+        m_perm.fit(docs, **fit_kwargs)
+
+        theta_perm = np.asarray(m_perm.doc_topic, dtype=np.float64)
+
+        # Align permutation topics to the reference.
+        _, perm_sets = _top_word_strings(m_perm, topn)
+        match, _, _ = _match_to_reference(ref_sets, perm_sets)
+
+        # Reorder perm theta columns into reference topic order.
+        theta_aligned = np.full((n_docs, k), np.nan)
+        for ref_t in range(k):
+            perm_t = match.get(ref_t)
+            if perm_t is not None and perm_t < theta_perm.shape[1]:
+                theta_aligned[:, ref_t] = theta_perm[:, perm_t]
+
+        # Compute effect for this permutation.
+        eff_perm = _binary_covariate_effect(theta_aligned, cov_perm)
+
+        for t in topic_list:
+            null_effects[t].append(float(eff_perm[t]))
+
+    # --- assemble results ------------------------------------------------------
+    out = []
+    for t in topic_list:
+        obs = float(obs_all[t])
+        null = np.array(null_effects[t], dtype=np.float64)
+        # Two-sided p-value: fraction of permutations at least as extreme.
+        if null.size > 0:
+            pval = float(np.mean(np.abs(null) >= abs(obs)))
+        else:
+            pval = float("nan")
+        out.append(PermutationResult(
+            topic=t,
+            topic_name=names[t] if t < len(names) else f"topic_{t}",
+            observed=obs,
+            null=null,
+            pvalue=pval,
         ))
     return out
