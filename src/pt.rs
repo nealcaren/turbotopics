@@ -252,59 +252,13 @@ pub fn fit_ptm<R: Rng>(
     iters: usize,
     rng: &mut R,
 ) -> PtmModel {
-    let d_count = docs.len();
-    let k = num_topics;
-    let p = num_pseudo;
-    let v = num_types;
-
-    // --- Initialisation ---
-    // Each document is assigned to a random pseudo-doc; each token to a random topic.
-    let l: Vec<usize> = (0..d_count).map(|_| (rng.gen::<f64>() * p as f64) as usize % p).collect();
-    let z: Vec<Vec<usize>> = docs
-        .iter()
-        .map(|doc| {
-            doc.iter()
-                .map(|_| (rng.gen::<f64>() * k as f64) as usize % k)
-                .collect()
-        })
-        .collect();
-
-    let mut nkw = vec![vec![0u32; v]; k];
-    let mut nk = vec![0u32; k];
-    let mut npk = vec![vec![0u32; k]; p];
-    let mut np = vec![0u32; p];
-
-    for (d, doc) in docs.iter().enumerate() {
-        let pd = l[d];
-        for (i, &w) in doc.iter().enumerate() {
-            let kk = z[d][i];
-            nkw[kk][w as usize] += 1;
-            nk[kk] += 1;
-            npk[pd][kk] += 1;
-            np[pd] += 1;
-        }
-    }
-
-    let mut model = PtmModel {
-        num_types: v,
-        num_topics: k,
-        num_pseudo: p,
-        alpha,
-        beta,
-        nkw,
-        nk,
-        npk,
-        np,
-        l,
-        z,
-        theta_draws: Vec::new(),
-    };
-
-    for _ in 0..iters {
-        model.sweep(docs, rng);
-    }
-
-    model
+    // Plain fit is the draw-collecting fit with collection disabled, so the
+    // sampler lives in exactly one place (see `fit_ptm_with_draws`).
+    fit_ptm_with_draws(
+        docs, num_types, num_topics, num_pseudo, alpha, beta, iters,
+        crate::keyatm::ThetaDrawOpts::new(false, 0, 0),
+        rng,
+    )
 }
 
 /// Fit a PTM with thinned θ snapshots collected every `thin` sweeps (ring-buffered
