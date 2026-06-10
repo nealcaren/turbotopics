@@ -287,10 +287,12 @@ def eval_heldout(model, heldout, *, seed=0):
     the withheld tokens under ``p(w) = sum_k theta_k * phi[k, w]``.
 
     Requires that ``model`` was fit on ``heldout.documents`` (the training corpus
-    returned by :func:`make_heldout`). Works for any generative model with
-    ``transform`` and ``topic_word`` — LDA, DMR, CTM, STM, HDP, keyATM, and so
-    on. The embedding-cluster models (BERTopic, Top2Vec) define no document
-    likelihood and are rejected with a clear error.
+    returned by :func:`make_heldout`). Works for any generative model that
+    exposes ``transform`` and ``topic_word``: LDA, DMR, CTM, STM, HDP,
+    LabeledLDA, and SupervisedLDA. The keyword/anchored Gibbs models (keyATM,
+    SeededLDA, SAGE, PA, PT) do not expose ``transform`` and so fall outside this
+    diagnostic, and the embedding-cluster models (BERTopic, Top2Vec) define no
+    document likelihood; both raise a clear error.
 
     Parameters
     ----------
