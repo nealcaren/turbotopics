@@ -717,6 +717,9 @@ pub struct LDA {
     fitted: bool,
     phi: Option<Array2<f64>>,   // (num_topics, num_words)
     theta: Option<Array2<f64>>, // (num_docs, num_topics)
+    // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
+    // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
+    theta_draws: Option<Array3<f32>>,
     model: Option<TopicModel>,
     corpus: Option<corpus::Corpus>,
 }
@@ -892,6 +895,7 @@ impl LDA {
             fitted: false,
             phi: None,
             theta: None,
+            theta_draws: None,
             model: None,
             corpus: None,
         })
@@ -907,7 +911,8 @@ impl LDA {
     /// `progress`, if given, is called as ``progress(iteration, ll_per_token)``
     /// every `progress_interval` iterations during the main loop.
     #[pyo3(signature = (data, *, iterations=1000, num_samples=5, sample_interval=25,
-                        progress=None, progress_interval=50))]
+                        progress=None, progress_interval=50,
+                        keep_theta_draws=true, num_theta_draws=25))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -917,6 +922,8 @@ impl LDA {
         sample_interval: usize,
         progress: Option<PyObject>,
         progress_interval: usize,
+        keep_theta_draws: bool,
+        num_theta_draws: usize,
     ) -> PyResult<()> {
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -940,6 +947,12 @@ impl LDA {
         let alpha_sum = self.alpha_sum.unwrap_or(num_topics as f64);
         let total_tokens = corpus.total_tokens().max(1) as f64;
 
+        // Thinned θ-draw retention (issue #31): keep the last `draw_cap` snapshots
+        // taken every `draw_thin` sweeps of the main loop. 0 ⇒ collection off.
+        let draw_cap = if keep_theta_draws { num_theta_draws } else { 0 };
+        let draw_thin = theta_draw_thin(iterations, draw_cap);
+        warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, num_topics)?;
+
         let mut model = TopicModel::new(num_topics, alpha_sum, self.beta, num_types);
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         model.initialize(&corpus, &mut rng);
@@ -957,13 +970,24 @@ impl LDA {
         // into a TopicModel at the end. Separate from the SparseLDA path below so
         // the well-tested MALLET sampler is left untouched.
         if light {
-            let (acc_phi, acc_theta, model) = py.allow_threads(move || {
+            let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
                 let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
                 let mut ls = lightlda::LightLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
                 ls.mh_steps = mh_steps;
+                let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
                 for iter in 1..=iterations {
                     ls.sweep(&corpus, &mut rng);
+                    if draw_thin > 0 && iter % draw_thin == 0 {
+                        // One snapshot: theta_into accumulates, so start from zero.
+                        let mut tmp = vec![vec![0.0f64; num_topics]; num_docs];
+                        ls.theta_into(&corpus, &mut tmp);
+                        let snap = tmp
+                            .iter()
+                            .map(|r| r.iter().map(|&v| v as f32).collect())
+                            .collect();
+                        push_capped(&mut theta_draw_buf, snap, draw_cap);
+                    }
                     if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                         let mut m = ls.to_topic_model();
                         if use_symmetric_alpha {
@@ -1002,16 +1026,17 @@ impl LDA {
                     for v in row.iter_mut() { *v /= n; }
                 }
                 let model = ls.to_topic_model();
-                (acc_phi, acc_theta, (model, corpus))
+                (acc_phi, acc_theta, theta_draw_buf, (model, corpus))
             });
             let (model, corpus) = model;
+            self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
             self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
             return Ok(());
         }
 
         // Heavy loop runs with the GIL released; the progress callback briefly
         // re-acquires it. allow_threads returns the owned model + accumulators.
-        let (acc_phi, acc_theta, model) = py.allow_threads(move || {
+        let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
             // One Gibbs sweep: exact sequential path when single-threaded,
             // approximate parallel sampling otherwise. `sweep` seeds the
             // per-worker RNGs so parallel runs are deterministic.
@@ -1027,10 +1052,19 @@ impl LDA {
                         parallel_sweep(model, &corpus.docs, num_threads, s);
                     }
                 };
+            let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
             // ---- main training loop (ports src/bin/train.rs) ----
             for iter in 1..=iterations {
                 do_sweep(&mut model, &mut rng);
+
+                if draw_thin > 0 && iter % draw_thin == 0 {
+                    push_capped(
+                        &mut theta_draw_buf,
+                        theta_snapshot_f32(&model, &corpus),
+                        draw_cap,
+                    );
+                }
 
                 if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
                     if use_symmetric_alpha {
@@ -1076,9 +1110,10 @@ impl LDA {
             }
 
             // Return the corpus too (move it back out for storage).
-            (acc_phi, acc_theta, (model, corpus))
+            (acc_phi, acc_theta, theta_draw_buf, (model, corpus))
         });
         let (model, corpus) = model;
+        self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
         self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus);
         Ok(())
     }
@@ -1095,6 +1130,15 @@ impl LDA {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Thinned MCMC θ draws, shape ``(num_draws, num_docs, num_topics)``, or
+    /// ``None`` when fit with ``keep_theta_draws=False``. These are real
+    /// cross-sweep posterior samples; :func:`topica.composition_theta` prefers
+    /// them over the within-document Dirichlet approximation.
+    #[getter]
+    fn theta_draws<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray3<f32>>> {
+        self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
     }
 
     /// The vocabulary: word for each column of :attr:`topic_word`.
@@ -1403,6 +1447,7 @@ impl LDA {
             fitted: true,
             phi: Some(phi),
             theta: Some(theta),
+            theta_draws: None,
             model: Some(model),
             corpus: Some(corpus),
         })
@@ -1777,7 +1822,8 @@ impl LDA {
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
             num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
-            phi: arr2_back(s.phi), theta: arr2_back(s.theta), model: s.model, corpus: s.corpus,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta), theta_draws: None,
+            model: s.model, corpus: s.corpus,
         })
     }
 
@@ -1820,6 +1866,111 @@ fn accumulate_theta(m: &TopicModel, c: &corpus::Corpus, acc: &mut [Vec<f64>]) {
             acc[doc_idx][t] += (counts[t] as f64 + m.alpha[t]) / denom;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Thinned MCMC theta-draw retention (issue #31)
+// ---------------------------------------------------------------------------
+//
+// A single normalized θ snapshot from the current sampler state, kept as f32 to
+// halve the (num_draws × D × K) store. Collected on a ring buffer during the
+// main sweep loop so the retained draws are the converged tail of the chain;
+// `composition_theta` then propagates real cross-sweep variance instead of the
+// within-document Dirichlet approximation.
+
+/// Thinning period given the run length and how many draws we want to keep:
+/// take ~`2·cap` snapshots over the run so the kept `cap` (ring-buffered) sit in
+/// the back half. `0` disables collection.
+fn theta_draw_thin(iters: usize, cap: usize) -> usize {
+    if cap == 0 {
+        return 0;
+    }
+    (iters / (2 * cap)).max(1)
+}
+
+/// One normalized θ snapshot (D×K) as f32 from a `TopicModel`'s current counts.
+fn theta_snapshot_f32(m: &TopicModel, c: &corpus::Corpus) -> Vec<Vec<f32>> {
+    let mut counts = vec![0u32; m.num_topics];
+    let mut out = Vec::with_capacity(c.num_docs());
+    for doc_idx in 0..c.num_docs() {
+        for t in counts.iter_mut() {
+            *t = 0;
+        }
+        for &t in &m.doc_topics[doc_idx] {
+            counts[t as usize] += 1;
+        }
+        let denom = c.docs[doc_idx].len() as f64 + m.alpha_sum;
+        out.push(
+            (0..m.num_topics)
+                .map(|t| ((counts[t] as f64 + m.alpha[t]) / denom) as f32)
+                .collect(),
+        );
+    }
+    out
+}
+
+/// Push a draw onto a ring buffer that keeps only the last `cap`.
+fn push_capped(buf: &mut Vec<Vec<Vec<f32>>>, draw: Vec<Vec<f32>>, cap: usize) {
+    buf.push(draw);
+    if buf.len() > cap {
+        buf.remove(0);
+    }
+}
+
+/// Warn (once, before the heavy loop) when retaining θ draws would cost more
+/// than ~512 MB, so a large corpus does not silently balloon memory. The user
+/// can pass `keep_theta_draws=False` or a smaller `num_theta_draws`.
+fn warn_theta_draw_memory(
+    py: Python<'_>,
+    keep: bool,
+    num_draws: usize,
+    num_docs: usize,
+    num_topics: usize,
+) -> PyResult<()> {
+    if !keep || num_draws == 0 {
+        return Ok(());
+    }
+    const THRESHOLD: usize = 512 * 1024 * 1024; // 512 MB of f32
+    let bytes = num_draws
+        .saturating_mul(num_docs)
+        .saturating_mul(num_topics)
+        .saturating_mul(4);
+    if bytes > THRESHOLD {
+        let mb = bytes / (1024 * 1024);
+        let msg = format!(
+            "keep_theta_draws will retain ~{mb} MB of MCMC theta draws \
+             ({num_draws} draws x {num_docs} docs x {num_topics} topics, f32). \
+             Pass keep_theta_draws=False, or a smaller num_theta_draws, to avoid this."
+        );
+        let warnings = py.import_bound("warnings")?;
+        warnings.call_method1("warn", (msg,))?;
+    }
+    Ok(())
+}
+
+/// Stack the collected draws into an `(S, D, K)` array, or `None` if empty.
+/// When `order` is given, row `i` of each draw is scattered to document
+/// `order[i]` (the keyATM dynamic model fits on time-sorted documents, so its
+/// draws come back sorted and must be unsorted to match the other outputs).
+fn draws_to_array3(
+    buf: &[Vec<Vec<f32>>],
+    num_docs: usize,
+    num_topics: usize,
+    order: Option<&[usize]>,
+) -> Option<Array3<f32>> {
+    if buf.is_empty() {
+        return None;
+    }
+    let mut arr = Array3::<f32>::zeros((buf.len(), num_docs, num_topics));
+    for (s, draw) in buf.iter().enumerate() {
+        for (i, row) in draw.iter().enumerate() {
+            let d = order.map_or(i, |o| o[i]);
+            for (t, &v) in row.iter().enumerate() {
+                arr[[s, d, t]] = v;
+            }
+        }
+    }
+    Some(arr)
 }
 
 // ---------------------------------------------------------------------------
@@ -6366,6 +6517,9 @@ pub struct SeededLDA {
     topic_names: Vec<String>,
     phi: Option<Array2<f64>>,
     theta: Option<Array2<f64>>,
+    // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
+    // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
+    theta_draws: Option<Array3<f32>>,
     corpus: Option<corpus::Corpus>,
 }
 
@@ -6407,7 +6561,8 @@ impl SeededLDA {
         }
         Ok(SeededLDA {
             seed_names: names, seed_words: words, residual, alpha, beta, weight, seed,
-            fitted: false, topic_names: Vec::new(), phi: None, theta: None, corpus: None,
+            fitted: false, topic_names: Vec::new(), phi: None, theta: None,
+            theta_draws: None, corpus: None,
         })
     }
 
@@ -6419,13 +6574,16 @@ impl SeededLDA {
     /// symmetric `alpha`, biasing each document's topic mixture toward chosen
     /// topics (e.g. from a document embedding). It is a prior, so the sampler
     /// can still move a document away from it.
-    #[pyo3(signature = (data, *, iters=2000, doc_topic_prior=None))]
+    #[pyo3(signature = (data, *, iters=2000, doc_topic_prior=None,
+                        keep_theta_draws=true, num_theta_draws=25))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         iters: usize,
         doc_topic_prior: Option<&Bound<'_, PyAny>>,
+        keep_theta_draws: bool,
+        num_theta_draws: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -6466,16 +6624,19 @@ impl SeededLDA {
             None => None,
         };
 
+        let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
+        warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         let (model, corpus) = py.allow_threads(move || {
             let m = seeded::fit_seeded_lda(
                 &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, doc_alpha,
-                iters, &mut rng,
+                iters, draws_opts, &mut rng,
             );
             (m, corpus)
         });
         self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.theta_draws = draws_to_array3(&model.theta_draws, corpus.num_docs(), num_topics, None);
         let mut names = self.seed_names.clone();
         for i in 0..self.residual {
             names.push(format!("residual_{}", i + 1));
@@ -6495,6 +6656,14 @@ impl SeededLDA {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Thinned MCMC θ draws, shape ``(num_draws, num_docs, num_topics)``, or
+    /// ``None`` when fit with ``keep_theta_draws=False``. Real cross-sweep
+    /// posterior samples that :func:`topica.composition_theta` prefers over the
+    /// within-document Dirichlet approximation.
+    #[getter]
+    fn theta_draws<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray3<f32>>> {
+        self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
     }
     #[getter]
     fn num_topics(&self) -> usize {
@@ -6557,7 +6726,7 @@ impl SeededLDA {
             residual: s.num_topics.saturating_sub(s.topic_names.iter().filter(|n| !n.starts_with("residual_")).count()),
             alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, fitted: s.fitted,
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
-            corpus: s.corpus,
+            theta_draws: None, corpus: s.corpus,
         })
     }
 
@@ -8203,6 +8372,9 @@ pub struct KeyATM {
     // dynamic model (per-state α); the `alpha` getter then falls back to the
     // symmetric prior.
     alpha_vec: Option<Vec<f64>>,
+    // Thinned MCMC θ snapshots (num_draws, num_docs, num_topics), f32; None when
+    // keep_theta_draws=False. Feeds composition_theta's cross-sweep uncertainty.
+    theta_draws: Option<Array3<f32>>,
 }
 
 impl KeyATM {
@@ -8261,6 +8433,7 @@ impl KeyATM {
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: Vec::new(),
             alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
+            theta_draws: None,
         })
     }
 
@@ -8288,6 +8461,7 @@ impl KeyATM {
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: Vec::new(),
             alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
+            theta_draws: None,
         })
     }
 
@@ -8310,7 +8484,8 @@ impl KeyATM {
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
                         timestamps=None, num_states=5, weights="information-theory",
                         num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
-                        lbfgs_iters=20, report_interval=0, prior_offset=None))]
+                        lbfgs_iters=20, report_interval=0, prior_offset=None,
+                        keep_theta_draws=true, num_theta_draws=25))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -8329,6 +8504,8 @@ impl KeyATM {
         lbfgs_iters: usize,
         report_interval: usize,
         prior_offset: Option<&Bound<'_, PyAny>>,
+        keep_theta_draws: bool,
+        num_theta_draws: usize,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -8343,6 +8520,9 @@ impl KeyATM {
         }
         let num_topics = self.num_topics;
         let num_types = corpus.num_types();
+        // Thinned θ-draw retention schedule (issue #31), shared by all three fits.
+        let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
+        warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
         // Warn about keywords absent from the (pruned) vocabulary: a "seeded"
         // topic whose keywords were all dropped was never actually seeded, and
         // pruning (rm_top / min_doc_freq) or a typo/stemming mismatch silently
@@ -8425,7 +8605,7 @@ impl KeyATM {
                     &sorted_docs, num_types, num_topics, &keys, &sorted_time, num_states,
                     beta, beta_key, g1, g2,
                     1.0, 1.0, 2.0, 1.0, // keyATM α-prior defaults: eta_1, eta_2, eta_1_reg, eta_2_reg
-                    iters, ll_interval, weight_scheme, nthreads, &mut rng,
+                    iters, ll_interval, weight_scheme, nthreads, draws_opts, &mut rng,
                 )
             });
 
@@ -8436,6 +8616,9 @@ impl KeyATM {
                 theta[d] = theta_sorted[i].clone();
             }
             self.theta = Some(vecs_to_arr2(&theta));
+            // θ draws are also sorted; unsort their rows via `order` to match θ.
+            self.theta_draws =
+                draws_to_array3(&model.theta_draws, corpus.num_docs(), num_topics, Some(&order));
             self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
             self.keyword_rate = model.keyword_rate();
             self.time_prevalence = model.time_prevalence().map(|tp| vecs_to_arr2(&tp));
@@ -8537,17 +8720,19 @@ impl KeyATM {
                     &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
                     prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads,
-                    offset.as_deref(), &mut rng,
+                    offset.as_deref(), draws_opts, &mut rng,
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, &mut rng,
+                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, &mut rng,
                 ),
             };
             (m, corpus)
         });
         self.phi = Some(vecs_to_arr2(&model.topic_word_all()));
         self.theta = Some(vecs_to_arr2(&model.doc_topic()));
+        self.theta_draws =
+            draws_to_array3(&model.theta_draws, corpus.num_docs(), num_topics, None);
         self.keyword_rate = model.keyword_rate();
         self.log_likelihood_history = model.log_likelihood_history.clone();
         self.alpha_history = model.alpha_history.clone();
@@ -8631,6 +8816,14 @@ impl KeyATM {
     fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+    /// Thinned MCMC θ draws, shape ``(num_draws, num_docs, num_topics)``, or
+    /// ``None`` when fit with ``keep_theta_draws=False``. Real cross-sweep
+    /// posterior samples that :func:`topica.composition_theta` prefers over the
+    /// within-document Dirichlet approximation.
+    #[getter]
+    fn theta_draws<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray3<f32>>> {
+        self.theta_draws.as_ref().map(|a| a.to_pyarray_bound(py))
     }
     /// Per-topic keyword switch rate ``π_k`` (the share of a keyword topic's mass
     /// drawn from its keyword distribution); 0 for regular topics.
@@ -8747,7 +8940,7 @@ impl KeyATM {
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: s.log_likelihood_history,
             alpha_history: s.alpha_history, pi_history: s.pi_history,
-            alpha_vec: s.alpha_vec,
+            alpha_vec: s.alpha_vec, theta_draws: None,
         })
     }
 

@@ -954,8 +954,15 @@ class LDA:
         sample_interval: int = 25,
         progress: Optional[object] = None,
         progress_interval: int = 50,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
-        """Run Gibbs sampling to fit the model on data."""
+        """Run Gibbs sampling to fit the model on data.
+
+        With ``keep_theta_draws`` (default on), the last ``num_theta_draws``
+        thinned MCMC theta snapshots are retained as :attr:`theta_draws` for
+        ``composition_theta`` standard errors. Set ``keep_theta_draws=False`` to
+        save memory (``num_theta_draws x num_docs x num_topics`` f32)."""
         ...
 
     @property
@@ -966,6 +973,13 @@ class LDA:
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
         """theta matrix of shape (num_docs, num_topics); rows sum to 1."""
+        ...
+
+    @property
+    def theta_draws(self) -> Optional[numpy.typing.NDArray[numpy.float32]]:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), or
+        None when fit with keep_theta_draws=False. Real cross-sweep posterior
+        samples that composition_theta prefers over the Dirichlet approximation."""
         ...
 
     @property
@@ -1334,11 +1348,18 @@ class SeededLDA:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 2000,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def theta_draws(self) -> Optional[numpy.typing.NDArray[numpy.float32]]:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), or
+        None when fit with keep_theta_draws=False."""
+        ...
     @property
     def num_topics(self) -> int: ...
     @property
@@ -1749,6 +1770,8 @@ class KeyATM:
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
         report_interval: int = 0,
+        keep_theta_draws: bool = True,
+        num_theta_draws: int = 25,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -1795,6 +1818,13 @@ class KeyATM:
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
+    @property
+    def theta_draws(self) -> Optional[numpy.typing.NDArray[numpy.float32]]:
+        """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), or
+        None when fit with keep_theta_draws=False. Real cross-sweep posterior
+        samples that composition_theta prefers over the Dirichlet approximation.
+        Collected for the base, covariate, and dynamic variants."""
+        ...
     @property
     def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
         """Covariate model: learned lambda, shape (num_topics, F+1); column 0 is
