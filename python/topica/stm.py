@@ -149,6 +149,94 @@ def _fit_one(y, X, *, link, groups, hat, XtX_inv, dof):
     return beta, cov, r2
 
 
+def _pooled_coefficients(theta, X, *, link, groups, hat, XtX_inv, dof, topic_list):
+    """Fit per-topic regressions and pool by Rubin's rules.
+
+    Returns a list of ``(beta, Sigma, r2)`` tuples — one per topic in
+    ``topic_list`` — where ``Sigma`` is the full ``(p, p)`` posterior covariance
+    (not just the diagonal). Both :func:`estimate_effect` and
+    :func:`predicted_prevalence` call this so their coefficient posteriors never
+    diverge.
+
+    Parameters
+    ----------
+    theta : ndarray
+        Either ``(n, K)`` for a point estimate or ``(M, n, K)`` for draws.
+    X : ndarray
+        Design matrix ``(n, p)`` — intercept already prepended.
+    link, groups, hat, XtX_inv, dof : as in :func:`estimate_effect`.
+    topic_list : list[int]
+        Topic indices to fit (validated by the caller).
+
+    Returns
+    -------
+    list of ``(beta (p,), Sigma (p, p), r2 float)``
+    """
+    pooled = theta.ndim == 3
+    if pooled:
+        nsims_inner = theta.shape[0]
+    fast = link == "identity" and groups is None
+    p = X.shape[1]
+    n = X.shape[0]
+
+    # Fast batched path for plain OLS without clustering.
+    if fast and pooled:
+        Yt = theta[:, :, topic_list]                          # (M, n, T)
+        B = np.einsum("pn,snt->spt", hat, Yt)                 # (M, p, T)
+        R = Yt - np.einsum("np,spt->snt", X, B)
+        ss = np.einsum("snt,snt->st", R, R)                   # (M, T)
+        within_scale = (ss / dof).mean(axis=0)                # (T,)
+        beta_mean = B.mean(axis=0)                            # (p, T)
+        tss = ((Yt - Yt.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)  # (M, T)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0).mean(axis=0)  # (T,)
+        out = []
+        for i in range(len(topic_list)):
+            between = np.cov(B[:, :, i], rowvar=False) if nsims_inner > 1 else np.zeros((p, p))
+            Sigma = within_scale[i] * XtX_inv + (1.0 + 1.0 / nsims_inner) * np.atleast_2d(between)
+            out.append((beta_mean[:, i], Sigma, float(r2_all[i])))
+        return out
+
+    if fast:
+        Y = theta[:, topic_list]                              # (n, T)
+        B = hat @ Y                                           # (p, T)
+        R = Y - X @ B
+        ss = np.einsum("nt,nt->t", R, R)                      # (T,)
+        tss = ((Y - Y.mean(axis=0)) ** 2).sum(axis=0)         # (T,)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0)
+        out = []
+        for i in range(len(topic_list)):
+            sigma2 = float(ss[i]) / dof
+            Sigma = sigma2 * XtX_inv
+            out.append((B[:, i], Sigma, float(r2_all[i])))
+        return out
+
+    # Slow path: GLM / cluster-robust, per-topic.
+    out = []
+    for t in topic_list:
+        if pooled:
+            betas = np.empty((nsims_inner, p))
+            within = np.zeros((p, p))
+            r2s = np.empty(nsims_inner)
+            for m in range(nsims_inner):
+                b, cov_m, r2_m = _fit_one(theta[m, :, t], X, link=link, groups=groups,
+                                           hat=hat, XtX_inv=XtX_inv, dof=dof)
+                betas[m] = b
+                within += cov_m
+                r2s[m] = r2_m
+            within /= nsims_inner
+            beta = betas.mean(axis=0)
+            between = np.cov(betas, rowvar=False) if nsims_inner > 1 else np.zeros((p, p))
+            Sigma = within + (1.0 + 1.0 / nsims_inner) * np.atleast_2d(between)
+            out.append((beta, Sigma, float(r2s.mean())))
+        else:
+            beta, cov, r2 = _fit_one(theta[:, t], X, link=link, groups=groups,
+                                     hat=hat, XtX_inv=XtX_inv, dof=dof)
+            out.append((beta, cov, r2))
+    return out
+
+
 def estimate_effect(
     doc_topic,
     X=None,
@@ -211,8 +299,6 @@ def estimate_effect(
     list[TopicEffect]
         One regression per topic. ``[e.as_dict() for e in result]`` builds a table.
     """
-    from math import sqrt
-
     # Formula path: build X and feature_names from an R-style formula + a
     # DataFrame. A string `cluster` is read as a column of that frame.
     if formula is not None:
@@ -283,59 +369,14 @@ def estimate_effect(
         if t < 0 or t >= num_topics:
             raise ValueError(f"topic {t} out of range (num_topics={num_topics})")
 
-    # Fast path: plain OLS (identity link, no clustering) is just shared-hat
-    # matrix algebra, so solve for every requested topic — and every posterior
-    # draw — with a few batched matmuls instead of a Python loop per (topic, sim).
-    fast = link == "identity" and groups is None
-    if fast and pooled:
-        Yt = theta[:, :, topic_list]                          # (M, n, T)
-        B = np.einsum("pn,snt->spt", hat, Yt)                 # (M, p, T)
-        R = Yt - np.einsum("np,spt->snt", X, B)
-        ss = np.einsum("snt,snt->st", R, R)                   # (M, T)
-        within_scale = (ss / dof).mean(axis=0)                # (T,)
-        beta_mean = B.mean(axis=0)                            # (p, T)
-        tss = ((Yt - Yt.mean(axis=1, keepdims=True)) ** 2).sum(axis=1)  # (M, T)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0).mean(axis=0)  # (T,)
-    elif fast:
-        Y = theta[:, topic_list]                              # (n, T)
-        B = hat @ Y                                           # (p, T)
-        R = Y - X @ B
-        ss = np.einsum("nt,nt->t", R, R)                      # (T,)
-        SE = np.sqrt(np.clip(np.diag(XtX_inv)[:, None] * (ss / dof)[None, :], 0.0, None))
-        tss = ((Y - Y.mean(axis=0)) ** 2).sum(axis=0)         # (T,)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            r2_all = np.where(tss > 0, 1.0 - ss / tss, 0.0)
+    pooled_results = _pooled_coefficients(
+        theta, X, link=link, groups=groups, hat=hat, XtX_inv=XtX_inv, dof=dof,
+        topic_list=topic_list,
+    )
 
     out: list[TopicEffect] = []
-    for i, t in enumerate(topic_list):
-        if fast and pooled:
-            # Rubin's rules: total var = within + (1 + 1/M) * between.
-            between = np.cov(B[:, :, i], rowvar=False) if nsims > 1 else np.zeros((p, p))
-            total = within_scale[i] * XtX_inv + (1.0 + 1.0 / nsims) * np.atleast_2d(between)
-            beta, se, r2 = beta_mean[:, i], np.sqrt(np.clip(np.diag(total), 0.0, None)), float(r2_all[i])
-        elif fast:
-            beta, se, r2 = B[:, i], SE[:, i], float(r2_all[i])
-        elif pooled:
-            betas = np.empty((nsims, p))
-            within = np.zeros((p, p))
-            r2s = np.empty(nsims)
-            for m in range(nsims):
-                b, cov_m, r2_m = _fit_one(theta[m, :, t], X, link=link, groups=groups,
-                                          hat=hat, XtX_inv=XtX_inv, dof=dof)
-                betas[m] = b
-                within += cov_m
-                r2s[m] = r2_m
-            within /= nsims
-            beta = betas.mean(axis=0)
-            between = np.cov(betas, rowvar=False) if nsims > 1 else np.zeros((p, p))
-            total = within + (1.0 + 1.0 / nsims) * np.atleast_2d(between)
-            se = np.sqrt(np.clip(np.diag(total), 0.0, None))
-            r2 = float(r2s.mean())
-        else:
-            beta, cov, r2 = _fit_one(theta[:, t], X, link=link, groups=groups,
-                                     hat=hat, XtX_inv=XtX_inv, dof=dof)
-            se = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    for (beta, Sigma, r2), t in zip(pooled_results, topic_list):
+        se = np.sqrt(np.clip(np.diag(Sigma), 0.0, None))
         with np.errstate(divide="ignore", invalid="ignore"):
             zvals = np.where(se > 0, beta / se, 0.0)
         out.append(
@@ -350,6 +391,479 @@ def estimate_effect(
                 r_squared=r2,
             )
         )
+    return out
+
+
+@dataclass
+class PredictedPrevalence:
+    """Predicted topic prevalence at a covariate grid, with simulation-based CIs.
+
+    Produced by :func:`predicted_prevalence`. Each entry covers one topic across
+    all grid points (for ``at``/``continuous``) or the contrast between two
+    settings (for ``contrast``).
+
+    Attributes
+    ----------
+    topic : int
+        Zero-based topic index.
+    topic_name : str
+        Human-readable label (``topic_names`` from the model, or ``"topic_k"``).
+    mode : str
+        One of ``"at"``, ``"contrast"``, or ``"continuous"``.
+    grid : list
+        Reference covariate values: a list of dicts for ``at`` / ``continuous``
+        (one per grid row), or ``[setting_a, setting_b]`` for ``contrast``.
+    estimate : np.ndarray
+        Mean predicted prevalence (or contrast), one entry per grid point.
+    ci_low : np.ndarray
+        Lower bound of the ``ci``-level simulation interval.
+    ci_high : np.ndarray
+        Upper bound.
+    covariate : str or None
+        For ``continuous``, the name of the swept covariate (convenient for
+        plotting); ``None`` otherwise.
+    """
+
+    topic: int
+    topic_name: str
+    mode: str
+    grid: list
+    estimate: np.ndarray
+    ci_low: np.ndarray
+    ci_high: np.ndarray
+    covariate: str | None = None
+
+    def to_frame(self):
+        """Return a tidy pandas DataFrame with one row per grid point.
+
+        Columns are ``topic``, ``topic_name``, any covariate column(s),
+        ``estimate``, ``ci_low``, and ``ci_high``.
+        """
+        import pandas as pd
+
+        rows = []
+        for idx, (est, lo, hi) in enumerate(
+            zip(self.estimate, self.ci_low, self.ci_high)
+        ):
+            row: dict = {
+                "topic": self.topic,
+                "topic_name": self.topic_name,
+            }
+            if self.mode == "contrast":
+                row["contrast"] = str(self.grid[idx]) if idx < len(self.grid) else ""
+            else:
+                g = self.grid[idx] if idx < len(self.grid) else {}
+                if isinstance(g, dict):
+                    row.update(g)
+                else:
+                    row["value"] = g
+            row["estimate"] = float(est)
+            row["ci_low"] = float(lo)
+            row["ci_high"] = float(hi)
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+
+def _build_reference_rows(
+    at,
+    contrast,
+    continuous,
+    data,
+    formula,
+    feature_names,
+    X_train,
+    knot_ctx,
+    npoints,
+    add_intercept,
+):
+    """Build the design rows ``X_new`` for the prediction grid.
+
+    Returns ``(X_new (G, p), grid_labels, covariate_name_or_None)``.
+    ``X_new`` already includes the intercept column when ``add_intercept``.
+    """
+    import pandas as pd
+    from .formulas import design_matrix_predict
+
+    if continuous is not None:
+        # Sweep the named continuous covariate over its observed range.
+        if data is None:
+            raise ValueError("continuous= requires data= (the training DataFrame).")
+        col = continuous
+        x_obs = np.asarray(data[col], dtype=np.float64)
+        grid_vals = np.linspace(x_obs.min(), x_obs.max(), npoints)
+        # Hold all other numeric columns at their means, categoricals at their mode.
+        ref = {}
+        for c in data.columns:
+            if c == col:
+                continue
+            col_vals = data[c]
+            try:
+                ref[c] = float(col_vals.mean())
+            except (TypeError, AttributeError):
+                ref[c] = col_vals.mode()[0] if len(col_vals) > 0 else col_vals.iloc[0]
+        rows = []
+        for v in grid_vals:
+            row_dict = dict(ref)
+            row_dict[col] = v
+            rows.append(row_dict)
+        grid_df = pd.DataFrame(rows)
+        if formula is not None:
+            X_new, _ = design_matrix_predict(formula, grid_df, knot_ctx)
+        else:
+            # Raw X path: only the swept column changed; rebuild with the same columns.
+            if feature_names is None:
+                raise ValueError(
+                    "continuous= with raw X requires feature_names= to identify the column."
+                )
+            fn = list(feature_names)
+            if col not in fn:
+                raise ValueError(f"continuous={col!r} not in feature_names {fn}")
+            ci_idx = fn.index(col)
+            # Hold other columns at their column means.
+            col_means = X_train.mean(axis=0)
+            X_new = np.tile(col_means, (npoints, 1))
+            X_new[:, ci_idx] = grid_vals
+        if add_intercept:
+            X_new = np.hstack([np.ones((X_new.shape[0], 1)), X_new])
+        grid_labels = [{col: float(v)} for v in grid_vals]
+        return X_new, grid_labels, col
+
+    if contrast is not None:
+        # Two covariate settings; result is the difference (setting_b - setting_a).
+        if isinstance(contrast, dict):
+            if len(contrast) != 1:
+                raise ValueError(
+                    "contrast= as a dict must have exactly one key: "
+                    "{covariate: [value_a, value_b]}."
+                )
+            col, vals = next(iter(contrast.items()))
+            if len(vals) != 2:
+                raise ValueError(
+                    "contrast= dict value must be a list of two levels, e.g. "
+                    '{"party": ["D", "R"]}.'
+                )
+            setting_a, setting_b = vals
+        elif len(contrast) == 2:
+            setting_a, setting_b = contrast
+        else:
+            raise ValueError("contrast= must be a 2-item dict or a 2-element sequence.")
+
+        def _single_row(setting):
+            """Build one design row for a covariate setting (dict or scalar)."""
+            if data is not None and formula is not None:
+                if isinstance(setting, dict):
+                    base = {c: (data[c].mean() if data[c].dtype.kind in "fc" else data[c].mode()[0])
+                            for c in data.columns}
+                    base.update(setting)
+                else:
+                    # scalar contrast: the dict key is ``col``
+                    base = {c: (data[c].mean() if data[c].dtype.kind in "fc" else data[c].mode()[0])
+                            for c in data.columns}
+                    base[col] = setting
+                row_df = pd.DataFrame([base])
+                X_row, _ = design_matrix_predict(formula, row_df, knot_ctx)
+            elif feature_names is not None:
+                fn = list(feature_names)
+                col_means = X_train.mean(axis=0)
+                x_row = col_means.copy()
+                if isinstance(setting, dict):
+                    for k, v in setting.items():
+                        if k in fn:
+                            x_row[fn.index(k)] = v
+                else:
+                    if col in fn:
+                        x_row[fn.index(col)] = setting
+                X_row = x_row[None, :]
+            else:
+                raise ValueError(
+                    "contrast= requires either (formula=, data=) or "
+                    "(X=, feature_names=) to build reference rows."
+                )
+            return X_row  # (1, p_raw)
+
+        Xa = _single_row(setting_a)
+        Xb = _single_row(setting_b)
+        if add_intercept:
+            Xa = np.hstack([np.ones((1, 1)), Xa])
+            Xb = np.hstack([np.ones((1, 1)), Xb])
+        # Stack both rows; the caller computes the difference.
+        X_new = np.vstack([Xa, Xb])
+        grid_labels = [str(setting_a), str(setting_b)]
+        return X_new, grid_labels, None
+
+    if at is not None:
+        # Explicit reference grid.
+        if isinstance(at, dict):
+            # Could be {col: value} (single row) or {col: [v1, v2, ...]} (grid).
+            vals = list(at.values())
+            if any(isinstance(v, (list, np.ndarray)) for v in vals):
+                # Convert to a list of dicts: one per combination, iterating
+                # over the first list-valued covariate and broadcasting scalars.
+                list_vals = {k: (v if isinstance(v, (list, np.ndarray)) else [v])
+                             for k, v in at.items()}
+                max_len = max(len(v) for v in list_vals.values())
+                at_rows = []
+                for i in range(max_len):
+                    at_rows.append({k: (v[i % len(v)] if isinstance(v, (list, np.ndarray)) else v)
+                                    for k, v in at.items()})
+            else:
+                at_rows = [at]
+        elif hasattr(at, "iterrows"):
+            # pandas DataFrame
+            at_rows = [dict(row) for _, row in at.iterrows()]
+        else:
+            at_rows = list(at)
+
+        X_parts = []
+        for row_dict in at_rows:
+            if data is not None and formula is not None:
+                if data is not None:
+                    base = {c: (data[c].mean() if data[c].dtype.kind in "fc"
+                                else data[c].mode()[0])
+                            for c in data.columns}
+                    base.update(row_dict)
+                else:
+                    base = row_dict
+                row_df = pd.DataFrame([base])
+                X_row, _ = design_matrix_predict(formula, row_df, knot_ctx)
+            elif feature_names is not None:
+                fn = list(feature_names)
+                col_means = X_train.mean(axis=0)
+                x_row = col_means.copy()
+                for k, v in row_dict.items():
+                    if k in fn:
+                        x_row[fn.index(k)] = v
+                X_row = x_row[None, :]
+            else:
+                raise ValueError(
+                    "at= requires either (formula=, data=) or (X=, feature_names=)."
+                )
+            X_parts.append(X_row)
+        X_new = np.vstack(X_parts)
+        if add_intercept:
+            X_new = np.hstack([np.ones((X_new.shape[0], 1)), X_new])
+        grid_labels = at_rows
+        return X_new, grid_labels, None
+
+    raise ValueError("One of at=, contrast=, or continuous= must be supplied.")
+
+
+def predicted_prevalence(
+    model,
+    *,
+    X=None,
+    formula=None,
+    data=None,
+    feature_names=None,
+    at=None,
+    contrast=None,
+    continuous=None,
+    npoints=50,
+    topics=None,
+    link="identity",
+    ci=0.95,
+    nsims=25,
+    n_sim=2000,
+    corpus=None,
+    seed=0,
+    add_intercept=True,
+):
+    """Predicted topic prevalence at chosen covariate values, with simulation-based CIs.
+
+    This is the model-agnostic counterpart of R ``stm``'s ``plot.estimateEffect``.
+    It works on any model whose document-topic matrix supports
+    :func:`~topica.effects.composition_theta` (STM, CTM, LDA, keyATM covariate,
+    DMR, SeededLDA, ...) because it regresses the composition-theta draws on the
+    design matrix — exactly as :func:`estimate_effect` does — and then pushes
+    coefficient posterior draws through the link at new covariate values rather
+    than reporting the coefficients themselves.
+
+    Three modes mirror ``stm``'s ``method`` argument:
+
+    - ``at=`` (**point grid**) — a dict ``{covariate: value}`` or a small DataFrame
+      of reference rows; returns predicted theta per topic per row, with CI.
+    - ``contrast=`` (**difference**) — two covariate settings, e.g.
+      ``contrast={"party": ["D", "R"]}``; returns the difference in predicted
+      theta between the two settings per topic, with CI.
+    - ``continuous=`` (**smooth curve**) — a column name; sweeps the covariate
+      over its observed range on a ``npoints``-point grid, holding all other
+      columns at their means. Spline terms in ``formula`` are evaluated with the
+      training knots, not re-fit to the new grid.
+
+    Parameters
+    ----------
+    model : fitted topica model
+        Any model whose theta supports the composition method (Gibbs or
+        logistic-normal). Pass the model itself; theta draws are generated
+        internally.
+    X : array (num_docs, p), optional
+        Raw design matrix. Provide either ``X`` (with optional ``feature_names``)
+        or ``formula`` + ``data``.
+    formula : str, optional
+        R-style formula, e.g. ``"~ party + spline(year, df=3)"``.
+    data : pandas.DataFrame, optional
+        One row per document; required with ``formula=``. Also used to build
+        reference rows for ``continuous=`` / ``contrast=``.
+    feature_names : list[str], optional
+        Column names for ``X``. Required for ``continuous=`` or ``contrast=``
+        when using the raw ``X`` path.
+    at : dict or DataFrame, optional
+        Reference covariate settings for point predictions.
+    contrast : dict or 2-tuple, optional
+        Two covariate settings; the result is their difference.
+    continuous : str, optional
+        Column name to sweep over its observed range.
+    npoints : int
+        Number of grid points for ``continuous=``. Default 50.
+    topics : list[int], optional
+        Restrict to these topics. Defaults to all.
+    link : str
+        ``"identity"`` (default), ``"logit"``, or ``"log"``. Applied to the
+        linear predictor when computing predicted prevalence.
+    ci : float
+        Confidence level for the simulation-based interval. Default 0.95.
+    nsims : int
+        Composition theta draws for Rubin's-rules pooling. Default 25.
+    n_sim : int
+        Number of coefficient posterior draws for the simulation CI. Default 2000.
+    corpus : Corpus or token lists, optional
+        Required for Gibbs models that did not retain ``theta_draws``.
+    seed : int
+        RNG seed.
+    add_intercept : bool
+        Prepend an intercept column to the design matrix. Default True.
+
+    Returns
+    -------
+    list[PredictedPrevalence]
+        One object per topic (in ``topics`` order, or all topics). Each has
+        ``.estimate``, ``.ci_low``, ``.ci_high`` arrays (one entry per grid
+        point) and a ``.to_frame()`` method for a tidy DataFrame.
+    """
+    from .effects import composition_theta
+    from .formulas import _KnotCapturingContext
+
+    # --- build training design matrix ----------------------------------------
+    knot_ctx = _KnotCapturingContext()
+    if formula is not None:
+        if data is None:
+            raise ValueError("formula= requires data= (a pandas DataFrame).")
+        from .formulas import design_matrix
+        X_train, feature_names = design_matrix(formula, data, _knot_ctx=knot_ctx)
+    elif X is not None:
+        X_train = np.asarray(X, dtype=np.float64)
+        if X_train.ndim == 1:
+            X_train = X_train[:, None]
+    else:
+        raise ValueError("provide X (a design matrix), or formula= with data=.")
+
+    # --- draw theta ----------------------------------------------------------
+    theta = composition_theta(model, corpus, nsims=nsims, seed=seed)  # (M, D, K)
+    m, n, num_topics = theta.shape
+    if X_train.shape[0] != n:
+        raise ValueError(
+            f"X has {X_train.shape[0]} rows but the model's doc_topic has {n} docs"
+        )
+
+    names = list(feature_names) if feature_names is not None else [
+        f"feature_{i}" for i in range(X_train.shape[1])
+    ]
+    if len(names) != X_train.shape[1]:
+        raise ValueError("feature_names length must match X columns")
+
+    if link not in ("identity", "logit", "log"):
+        raise ValueError("link must be 'identity', 'logit', or 'log'")
+
+    # Add intercept to training matrix.
+    X_full = np.hstack([np.ones((n, 1)), X_train]) if add_intercept else X_train
+    names_full = (["intercept"] + names) if add_intercept else names
+
+    p = X_full.shape[1]
+    XtX_inv = np.linalg.pinv(X_full.T @ X_full)
+    hat = XtX_inv @ X_full.T
+    dof = max(n - p, 1)
+
+    topic_list = list(range(num_topics)) if topics is None else list(topics)
+    for t in topic_list:
+        if t < 0 or t >= num_topics:
+            raise ValueError(f"topic {t} out of range (num_topics={num_topics})")
+
+    # --- get per-topic coefficient posterior ---------------------------------
+    pooled = _pooled_coefficients(
+        theta, X_full, link=link, groups=None, hat=hat, XtX_inv=XtX_inv, dof=dof,
+        topic_list=topic_list,
+    )
+
+    # --- build reference design rows X_new ----------------------------------
+    X_new, grid_labels, cov_name = _build_reference_rows(
+        at=at,
+        contrast=contrast,
+        continuous=continuous,
+        data=data,
+        formula=formula,
+        feature_names=names,
+        X_train=X_train,
+        knot_ctx=knot_ctx,
+        npoints=npoints,
+        add_intercept=add_intercept,
+    )
+    # X_new already has intercept prepended by _build_reference_rows.
+    G = X_new.shape[0]
+
+    # --- simulation-based CI ------------------------------------------------
+    rng = np.random.default_rng(seed)
+    mode = "contrast" if contrast is not None else ("continuous" if continuous is not None else "at")
+
+    # Topic names
+    topic_names_all = list(getattr(model, "topic_names", [])) or [
+        f"topic_{t}" for t in range(num_topics)
+    ]
+
+    alpha = 1.0 - ci
+    q_lo = alpha / 2.0
+    q_hi = 1.0 - alpha / 2.0
+
+    out: list[PredictedPrevalence] = []
+    for (beta, Sigma, _r2), t in zip(pooled, topic_list):
+        # Symmetrise and regularise Sigma for Cholesky.
+        Sigma_sym = 0.5 * (Sigma + Sigma.T) + 1e-10 * np.eye(p)
+        try:
+            L = np.linalg.cholesky(Sigma_sym)
+        except np.linalg.LinAlgError:
+            w, v = np.linalg.eigh(Sigma_sym)
+            L = v @ np.diag(np.sqrt(np.clip(w, 0.0, None)))
+
+        # Draw n_sim coefficient vectors from the posterior N(beta, Sigma).
+        Z = rng.standard_normal((n_sim, p))
+        beta_draws = beta[None, :] + Z @ L.T  # (n_sim, p)
+
+        # Predicted prevalence at each grid point.
+        eta = beta_draws @ X_new.T  # (n_sim, G)
+        pred = _link_inv(eta, link)  # (n_sim, G)
+
+        if mode == "contrast":
+            # Difference: setting_b (row 1) minus setting_a (row 0).
+            diff = pred[:, 1] - pred[:, 0]  # (n_sim,)
+            estimates = np.array([float(diff.mean())])
+            ci_lo = np.array([float(np.percentile(diff, q_lo * 100))])
+            ci_hi = np.array([float(np.percentile(diff, q_hi * 100))])
+        else:
+            estimates = pred.mean(axis=0)
+            ci_lo = np.percentile(pred, q_lo * 100, axis=0)
+            ci_hi = np.percentile(pred, q_hi * 100, axis=0)
+
+        tname = topic_names_all[t] if t < len(topic_names_all) else f"topic_{t}"
+        grid_out = [grid_labels[0], grid_labels[1]] if mode == "contrast" else grid_labels
+        out.append(PredictedPrevalence(
+            topic=t,
+            topic_name=tname,
+            mode=mode,
+            grid=grid_out,
+            estimate=estimates,
+            ci_low=ci_lo,
+            ci_high=ci_hi,
+            covariate=cov_name,
+        ))
     return out
 
 
@@ -511,6 +1025,8 @@ from .validation import (  # noqa: E402,F401
 __all__ = [
     "estimate_effect",
     "TopicEffect",
+    "predicted_prevalence",
+    "PredictedPrevalence",
     "posterior_theta_samples",
     "spline",
     "interaction",

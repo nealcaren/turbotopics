@@ -20,6 +20,7 @@ from .base import Panel
 from .capability import Capabilities, capabilities
 from .quality import CoherenceFrontier, SearchK
 from .effect import EffectPlot
+from .prevalence import PrevalencePlot
 from .terms import TermBarchart, TopicSimilarity, term_topic_browser
 from .health import TopicHealth
 from .groups import PrevalenceHeatmap
@@ -44,6 +45,16 @@ def search_k(rows) -> SearchK:
 def effect_plot(model, corpus=None, **kwargs) -> EffectPlot:
     """One covariate's effect on each topic's prevalence, with honest CIs."""
     return EffectPlot(model, corpus, **kwargs)
+
+
+def predicted_prevalence_plot(model, *, results, ci_level=0.95) -> PrevalencePlot:
+    """Predicted topic prevalence at covariate values, with simulation-based CIs.
+
+    Pass the output of :func:`topica.predicted_prevalence` as ``results``.
+    Renders a forest plot for ``at`` / ``contrast`` mode and a curve-and-band
+    plot for ``continuous`` mode.
+    """
+    return PrevalencePlot(model, results=results, ci_level=ci_level)
 
 
 def term_barchart(model, *, topic, mode="prob", n=10, texts=None, error_bars=False, **kwargs) -> TermBarchart:
@@ -99,6 +110,7 @@ __all__ = [
     "CoherenceFrontier",
     "SearchK",
     "EffectPlot",
+    "PrevalencePlot",
     "TermBarchart",
     "TopicSimilarity",
     "TopicHealth",
@@ -111,6 +123,7 @@ __all__ = [
     "coherence_frontier",
     "search_k",
     "effect_plot",
+    "predicted_prevalence_plot",
     "term_barchart",
     "topic_similarity",
     "topic_health",
