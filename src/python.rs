@@ -4605,6 +4605,49 @@ fn infer_theta_batch(
     out
 }
 
+/// Run the CTM/STM variational E-step with a PER-DOCUMENT prior mean.
+///
+/// `mu_per_doc` has shape `(num_docs, K-1)`: row `d` is the prior mean for
+/// document `d` (e.g. `X_d γ` from the prevalence regression). The prior
+/// covariance `sigma` is shared across all documents (the global fitted Σ).
+/// Precomputes `siginv` once, then maps each document independently.
+fn infer_theta_batch_per_doc(
+    py: Python<'_>,
+    beta: &[Vec<f64>],
+    mu_per_doc: &Array2<f64>,
+    sigma: &[f64],
+    docs: &[Vec<u32>],
+) -> Array2<f64> {
+    let nd = docs.len();
+    let km1 = mu_per_doc.ncols();
+    let k = km1 + 1;
+    let siginv = crate::linalg::spd_inverse(sigma, km1).unwrap_or_else(|| {
+        let mut s = sigma.to_vec();
+        crate::linalg::make_diagonally_dominant(&mut s, km1);
+        crate::linalg::spd_inverse(&s, km1).unwrap()
+    });
+    // Collect per-doc prior means as owned Vec<f64> for thread-safety.
+    let mus: Vec<Vec<f64>> = (0..nd)
+        .map(|d| (0..km1).map(|j| mu_per_doc[[d, j]]).collect())
+        .collect();
+    let rows: Vec<Vec<f64>> = py.allow_threads(|| {
+        docs.par_iter()
+            .zip(mus.par_iter())
+            .map(|(doc, mu_d)| {
+                let (words, counts) = ctm::doc_sparse(doc);
+                ctm::infer_theta(beta, mu_d, &siginv, &words, &counts)
+            })
+            .collect()
+    });
+    let mut out = Array2::<f64>::zeros((rows.len(), k));
+    for (d, row) in rows.iter().enumerate() {
+        for (t, &v) in row.iter().enumerate() {
+            out[[d, t]] = v;
+        }
+    }
+    out
+}
+
 fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
     let d = model.lambda.len();
     let km1 = model.num_topics.saturating_sub(1);
@@ -5557,24 +5600,44 @@ impl STM {
 
     /// Infer topic proportions θ for *new* documents by the variational E-step
     /// against the fitted globals (β and the logistic-normal prior). `data` is a
-    /// :class:`Corpus` or `list[list[str]]`; out-of-vocabulary tokens are
-    /// dropped. Returns a ``(num_docs, num_topics)`` array.
+    /// :class:`Corpus` or `list[list[str]]`; out-of-vocabulary tokens are dropped.
+    /// Returns a ``(num_docs, num_topics)`` array.
     ///
-    /// Note: the prior mean used is the covariate-free baseline μ learned at fit
-    /// time (prevalence covariates for held-out docs are not applied here), and
-    /// for a content model the marginal topic-word β is used. This is the same
-    /// held-out inference stm's `fitNewDocuments` performs when no new covariate
-    /// design is supplied.
+    /// When `eta_prior_mean` is ``None`` (the default), the covariate-free
+    /// baseline μ learned at fit time is used for every document — the same
+    /// inference that ``stm``'s ``fitNewDocuments`` performs when no new
+    /// covariate design is supplied.
+    ///
+    /// When `eta_prior_mean` is a ``(num_docs, num_topics-1)`` array, each
+    /// document's prior mean is set to the corresponding row.  This is the
+    /// low-level hook used by :func:`topica.stm.transform` to apply the
+    /// prevalence-covariate prior ``μ_d = X_d γ`` to held-out documents.
+    #[pyo3(signature = (data, *, eta_prior_mean=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
+        eta_prior_mean: Option<PyReadonlyArray2<'py, f64>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         self.require_fitted()?;
         let docs = docs_to_ids(data, &self.corpus.as_ref().unwrap().id_to_word)?;
         let beta = self.beta.as_ref().unwrap();
         let beta_v: Vec<Vec<f64>> = beta.outer_iter().map(|r| r.to_vec()).collect();
-        let theta = infer_theta_batch(py, &beta_v, &self.mu, &self.sigma, &docs);
+        let theta = if let Some(mu_arr) = eta_prior_mean {
+            let mu_nd = mu_arr.as_array();
+            let nd = docs.len();
+            let km1 = self.mu.len();
+            if mu_nd.shape() != [nd, km1] {
+                return Err(PyValueError::new_err(format!(
+                    "eta_prior_mean must have shape ({nd}, {km1}); got {:?}",
+                    mu_nd.shape()
+                )));
+            }
+            let owned = mu_nd.to_owned();
+            infer_theta_batch_per_doc(py, &beta_v, &owned, &self.sigma, &docs)
+        } else {
+            infer_theta_batch(py, &beta_v, &self.mu, &self.sigma, &docs)
+        };
         Ok(theta.to_pyarray_bound(py))
     }
 
