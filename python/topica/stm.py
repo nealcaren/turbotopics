@@ -617,13 +617,10 @@ def _build_reference_rows(
         X_parts = []
         for row_dict in at_rows:
             if data is not None and formula is not None:
-                if data is not None:
-                    base = {c: (data[c].mean() if data[c].dtype.kind in "fc"
-                                else data[c].mode()[0])
-                            for c in data.columns}
-                    base.update(row_dict)
-                else:
-                    base = row_dict
+                base = {c: (data[c].mean() if data[c].dtype.kind in "fc"
+                            else data[c].mode()[0])
+                        for c in data.columns}
+                base.update(row_dict)
                 row_df = pd.DataFrame([base])
                 X_row, _ = design_matrix_predict(formula, row_df, knot_ctx)
             elif feature_names is not None:

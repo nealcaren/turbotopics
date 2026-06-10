@@ -87,7 +87,7 @@ def design_matrix(formula, data, _knot_ctx=None):
     prevalence model add their own. Categorical columns become treatment-coded
     dummies; ``a * b`` / ``a:b`` expand interactions; ``spline(x, df=k)`` uses
     topica's restricted cubic spline. A Polars frame is converted to pandas for
-    `formulaic`.
+    `formulaic`. Requires the optional ``formulaic`` package.
 
     Parameters
     ----------
@@ -99,8 +99,6 @@ def design_matrix(formula, data, _knot_ctx=None):
         When supplied, the ``spline`` evaluations use the context's
         training mode so the knots are recorded.  Pass the same object
         to :func:`design_matrix_predict` to replay those knots on new data.
-
-    Requires the optional ``formulaic`` package.
     """
     try:
         from formulaic import model_matrix

@@ -78,22 +78,16 @@ class PrevalencePlot(Panel):
         """Forest / point-interval plot: one row per topic."""
         import numpy as np
 
-        df = self.to_frame()
-        if sort and self._mode == "contrast":
-            df = df.sort_values("estimate")
-        elif sort and "estimate" in df.columns:
-            df = df.sort_values("estimate")
-
         k = len(self._results)
         ax = fig.subplots()
         color = "#4C72B0"
         y = np.arange(k)
 
-        for i, r in enumerate(
-            self._results if not sort else sorted(
-                self._results, key=lambda r: float(r.estimate[0])
-            )
-        ):
+        ordered = (
+            sorted(self._results, key=lambda r: float(r.estimate[0]))
+            if sort else self._results
+        )
+        for i, r in enumerate(ordered):
             est = float(r.estimate[0])
             lo = float(r.ci_low[0])
             hi = float(r.ci_high[0])
