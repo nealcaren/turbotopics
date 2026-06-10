@@ -77,6 +77,12 @@ KEYATM_K = int(os.environ.get("KEYATM_K", "10"))
 KEYATM_ITERS = int(os.environ.get("KEYATM_ITERS", "1000"))
 LDA_K = int(os.environ.get("LDA_K", "20"))
 LDA_ITERS = int(os.environ.get("LDA_ITERS", "1000"))
+# Which models to benchmark this run. A subset (e.g. MODELS=lda) reruns only
+# those legs and MERGES into an existing bench_results.json, preserving the
+# records for the other models. Useful for re-measuring one model without
+# repeating the slow R reference sweeps.
+ALL_MODELS = ["stm", "keyatm", "lda", "bertopic"]
+MODELS = [m.strip() for m in os.environ.get("MODELS", ",".join(ALL_MODELS)).split(",") if m.strip()]
 MIN_DF = 3
 EMBED_DIM = 384  # random-projection embedding dimension for BERTopic leg
 
@@ -376,10 +382,12 @@ def _bench_lda(
     docs: list[list[str]],
     threads: int,
 ) -> dict:
-    """Time topica LDA vs. Java MALLET at a given thread count.
+    """Time topica LDA vs. Java MALLET at a MATCHED thread count.
 
-    The MALLET reference always runs single-threaded; the thread count here
-    applies only to topica.  The MALLET leg is skipped when mallet is absent.
+    Both topica and MALLET run with ``--num-threads = threads``, so the
+    comparison at each sweep entry is topica@N vs MALLET@N (the honest
+    cross-tool comparison: both use document-partitioned parallelism). The
+    MALLET leg is skipped when mallet is absent.
     """
     mallet = shutil.which("mallet")
 
@@ -390,9 +398,7 @@ def _bench_lda(
         ref_time: float | None = None
         ref_rss: float | None = None
 
-        if mallet and threads == min(THREADS):
-            # Run the MALLET reference ONCE (at the first thread count so we
-            # do not repeat it for every thread sweep entry).
+        if mallet:
             txt = os.path.join(d, "tok.txt")
             with open(txt, "w") as f:
                 for i, toks in enumerate(docs):
@@ -416,18 +422,13 @@ def _bench_lda(
                 "--num-iterations", str(LDA_ITERS),
                 "--random-seed", "1",
                 "--optimize-interval", "0",
-                "--num-threads", "1",
+                "--num-threads", str(threads),     # MATCH topica's thread count
             ]
-            stdout_m, ref_rss_val = peak_rss_mb(mallet_cmd)
-            # MALLET does not print FIT_TIME; we parse its own timing line or
-            # fall back to wall-clock via /usr/bin/time wrapping.
-            # Actually we time it by measuring the elapsed time ourselves
-            # since mallet stdout doesn't have a timing marker in this form.
-            # Re-run WITHOUT /usr/bin/time for the actual timing.
+            # One wrapped run gives both wall time (perf_counter around it; the
+            # /usr/bin/time overhead is negligible) and peak RSS.
             t0 = time.perf_counter()
-            subprocess.run(mallet_cmd, check=True, capture_output=True, text=True)
+            _stdout_m, ref_rss = peak_rss_mb(mallet_cmd)
             ref_time = time.perf_counter() - t0
-            ref_rss = ref_rss_val
 
         py_script = (
             "import json, sys, time\n"
@@ -578,6 +579,7 @@ def run_sweep() -> list[dict]:
     print(f"poliblog5k: {len(toks)} docs total | sizes={SIZES} threads={THREADS}\n",
           flush=True)
 
+    print(f"models this run: {MODELS}\n", flush=True)
     records: list[dict] = []
 
     for n in SIZES:
@@ -587,103 +589,104 @@ def run_sweep() -> list[dict]:
         print(f"== N~{n} ({nd} docs, {nv} vocab) ==", flush=True)
 
         # --- STM ---
-        print("  STM vs R stm ...", flush=True)
-        stm_res = _bench_stm(docs, rating, day)
-        rec = {
-            "n_docs": nd, "vocab": nv,
-            "model": "stm", "threads": 1,
-            "topica_time": stm_res["topica_time"],
-            "ref_time": stm_res["ref_time"],
-            "topica_rss_mb": stm_res["topica_rss_mb"],
-            "ref_rss_mb": stm_res["ref_rss_mb"],
-        }
-        records.append(rec)
-        print(
-            f"    topica {stm_res['topica_time']:.1f}s  "
-            f"R {stm_res['ref_time']:.1f}s  "
-            f"speedup {stm_res['ref_time']/stm_res['topica_time']:.1f}x  "
-            f"topica RSS {stm_res['topica_rss_mb']:.0f} MB  "
-            f"R RSS {stm_res['ref_rss_mb']:.0f} MB",
-            flush=True,
-        )
+        if "stm" in MODELS:
+            print("  STM vs R stm ...", flush=True)
+            stm_res = _bench_stm(docs, rating, day)
+            records.append({
+                "n_docs": nd, "vocab": nv,
+                "model": "stm", "threads": 1,
+                "topica_time": stm_res["topica_time"],
+                "ref_time": stm_res["ref_time"],
+                "topica_rss_mb": stm_res["topica_rss_mb"],
+                "ref_rss_mb": stm_res["ref_rss_mb"],
+            })
+            print(
+                f"    topica {stm_res['topica_time']:.1f}s  "
+                f"R {stm_res['ref_time']:.1f}s  "
+                f"speedup {stm_res['ref_time']/stm_res['topica_time']:.1f}x  "
+                f"topica RSS {stm_res['topica_rss_mb']:.0f} MB  "
+                f"R RSS {stm_res['ref_rss_mb']:.0f} MB",
+                flush=True,
+            )
 
         # --- keyATM (thread sweep) ---
-        print("  keyATM vs R keyATM (thread sweep) ...", flush=True)
-        ref_time_ka: float | None = None
-        ref_rss_ka: float | None = None
-        for t in THREADS:
-            ka_res = _bench_keyatm(docs, vocab, t)
-            # Capture ref numbers from the first thread-count entry.
-            if ref_time_ka is None:
-                ref_time_ka = ka_res["ref_time"]
-                ref_rss_ka = ka_res["ref_rss_mb"]
-            rec = {
-                "n_docs": nd, "vocab": nv,
-                "model": "keyatm", "threads": t,
-                "topica_time": ka_res["topica_time"],
-                "ref_time": ka_res["ref_time"],
-                "topica_rss_mb": ka_res["topica_rss_mb"],
-                "ref_rss_mb": ka_res["ref_rss_mb"],
-            }
-            records.append(rec)
-            print(
-                f"    threads={t}  topica {ka_res['topica_time']:.1f}s  "
-                f"R {ka_res['ref_time']:.1f}s  "
-                f"speedup {ka_res['ref_time']/ka_res['topica_time']:.1f}x  "
-                f"RSS {ka_res['topica_rss_mb']:.0f} MB",
-                flush=True,
-            )
+        if "keyatm" in MODELS:
+            print("  keyATM vs R keyATM (thread sweep) ...", flush=True)
+            for t in THREADS:
+                ka_res = _bench_keyatm(docs, vocab, t)
+                records.append({
+                    "n_docs": nd, "vocab": nv,
+                    "model": "keyatm", "threads": t,
+                    "topica_time": ka_res["topica_time"],
+                    "ref_time": ka_res["ref_time"],
+                    "topica_rss_mb": ka_res["topica_rss_mb"],
+                    "ref_rss_mb": ka_res["ref_rss_mb"],
+                })
+                print(
+                    f"    threads={t}  topica {ka_res['topica_time']:.1f}s  "
+                    f"R {ka_res['ref_time']:.1f}s  "
+                    f"speedup {ka_res['ref_time']/ka_res['topica_time']:.1f}x  "
+                    f"RSS {ka_res['topica_rss_mb']:.0f} MB",
+                    flush=True,
+                )
 
-        # --- LDA (thread sweep) ---
-        print("  LDA vs MALLET (thread sweep) ...", flush=True)
-        mallet_ok = shutil.which("mallet") is not None
-        if not mallet_ok:
-            print("    MALLET not found — ref column will be null", flush=True)
-        for t in THREADS:
-            lda_res = _bench_lda(docs, t)
-            rec = {
-                "n_docs": nd, "vocab": nv,
-                "model": "lda", "threads": t,
-                "topica_time": lda_res["topica_time"],
-                "ref_time": lda_res["ref_time"],
-                "topica_rss_mb": lda_res["topica_rss_mb"],
-                "ref_rss_mb": lda_res["ref_rss_mb"],
-            }
-            records.append(rec)
-            ref_str = (
-                f"MALLET {lda_res['ref_time']:.1f}s  "
-                if lda_res["ref_time"] is not None
-                else "MALLET n/a  "
-            )
-            print(
-                f"    threads={t}  topica {lda_res['topica_time']:.1f}s  "
-                + ref_str
-                + f"RSS {lda_res['topica_rss_mb']:.0f} MB",
-                flush=True,
-            )
+        # --- LDA (thread sweep, topica@N vs MALLET@N) ---
+        if "lda" in MODELS:
+            print("  LDA vs MALLET (matched thread sweep) ...", flush=True)
+            if shutil.which("mallet") is None:
+                print("    MALLET not found — ref column will be null", flush=True)
+            for t in THREADS:
+                lda_res = _bench_lda(docs, t)
+                records.append({
+                    "n_docs": nd, "vocab": nv,
+                    "model": "lda", "threads": t,
+                    "topica_time": lda_res["topica_time"],
+                    "ref_time": lda_res["ref_time"],
+                    "topica_rss_mb": lda_res["topica_rss_mb"],
+                    "ref_rss_mb": lda_res["ref_rss_mb"],
+                })
+                ref_str = (
+                    f"MALLET@{t} {lda_res['ref_time']:.1f}s  "
+                    if lda_res["ref_time"] is not None
+                    else "MALLET n/a  "
+                )
+                print(
+                    f"    threads={t}  topica {lda_res['topica_time']:.1f}s  "
+                    + ref_str
+                    + f"RSS {lda_res['topica_rss_mb']:.0f} MB",
+                    flush=True,
+                )
 
         # --- BERTopic (clustering stage only) ---
-        print("  BERTopic clustering stage ...", flush=True)
-        bt_res = _bench_bertopic(docs, vocab)
-        if bt_res is not None:
-            rec = {
-                "n_docs": nd, "vocab": nv,
-                "model": "bertopic", "threads": 1,
-                "topica_time": bt_res["topica_time"],
-                "ref_time": bt_res["ref_time"],
-                "topica_rss_mb": bt_res["topica_rss_mb"],
-                "ref_rss_mb": bt_res["ref_rss_mb"],
-            }
-            records.append(rec)
-            print(
-                f"    topica {bt_res['topica_time']:.1f}s  "
-                f"ref {bt_res['ref_time']:.1f}s  "
-                f"speedup {bt_res['ref_time']/bt_res['topica_time']:.1f}x  "
-                f"RSS {bt_res['topica_rss_mb']:.0f} MB",
-                flush=True,
-            )
+        if "bertopic" in MODELS:
+            print("  BERTopic clustering stage ...", flush=True)
+            bt_res = _bench_bertopic(docs, vocab)
+            if bt_res is not None:
+                records.append({
+                    "n_docs": nd, "vocab": nv,
+                    "model": "bertopic", "threads": 1,
+                    "topica_time": bt_res["topica_time"],
+                    "ref_time": bt_res["ref_time"],
+                    "topica_rss_mb": bt_res["topica_rss_mb"],
+                    "ref_rss_mb": bt_res["ref_rss_mb"],
+                })
+                print(
+                    f"    topica {bt_res['topica_time']:.1f}s  "
+                    f"ref {bt_res['ref_time']:.1f}s  "
+                    f"speedup {bt_res['ref_time']/bt_res['topica_time']:.1f}x  "
+                    f"RSS {bt_res['topica_rss_mb']:.0f} MB",
+                    flush=True,
+                )
 
         print(flush=True)
+
+    # Merge: when only a subset of models was run this pass, keep the records
+    # for the other models from any existing results file.
+    if set(MODELS) != set(ALL_MODELS) and RESULTS_JSON.exists():
+        existing = json.load(open(RESULTS_JSON))
+        kept = [r for r in existing if r["model"] not in MODELS]
+        records = kept + records
+        print(f"merged with {len(kept)} existing records for other models", flush=True)
 
     json.dump(records, open(RESULTS_JSON, "w"), indent=2)
     print(f"Results written to {RESULTS_JSON}", flush=True)
