@@ -148,15 +148,21 @@ def test_composition_effect_inflates_over_ols():
         assert moc[t].se[1] >= ols[t].se[1] - 1e-9
 
 
-def test_composition_needs_corpus_for_gibbs_and_rejects_embedding():
-    # Without retained draws the Gibbs path falls back to the Dirichlet
-    # approximation, which needs per-document lengths -> a corpus. (With the
-    # default keep_theta_draws=True it would use the draws and need no corpus.)
+def test_composition_self_sufficient_for_gibbs_and_rejects_embedding():
+    # A fitted LDA/keyATM/SeededLDA retains its own per-document lengths (issue
+    # #32), so even with draws disabled the Dirichlet fallback needs no corpus=.
     _, corpus, _ = _planted()
     m = topica.LDA(2, seed=1)
     m.fit(corpus, iterations=250, keep_theta_draws=False)
+    prev = topica.standard_errors(m, of="prevalence", nsims=10)  # no corpus needed
+    assert len(prev) == 2
+
+    # HDP is Dirichlet-family but does not retain lengths, so it still needs one.
+    hdp = topica.HDP(seed=1)
+    hdp.fit(corpus, iters=120)
     with pytest.raises(ValueError, match="corpus"):
-        topica.standard_errors(m, of="prevalence", nsims=10)  # Gibbs needs lengths
+        topica.standard_errors(hdp, of="prevalence", nsims=10)
+
     bert = topica.BERTopic(min_cluster_size=5)
     with pytest.raises(ValueError, match="bootstrap"):
         topica.standard_errors(bert, corpus, of="prevalence", method="composition", nsims=10)

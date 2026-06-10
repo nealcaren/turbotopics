@@ -33,11 +33,12 @@ shrinks when the model is confident. No `Corpus` is needed in this case.
 
 If you fit with `keep_theta_draws=False` (to save the
 `num_draws x num_docs x num_topics` of f32 storage), the Gibbs path falls back to
-a per-document Dirichlet conditional built from the token counts, which needs the
-document lengths, so pass the `Corpus` you fit on. That approximation captures
-within-document sampling noise (it scales with `1 / N_d`) but is blind to whether
-the topics are actually identified, so its intervals can be wider than the real
-posterior for short documents and narrower for long ones.
+a per-document Dirichlet conditional built from the token counts. A fitted model
+retains its own per-document lengths (`model.doc_lengths`), so this still needs no
+`Corpus`; pass one only to draw against a different corpus on purpose. That
+approximation captures within-document sampling noise (it scales with `1 / N_d`)
+but is blind to whether the topics are actually identified, so its intervals can
+be wider than the real posterior for short documents and narrower for long ones.
 
 ```python
 # Covariate effects, uncertainty propagated (one regression per topic):

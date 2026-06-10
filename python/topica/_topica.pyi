@@ -983,6 +983,12 @@ class LDA:
         ...
 
     @property
+    def doc_lengths(self) -> list[int]:
+        """Per-document token counts (length num_docs), in doc_topic row order.
+        Lets composition_theta recover N_d without re-threading the Corpus."""
+        ...
+
+    @property
     def vocabulary(self) -> list[str]:
         """Vocabulary list; column order matches topic_word."""
         ...
@@ -1359,6 +1365,10 @@ class SeededLDA:
     def theta_draws(self) -> Optional[numpy.typing.NDArray[numpy.float32]]:
         """Thinned MCMC theta draws, shape (num_draws, num_docs, num_topics), or
         None when fit with keep_theta_draws=False."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Per-document token counts (length num_docs), in doc_topic row order."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -1824,6 +1834,10 @@ class KeyATM:
         None when fit with keep_theta_draws=False. Real cross-sweep posterior
         samples that composition_theta prefers over the Dirichlet approximation.
         Collected for the base, covariate, and dynamic variants."""
+        ...
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Per-document token counts (length num_docs), in doc_topic row order."""
         ...
     @property
     def feature_effects(self) -> numpy.typing.NDArray[numpy.float64]:
