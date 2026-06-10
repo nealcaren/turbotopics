@@ -130,7 +130,15 @@ def test_composition_theta_runs_for_every_dirichlet_model():
 
 
 def test_composition_effect_inflates_over_ols():
-    m, corpus, x = _planted()
+    # The within-document Dirichlet approximation (keep_theta_draws=False) adds
+    # 1/N_d sampling noise on top of the point estimate, so method-of-composition
+    # SEs are always >= naive OLS that treats theta as fixed. (Real retained
+    # draws, issue #31, instead reflect model confidence and can fall below OLS
+    # for a well-identified corpus like this one; see
+    # test_real_draws_reflect_identifiability in test_theta_draws.py.)
+    _, corpus, x = _planted()
+    m = topica.LDA(2, seed=1)
+    m.fit(corpus, iterations=250, keep_theta_draws=False)
     X = x[:, None]
     ols = topica.estimate_effect(m.doc_topic, X, feature_names=["x"])
     moc = topica.standard_errors(m, corpus, of="effect", X=X, feature_names=["x"], nsims=30)
@@ -141,7 +149,12 @@ def test_composition_effect_inflates_over_ols():
 
 
 def test_composition_needs_corpus_for_gibbs_and_rejects_embedding():
-    m, corpus, _ = _planted()
+    # Without retained draws the Gibbs path falls back to the Dirichlet
+    # approximation, which needs per-document lengths -> a corpus. (With the
+    # default keep_theta_draws=True it would use the draws and need no corpus.)
+    _, corpus, _ = _planted()
+    m = topica.LDA(2, seed=1)
+    m.fit(corpus, iterations=250, keep_theta_draws=False)
     with pytest.raises(ValueError, match="corpus"):
         topica.standard_errors(m, of="prevalence", nsims=10)  # Gibbs needs lengths
     bert = topica.BERTopic(min_cluster_size=5)

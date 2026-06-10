@@ -191,6 +191,14 @@ pub struct KeyAtmModel {
     /// keyword-free model or when tracing is disabled.
     #[serde(default)]
     pub pi_history: Vec<(usize, Vec<f64>)>,
+    /// Thinned MCMC θ snapshots (issue #31): the last `num_theta_draws` per-doc
+    /// topic distributions taken every `thin` sweeps of the fit loop, stored as
+    /// f32 to halve the (S × D × K) footprint. Real cross-sweep posterior draws
+    /// that `composition_theta` prefers over the within-document Dirichlet
+    /// approximation. A fit-time artifact: empty unless `keep_theta_draws` was
+    /// on, and not persisted across save/load.
+    #[serde(skip)]
+    pub theta_draws: Vec<Vec<Vec<f32>>>,
 }
 
 /// Fitted state of the keyATM **Dynamic** model (Eshima, Imai & Sasaki 2024,
@@ -926,6 +934,7 @@ pub fn fit_keyatm<R: Rng>(
     estimate_alpha: bool,
     weights: WeightScheme,
     num_threads: usize,
+    draws: ThetaDrawOpts,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(
@@ -958,6 +967,7 @@ pub fn fit_keyatm<R: Rng>(
         vec![alpha; num_topics] // fixed symmetric
     };
     let mut doc_alpha: Vec<Vec<f64>> = vec![alpha_vec.clone(); docs.len()];
+    let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
     for it in 0..iters {
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
@@ -970,6 +980,7 @@ pub fn fit_keyatm<R: Rng>(
                 row.clone_from(&alpha_vec);
             }
         }
+        draws.maybe_collect(&mut theta_draw_buf, it + 1, &model.ndk, &doc_alpha);
         if record_ll(it + 1, ll_interval, iters) {
             model.alpha_vec = Some(alpha_vec.clone());
             model
@@ -986,6 +997,7 @@ pub fn fit_keyatm<R: Rng>(
         }
     }
     model.alpha_vec = Some(alpha_vec);
+    model.theta_draws = theta_draw_buf;
     model
 }
 
@@ -1086,6 +1098,7 @@ fn init_state<R: Rng>(
         log_likelihood_history: Vec::new(),
         alpha_history: Vec::new(),
         pi_history: Vec::new(),
+        theta_draws: Vec::new(),
     };
     (model, assignments, ki)
 }
@@ -1096,6 +1109,55 @@ fn init_state<R: Rng>(
 #[inline]
 fn record_ll(iter: usize, interval: usize, iters: usize) -> bool {
     interval > 0 && (iter % interval == 0 || iter == iters)
+}
+
+/// Thinned θ-draw retention schedule (issue #31): snapshot every `thin` sweeps
+/// and keep the last `cap` on a ring buffer, so the kept draws are the converged
+/// tail of the chain. `cap == 0` disables collection.
+#[derive(Clone, Copy)]
+pub struct ThetaDrawOpts {
+    pub cap: usize,
+    pub thin: usize,
+}
+
+impl ThetaDrawOpts {
+    /// Derive the schedule from the fit knobs and run length. Takes ~`2·cap`
+    /// snapshots over the run so the ring-buffered `cap` land in the back half.
+    pub fn new(keep: bool, num_draws: usize, iters: usize) -> Self {
+        let cap = if keep { num_draws } else { 0 };
+        let thin = if cap == 0 { 0 } else { (iters / (2 * cap)).max(1) };
+        ThetaDrawOpts { cap, thin }
+    }
+
+    /// At 1-based sweep `iter`, snapshot the smoothed θ = (n_dk + α_dk)/(N_d +
+    /// Σα_d) from the current counts and per-document prior, pushing onto `buf`
+    /// (capped at the last `cap`). No-op off-schedule or when disabled.
+    fn maybe_collect(
+        &self,
+        buf: &mut Vec<Vec<Vec<f32>>>,
+        iter: usize,
+        ndk: &[Vec<f64>],
+        doc_alpha: &[Vec<f64>],
+    ) {
+        if self.thin == 0 || iter % self.thin != 0 {
+            return;
+        }
+        let snap: Vec<Vec<f32>> = ndk
+            .iter()
+            .zip(doc_alpha.iter())
+            .map(|(row, a)| {
+                let denom = row.iter().sum::<f64>() + a.iter().sum::<f64>();
+                row.iter()
+                    .zip(a.iter())
+                    .map(|(&c, &av)| ((c + av) / denom) as f32)
+                    .collect()
+            })
+            .collect();
+        buf.push(snap);
+        if buf.len() > self.cap {
+            buf.remove(0);
+        }
+    }
 }
 
 /// Fit a keyATM **Covariate** model. The document-topic prior is a
@@ -1125,6 +1187,7 @@ pub fn fit_keyatm_cov<R: Rng>(
     weights: WeightScheme,
     num_threads: usize,
     offset: Option<&[Vec<f64>]>,
+    draws: ThetaDrawOpts,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -1144,6 +1207,7 @@ pub fn fit_keyatm_cov<R: Rng>(
 
     let mut lambda = vec![vec![0.0f64; num_features]; num_topics];
     let mut doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
+    let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
     // So the log-likelihood trace uses the covariate doc-topic prior: doc_topic()
     // takes the (lambda, features) path only when both are set on the model.
     if ll_interval > 0 {
@@ -1166,6 +1230,7 @@ pub fn fit_keyatm_cov<R: Rng>(
             );
             doc_alpha = crate::dmr::compute_doc_alpha(&lambda, features, offset);
         }
+        draws.maybe_collect(&mut theta_draw_buf, it + 1, &model.ndk, &doc_alpha);
         if record_ll(it + 1, ll_interval, iters) {
             model.lambda = Some(lambda.clone());
             model.prior_offset = offset.map(|o| o.to_vec());
@@ -1179,6 +1244,7 @@ pub fn fit_keyatm_cov<R: Rng>(
     model.lambda = Some(lambda);
     model.features = Some(features.to_vec());
     model.prior_offset = offset.map(|o| o.to_vec());
+    model.theta_draws = theta_draw_buf;
     model
 }
 
@@ -1333,6 +1399,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
     ll_interval: usize,
     weights: WeightScheme,
     num_threads: usize,
+    draws: ThetaDrawOpts,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -1414,6 +1481,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
     }
 
     let mut prk = vec![vec![0.0f64; num_states]; num_time];
+    let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
     for it in 0..iters {
         // 1. Token (z, s) sweep with each doc's α tied to its segment's state.
@@ -1422,6 +1490,9 @@ pub fn fit_keyatm_dynamic<R: Rng>(
             .map(|&t| alphas[r_est[t]].clone())
             .collect();
         run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        // Snapshot under the (ndk, doc_alpha) pair this sweep just used — coherent
+        // smoothing even though r_est/alphas are resampled below.
+        draws.maybe_collect(&mut theta_draw_buf, it + 1, &model.ndk, &doc_alpha);
 
         // 2. Slice-sample each state's α over the documents it currently owns.
         // States are contiguous in time; their document ranges are disjoint, so
@@ -1565,6 +1636,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
         r_est,
         p_est,
     });
+    model.theta_draws = theta_draw_buf;
     model
 }
 
@@ -1624,7 +1696,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -1671,7 +1743,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -1707,7 +1779,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
 
         let d = docs.len();
@@ -1765,7 +1837,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         let model = fit_keyatm_dynamic(
             &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0,
-            2.0, 1.0, 300, 0, WeightScheme::None, 1, &mut rng,
+            2.0, 1.0, 300, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
 
         let dyn_ = model.dynamic.as_ref().expect("dynamic state present");
@@ -1799,10 +1871,10 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(9);
         let mut r2 = ChaCha8Rng::seed_from_u64(9);
         let m1 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, &mut r1,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r1,
         );
         let m2 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, &mut r2,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r2,
         );
         assert_eq!(
             m1.dynamic.as_ref().unwrap().r_est,
@@ -1828,8 +1900,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
@@ -1859,7 +1931,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(3);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
         let h = &model.log_likelihood_history;
         // iters=60, interval=10 -> sweeps 10,20,30,40,50,60.
@@ -1875,7 +1947,7 @@ mod tests {
         // interval 0 disables tracing.
         let mut rng2 = ChaCha8Rng::seed_from_u64(3);
         let none = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, &mut rng2,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng2,
         );
         assert!(none.log_likelihood_history.is_empty());
     }

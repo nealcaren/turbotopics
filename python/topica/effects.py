@@ -144,13 +144,38 @@ def _doc_lengths_for(model, corpus):
     return lengths
 
 
+def _resample_draws(draws, nsims, seed):
+    """Match a stored draw stack ``(S, D, K)`` to exactly ``nsims`` draws: return
+    as-is when ``S == nsims``, take an evenly spaced subset when ``S > nsims``, or
+    resample with replacement when ``S < nsims`` (Rubin's-rules pooling still sees
+    only the ``S`` distinct draws, but the downstream shape is honored)."""
+    draws = np.asarray(draws, dtype=np.float64)
+    s = draws.shape[0]
+    if s == nsims:
+        return draws
+    if s > nsims:
+        idx = np.linspace(0, s - 1, nsims).round().astype(int)
+        return draws[idx]
+    rng = np.random.default_rng(seed)
+    return draws[rng.integers(0, s, size=nsims)]
+
+
 def composition_theta(model, corpus=None, *, nsims=25, seed=0):
     """Draw ``nsims`` theta matrices for method-of-composition, auto-selecting the
-    sampler from the model family. Returns ``(nsims, num_docs, num_topics)``."""
+    sampler from the model family. Returns ``(nsims, num_docs, num_topics)``.
+
+    For the Gibbs family this prefers a model's retained MCMC ``theta_draws`` (real
+    cross-sweep posterior samples; issue #31) when present, which also means no
+    ``corpus`` is needed. It falls back to :func:`dirichlet_theta_samples` (the
+    within-document Dirichlet approximation, which does need ``corpus`` for the
+    document lengths) when the model was fit with ``keep_theta_draws=False``."""
     fam = model_family(model)
     if fam == "logistic_normal":
         return posterior_theta_samples(model, nsims=nsims, seed=seed)
     if fam == "dirichlet":
+        draws = getattr(model, "theta_draws", None)
+        if draws is not None and len(draws):
+            return _resample_draws(draws, nsims, seed)
         lengths = _doc_lengths_for(model, corpus)
         return dirichlet_theta_samples(
             np.asarray(model.doc_topic, dtype=np.float64), lengths, nsims=nsims, seed=seed

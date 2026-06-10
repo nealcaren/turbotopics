@@ -61,6 +61,12 @@ pub struct SeededModel {
     /// prevalence). `None` for the ordinary symmetric-α model.
     #[serde(default)]
     pub doc_alpha: Option<Vec<Vec<f64>>>,
+    /// Thinned MCMC θ snapshots (issue #31): the last `num_theta_draws` per-doc
+    /// topic distributions taken every `thin` sweeps, f32. Real cross-sweep
+    /// posterior draws that `composition_theta` prefers over the within-document
+    /// Dirichlet approximation. A fit-time artifact, not persisted.
+    #[serde(skip)]
+    pub theta_draws: Vec<Vec<Vec<f32>>>,
 }
 
 impl SeededModel {
@@ -164,6 +170,37 @@ fn sample_index<R: Rng>(scores: &[f64], rng: &mut R) -> usize {
 // Public fit function
 // ---------------------------------------------------------------------------
 
+/// One smoothed θ snapshot (D×K) as f32 from the current counts:
+/// θ_{d,k} = (n_dk + α_dk) / (N_d + Σα_d), using the per-document prior when
+/// present and the symmetric `alpha` otherwise.
+fn seeded_theta_snapshot(
+    ndk: &[Vec<u32>],
+    doc_alpha: Option<&Vec<Vec<f64>>>,
+    alpha: f64,
+    k: usize,
+) -> Vec<Vec<f32>> {
+    ndk.iter()
+        .enumerate()
+        .map(|(d, row)| {
+            let n_d: u32 = row.iter().sum();
+            match doc_alpha {
+                Some(da) => {
+                    let a = &da[d];
+                    let denom = n_d as f64 + a.iter().sum::<f64>();
+                    row.iter()
+                        .zip(a)
+                        .map(|(&c, &av)| ((c as f64 + av) / denom) as f32)
+                        .collect()
+                }
+                None => {
+                    let denom = n_d as f64 + k as f64 * alpha;
+                    row.iter().map(|&c| ((c as f64 + alpha) / denom) as f32).collect()
+                }
+            }
+        })
+        .collect()
+}
+
 /// Fit a Seeded-LDA model by collapsed Gibbs sampling.
 ///
 /// # Arguments
@@ -178,6 +215,7 @@ fn sample_index<R: Rng>(scores: &[f64], rng: &mut R) -> usize {
 /// * `seed_weight` — extra pseudocount added to a seed word in its topic.
 ///                   Set to 0.0 for ordinary LDA with symmetric priors.
 /// * `iters`       — number of full Gibbs sweeps.
+/// * `draws`       — thinned θ-draw retention schedule (issue #31).
 /// * `rng`         — random-number source; deterministic for a fixed seed.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_seeded_lda<R: Rng>(
@@ -190,6 +228,7 @@ pub fn fit_seeded_lda<R: Rng>(
     seed_weight: f64,
     doc_alpha: Option<Vec<Vec<f64>>>,
     iters: usize,
+    draws: crate::keyatm::ThetaDrawOpts,
     rng: &mut R,
 ) -> SeededModel {
     let k = num_topics;
@@ -273,8 +312,9 @@ pub fn fit_seeded_lda<R: Rng>(
 
     // --- Gibbs sweeps ---
     let mut scores: Vec<f64> = vec![0.0f64; k];
+    let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
 
-    for _ in 0..iters {
+    for it in 0..iters {
         for d in 0..d_count {
             let doc = &docs[d];
             // The document's α row: per-document when supplied, else symmetric.
@@ -309,6 +349,12 @@ pub fn fit_seeded_lda<R: Rng>(
                 z[d][i] = new_t;
             }
         }
+        if draws.thin > 0 && (it + 1) % draws.thin == 0 {
+            theta_draw_buf.push(seeded_theta_snapshot(&ndk, doc_alpha.as_ref(), alpha, k));
+            if theta_draw_buf.len() > draws.cap {
+                theta_draw_buf.remove(0);
+            }
+        }
     }
 
     SeededModel {
@@ -322,6 +368,7 @@ pub fn fit_seeded_lda<R: Rng>(
         nk,
         ndk,
         doc_alpha,
+        theta_draws: theta_draw_buf,
     }
 }
 
@@ -420,7 +467,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_seeded_lda(
             &docs, v, 3, &seeds,
-            0.1, 0.01, 50.0, None, 300, &mut rng,
+            0.1, 0.01, 50.0, None, 300, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut rng,
         );
 
         // For each seeded topic (0 and 1), the seed words' total φ mass should
@@ -463,7 +510,7 @@ mod tests {
         let seeds: Vec<Vec<usize>> = vec![vec![]; k];
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
-        let model = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 50, &mut rng);
+        let model = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 50, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut rng);
 
         // topic_word rows sum to 1.
         for t in 0..k {
@@ -501,8 +548,8 @@ mod tests {
 
         let mut r1 = ChaCha8Rng::seed_from_u64(55);
         let mut r2 = ChaCha8Rng::seed_from_u64(55);
-        let m1 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, &mut r1);
-        let m2 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, &mut r2);
+        let m1 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut r1);
+        let m2 = fit_seeded_lda(&docs, v, k, &seeds, 0.1, 0.1, 2.0, None, 80, crate::keyatm::ThetaDrawOpts::new(false, 0, 0), &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
