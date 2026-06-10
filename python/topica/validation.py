@@ -777,6 +777,204 @@ def search_k(
     return rows
 
 
+# ---------------------------------------------------------------------------
+# selectModel: best-of-N runs at fixed K  (stm §3.4)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SelectModelResult:
+    """Result of :func:`select_model`.
+
+    Attributes
+    ----------
+    models : list of N fitted models, one per run.
+    coherence : array of shape ``(N,)`` — per-run mean UMass coherence.
+    exclusivity : array of shape ``(N,)`` — per-run mean top-word exclusivity.
+    run_seeds : array of shape ``(N,)`` — seed used for each run.
+    """
+
+    models: list
+    coherence: np.ndarray
+    exclusivity: np.ndarray
+    run_seeds: np.ndarray
+
+
+def select_model(
+    docs,
+    K,
+    *,
+    runs=20,
+    model="lda",
+    prevalence=None,
+    iters=500,
+    num_samples=3,
+    sample_interval=10,
+    seed=42,
+    coherence_n=10,
+    fraction=None,
+    burn_in_iters=None,
+):
+    """Run N initializations at a fixed K and return the fitted candidates (stm's ``selectModel``).
+
+    All ``runs`` models are fit from different random seeds. With
+    ``fraction`` set, the procedure uses two stages: a short burn-in
+    (``burn_in_iters``, defaulting to 20% of ``iters``) followed by
+    full training of the top ``ceil(fraction * runs)`` models by their
+    objective (ELBO for STM/CTM, log-likelihood for LDA). This mirrors
+    stm's "run briefly, keep the best ~20%" heuristic.
+
+    Parameters
+    ----------
+    docs : training documents (``list[list[str]]`` or a ``Corpus``).
+    K : number of topics for every run.
+    runs : number of random initializations.
+    model : ``"lda"`` (default) or ``"stm"``.
+    prevalence : covariate design matrix; required when ``model="stm"``.
+    iters : full-training iterations per run (or per survivor when
+        ``fraction`` is used).
+    num_samples : Gibbs samples per run (LDA only).
+    sample_interval : iterations between Gibbs samples (LDA only).
+    seed : base RNG seed; run ``r`` uses seed ``seed + r``.
+    coherence_n : top-word count for coherence and exclusivity.
+    fraction : if given (a float in ``(0, 1]``), keep only the top
+        ``ceil(fraction * runs)`` models (by their objective) after
+        ``burn_in_iters`` and run those survivors to full ``iters``.
+        ``None`` (default) runs all initializations to full ``iters``.
+    burn_in_iters : burn-in length used for early discard; defaults to
+        ``max(1, round(0.2 * iters))`` when ``fraction`` is set.
+
+    Returns
+    -------
+    A :class:`SelectModelResult` with ``models``, ``coherence``,
+    ``exclusivity``, and ``run_seeds`` arrays of length equal to the
+    number of survivors (all ``runs`` when ``fraction`` is ``None``).
+    """
+    from . import LDA, STM  # local import to avoid a cycle
+
+    if model not in ("lda", "stm"):
+        raise ValueError("model must be 'lda' or 'stm'")
+    if not isinstance(runs, int) or runs < 1:
+        raise ValueError(f"runs must be a positive integer, got {runs!r}")
+    if fraction is not None and not (0.0 < fraction <= 1.0):
+        raise ValueError(f"fraction must be in (0, 1], got {fraction!r}")
+
+    def _make(s):
+        if model == "stm":
+            return STM(num_topics=K, seed=s)
+        return LDA(num_topics=K, seed=s)
+
+    def _fit(m, n_iters):
+        if model == "stm":
+            m.fit(docs, prevalence, iters=n_iters)
+        else:
+            m.fit(docs, iters=n_iters, num_samples=num_samples,
+                  sample_interval=sample_interval)
+
+    def _objective(m):
+        """Scalar objective for early discard: higher is better."""
+        if hasattr(m, "bound"):
+            return float(m.bound)
+        if hasattr(m, "log_likelihood") and callable(m.log_likelihood):
+            return float(m.log_likelihood())
+        return float("nan")
+
+    run_seeds = [seed + r for r in range(runs)]
+
+    if fraction is None:
+        # Simple path: run every initialization to full iters.
+        fitted = []
+        for s in run_seeds:
+            m = _make(s)
+            _fit(m, iters)
+            fitted.append(m)
+        survivor_seeds = run_seeds
+    else:
+        # Two-stage: burn-in, then re-run survivors.
+        n_burn = burn_in_iters if burn_in_iters is not None else max(1, round(0.2 * iters))
+        import math
+        n_keep = max(1, math.ceil(fraction * runs))
+
+        # Stage 1: burn-in for all runs.
+        burn_models = []
+        for s in run_seeds:
+            m = _make(s)
+            _fit(m, n_burn)
+            burn_models.append(m)
+
+        # Rank by objective (higher is better); keep top n_keep.
+        scored = sorted(
+            zip(run_seeds, burn_models),
+            key=lambda pair: _objective(pair[1]),
+            reverse=True,
+        )
+        survivors = scored[:n_keep]
+
+        # Stage 2: run survivors to full iters.
+        fitted = []
+        survivor_seeds = []
+        for s, _ in survivors:
+            m = _make(s)
+            _fit(m, iters)
+            fitted.append(m)
+            survivor_seeds.append(s)
+
+    coh = np.array([float(np.mean(m.coherence(coherence_n))) for m in fitted])
+    excl = np.array([_mean_exclusivity(m.topic_word, coherence_n) for m in fitted])
+
+    return SelectModelResult(
+        models=fitted,
+        coherence=coh,
+        exclusivity=excl,
+        run_seeds=np.array(survivor_seeds, dtype=np.intp),
+    )
+
+
+def plot_models(result, *, ax=None, label_runs=True):
+    """Coherence-vs-exclusivity scatter for :func:`select_model` candidates (stm's ``plotModels``).
+
+    Each point is one run. The upper-right corner is the best region:
+    both coherent (interpretable) and exclusive (distinctive). Use
+    this plot to pick a run from :func:`select_model` before fitting
+    your full analysis.
+
+    Parameters
+    ----------
+    result : a :class:`SelectModelResult` returned by :func:`select_model`.
+    ax : matplotlib ``Axes`` to draw on; a new figure is created if
+        ``None``.
+    label_runs : annotate each point with its run index; default
+        ``True``.
+
+    Returns
+    -------
+    The matplotlib ``Axes``.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "plot_models needs matplotlib (pip install matplotlib)."
+        ) from e
+
+    coh = np.asarray(result.coherence)
+    excl = np.asarray(result.exclusivity)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 5))
+
+    ax.scatter(coh, excl, color="C0", zorder=3)
+    if label_runs:
+        for i, (x, y) in enumerate(zip(coh, excl)):
+            ax.annotate(str(i), (x, y), textcoords="offset points",
+                        xytext=(4, 4), fontsize=8)
+
+    ax.set_xlabel("Mean semantic coherence (UMass)")
+    ax.set_ylabel("Mean exclusivity")
+    ax.set_title("Model candidates: coherence vs. exclusivity")
+    ax.figure.tight_layout()
+    return ax
+
+
 def plot_search_k(rows, *, metrics=("coherence", "exclusivity"), ax=None):
     """Plot :func:`search_k` results: each metric against the number of topics.
 
@@ -1474,6 +1672,9 @@ __all__ = [
     "quality_frontier",
     "bootstrap_stability",
     "search_k",
+    "select_model",
+    "SelectModelResult",
+    "plot_models",
     "relevance",
     "prepare_pyldavis",
     "PyLDAvisInputs",
