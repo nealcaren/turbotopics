@@ -55,6 +55,8 @@ parity/*.class
 benchmarks/poliblog5k_prepped.csv
 benchmarks/bench_results.json
 benchmarks/website_table.md
+benchmarks/matrix_results.json
+benchmarks/model_matrix.md
 paper/fig_thread_scaling.pdf
 paper/fig_memory.pdf
 

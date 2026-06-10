@@ -5,6 +5,10 @@ model families (STM, keyATM, LDA) across several corpus sizes and thread counts,
 measures both wall-clock fit time and peak resident set size (RSS) for each
 engine, and produces a website table and two paper figures.
 
+It also supports a same-model matrix (`--matrix`) that pits topica against
+tomotopy 0.14 model-by-model at a fixed corpus size, plus a gensim LDA
+head-to-head.
+
 ## Quick start
 
     python benchmarks/bench.py
@@ -22,6 +26,50 @@ To re-render the outputs from a previous run without re-fitting:
 
     python benchmarks/bench.py --render
 
+## Same-model matrix (tomotopy + gensim)
+
+    python benchmarks/bench.py --matrix
+
+Runs every matched model (LDA, CTM, DMR, HDP, PA, PT, SLDA, LabeledLDA) at
+`MATRIX_SIZE` docs, single-threaded, and times topica against tomotopy for
+each.  Also runs a topica-vs-gensim LDA head-to-head.  Writes:
+
+| Output | Description |
+|---|---|
+| `benchmarks/matrix_results.json` | Raw records (gitignored) |
+| `benchmarks/model_matrix.md` | Markdown table (gitignored) |
+
+Smoke run for development:
+
+    MATRIX_SIZE=600 MATRIX_K=10 MATRIX_ITERS=30 \
+      python benchmarks/bench.py --matrix
+
+### Models in the matrix
+
+| Model | topica call | tomotopy call | Caveats |
+|---|---|---|---|
+| LDA | `LDA(num_topics=K, seed=1, optimize_interval=0, num_threads=1)` | `LDAModel(k=K, seed=1)` | Clean match |
+| CTM | `CTM(num_topics=K).fit(docs, iters=ITERS, em_tol=0)` | `CTModel(k=K)` | topica uses Laplace/STM E-step; tomotopy uses mean-field; both are CTM variants |
+| DMR | `DMR(num_topics=K, seed=1).fit(docs, features, iters=ITERS)` | `DMRModel(k=K, seed=1)` + `add_doc(words, metadata=str(r))` | topica takes a numeric covariate matrix; tomotopy takes string metadata |
+| HDP | `HDP(seed=42).fit(docs, iters=ITERS)` | `HDPModel(seed=42)` | K is inferred by both; we match ITERS and report each library's discovered K |
+| PA | `PA(num_super=K//2, num_sub=K, seed=1).fit(docs, iters=ITERS)` | `PAModel(k1=K//2, k2=K, seed=1)` | Clean match on super/sub counts |
+| PT | `PT(num_topics=K, num_pseudo=100, seed=1).fit(docs, iters=ITERS)` | `PTModel(k=K, p=100, seed=1)` | Clean match |
+| SLDA | `SupervisedLDA(num_topics=K, seed=1).fit(docs, y=rating, iters=ITERS)` | `SLDAModel(k=K, vars=['l'], seed=1)` + `add_doc(words, y=[r])` | topica: variational EM; tomotopy: Gibbs; same continuous response |
+| LabeledLDA | `LabeledLDA(seed=1).fit(docs, doc_labels, iters=ITERS)` | `LLDAModel(k=2, seed=1)` + `add_doc(words, labels=lbls)` | 2 binary labels (Liberal/Conservative) from rating; K fixed by label count |
+
+### gensim LDA comparison
+
+`bench_gensim_lda` times `gensim.models.LdaModel` against topica LDA at the
+same `MATRIX_SIZE`/K/ITERS.  The gensim `Dictionary` and `doc2bow` corpus are
+built outside the timed region; only the `LdaModel(...)` call is timed.  We
+pass `passes=1, iterations=ITERS, chunksize=len(corpus), update_every=1` to
+match a single pass through all documents with ITERS E-step updates per
+document (single-threaded, no distributed workers).
+
+Note that gensim LDA is variational (online LDA, Hoffman et al. 2010), not
+Gibbs, so the comparison is speed-at-matched-iteration-count rather than
+algorithmic parity.
+
 ## Environment knobs
 
 | Variable | Default | Meaning |
@@ -34,6 +82,9 @@ To re-render the outputs from a previous run without re-fitting:
 | `KEYATM_ITERS` | `1000` | Gibbs sweeps for keyATM |
 | `LDA_K` | `20` | Number of topics for LDA |
 | `LDA_ITERS` | `1000` | Gibbs iterations for LDA |
+| `MATRIX_SIZE` | `3500` | Corpus size for same-model matrix |
+| `MATRIX_K` | `20` | Number of topics for matrix models |
+| `MATRIX_ITERS` | `500` | Iterations for matrix models |
 
 Smoke run with small settings (for CI / development):
 
@@ -51,6 +102,10 @@ The harness auto-skips legs whose tools are absent:
   in the active Python environment.  When absent the leg prints a clean skip
   message and continues.  Published numbers for this leg must come from a
   machine where both packages are installed.
+- **tomotopy matrix leg**: requires `tomotopy` importable.  Tested against
+  tomotopy 0.14.0.
+- **gensim LDA leg**: requires `gensim` importable.  Tested against gensim
+  4.4.0.
 
 The poliblog5k corpus CSV (`benchmarks/poliblog5k_prepped.csv`) is generated
 automatically on first run by calling `export_poliblog5k.R`.  It is gitignored;
@@ -70,7 +125,7 @@ Each topica fit runs in a child Python process wrapped with `/usr/bin/time`:
 
 Running each fit in a subprocess means the number captures that fit's true
 footprint, not the accumulated RSS of the parent.  The same `/usr/bin/time`
-wrapping is applied to the R and MALLET references so memory figures are
+wrapping is applied to tomotopy and gensim subprocesses so RSS figures are
 comparable across engines.
 
 ### BERTopic clustering-stage leg

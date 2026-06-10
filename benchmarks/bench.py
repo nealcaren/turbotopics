@@ -5,10 +5,14 @@ Runs three model families (STM, keyATM, LDA) across several corpus sizes
 time and peak resident set size (RSS) for each engine.  Optionally runs a
 BERTopic clustering-stage comparison if bertopic and umap are importable.
 
+Also supports a same-model matrix (--matrix flag) that pits topica against
+tomotopy model-by-model at a fixed corpus size, and a gensim LDA head-to-head.
+
 Usage
 -----
     python benchmarks/bench.py            # full default sweep
     python benchmarks/bench.py --render   # render outputs from a previous run
+    python benchmarks/bench.py --matrix   # run topica-vs-tomotopy matrix + gensim
 
 Env knobs
 ---------
@@ -20,6 +24,9 @@ Env knobs
     KEYATM_ITERS   Gibbs sweeps for keyATM (default 1000)
     LDA_K          number of topics for LDA (default 20)
     LDA_ITERS      Gibbs iterations for LDA (default 1000)
+    MATRIX_SIZE    corpus size for same-model matrix (default 3500)
+    MATRIX_K       number of topics for matrix models (default 20)
+    MATRIX_ITERS   iterations for matrix models (default 500)
 
 Notes
 -----
@@ -85,6 +92,14 @@ ALL_MODELS = ["stm", "keyatm", "lda", "bertopic"]
 MODELS = [m.strip() for m in os.environ.get("MODELS", ",".join(ALL_MODELS)).split(",") if m.strip()]
 MIN_DF = 3
 EMBED_DIM = 384  # random-projection embedding dimension for BERTopic leg
+
+# Same-model matrix knobs (used only with --matrix).
+MATRIX_SIZE = int(os.environ.get("MATRIX_SIZE", "3500"))
+MATRIX_K = int(os.environ.get("MATRIX_K", "20"))
+MATRIX_ITERS = int(os.environ.get("MATRIX_ITERS", "500"))
+
+MATRIX_RESULTS_JSON = HERE / "matrix_results.json"
+MATRIX_MD = HERE / "model_matrix.md"
 
 PYTHON = sys.executable  # the venv python
 
@@ -901,6 +916,611 @@ def render_memory_figure(records: list[dict] | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# topica-vs-tomotopy same-model matrix
+# ---------------------------------------------------------------------------
+
+def _run_subprocess_fit(py_script: str) -> tuple[float, float]:
+    """Run a Python fit script in a subprocess, return (fit_time_s, peak_rss_mb)."""
+    stdout, rss = peak_rss_mb([PYTHON, "-c", py_script])
+    fit_time = float(
+        [l for l in stdout.splitlines() if l.startswith("FIT_TIME")][0].split()[1]
+    )
+    return fit_time, rss
+
+
+def bench_tomotopy_matrix(
+    docs: list[list[str]],
+    rating: np.ndarray,
+    day: np.ndarray,
+    blog: list[str] | None,
+    vocab: set[str],
+) -> list[dict]:
+    """Run topica vs tomotopy on each shared model at MATRIX_SIZE, single-threaded.
+
+    Each fit runs in its own subprocess via peak_rss_mb so RSS is clean.
+    Construction / add_doc time is excluded from the timed region where
+    tomotopy supports it; the topica fits are timed identically.  Returns a
+    list of result dicts, one per model.
+    """
+    K = MATRIX_K
+    ITERS = MATRIX_ITERS
+    PYTHON_PATH = str(ROOT / "python")
+    results: list[dict] = []
+
+    # We include all docs in a single temp dir so subprocesses can load them.
+    with tempfile.TemporaryDirectory() as d:
+        docs_pkl = os.path.join(d, "docs.json")
+        rating_path = os.path.join(d, "rating.npy")
+        payload: dict = {"docs": docs, "rating": rating.tolist()}
+        json.dump(payload, open(docs_pkl, "w"))
+
+        # ------------------------------------------------------------------ #
+        # LDA                                                                  #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] LDA ...", flush=True)
+        try:
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.LDA(num_topics={K}, seed=1, optimize_interval=0,"
+                f" num_threads=1).fit(docs, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"mdl = tp.LDAModel(k={K}, seed=1)\n"
+                "for d in docs:\n"
+                "    mdl.add_doc(d)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "LDA",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": "",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP LDA — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # CTM                                                                  #
+        # CTM variational EM: topica uses Laplace/STM E-step; tomotopy uses   #
+        # standard mean-field CTM. Both are CTM variants but the inner-loop   #
+        # differs; the comparison is speed, not algorithmic parity.           #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] CTM ...", flush=True)
+        try:
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.CTM(num_topics={K}).fit(docs, iters={ITERS}, em_tol=0.0)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"mdl = tp.CTModel(k={K})\n"
+                "for d in docs:\n"
+                "    mdl.add_doc(d)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "CTM",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": "topica: Laplace/STM E-step; tomotopy: mean-field CTM",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP CTM — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # DMR                                                                  #
+        # topica: numeric covariate matrix (one binary column = rating).      #
+        # tomotopy: string metadata per document (str(rating_i)).             #
+        # Both implement Mimno & McCallum 2008; parameterisation differs.     #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] DMR ...", flush=True)
+        try:
+            py_topica = (
+                "import json, sys, time, numpy as np\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                "rating = np.array(data['rating'])\n"
+                "features = rating.reshape(-1, 1)\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.DMR(num_topics={K}, seed=1).fit("
+                f"docs, features, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                "rating = data['rating']\n"
+                f"mdl = tp.DMRModel(k={K}, seed=1)\n"
+                "for d, r in zip(docs, rating):\n"
+                "    mdl.add_doc(d, metadata=str(r))\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "DMR",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": "topica: numeric feature matrix; tomotopy: string metadata",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP DMR — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # HDP (infers K — match ITERS only; report each library's inferred K) #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] HDP ...", flush=True)
+        try:
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"m = topica.HDP(seed=42)\n"
+                f"m.fit(docs, iters={ITERS})\n"
+                "elapsed = time.perf_counter() - t0\n"
+                "print('FIT_TIME', elapsed)\n"
+                "print('INFERRED_K', m.num_topics)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"mdl = tp.HDPModel(seed=42)\n"
+                "for d in docs:\n"
+                "    mdl.add_doc(d)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "elapsed = time.perf_counter() - t0\n"
+                "print('FIT_TIME', elapsed)\n"
+                "print('INFERRED_K', mdl.live_k)\n"
+            )
+            stdout_t, tt_rss = peak_rss_mb([PYTHON, "-c", py_topica])
+            tt = float([l for l in stdout_t.splitlines() if l.startswith("FIT_TIME")][0].split()[1])
+            topica_k = int([l for l in stdout_t.splitlines() if l.startswith("INFERRED_K")][0].split()[1])
+
+            stdout_m, tm_rss = peak_rss_mb([PYTHON, "-c", py_tomo])
+            tm = float([l for l in stdout_m.splitlines() if l.startswith("FIT_TIME")][0].split()[1])
+            tomo_k = int([l for l in stdout_m.splitlines() if l.startswith("INFERRED_K")][0].split()[1])
+
+            results.append({
+                "model": "HDP",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": f"K inferred: topica={topica_k}, tomotopy={tomo_k}",
+            })
+            print(
+                f"    topica {tt:.2f}s (K={topica_k})  "
+                f"tomotopy {tm:.2f}s (K={tomo_k})",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"    SKIP HDP — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # PA (Pachinko Allocation)                                             #
+        # topica: PA(num_super, num_sub); tomotopy: PAModel(k1=, k2=).        #
+        # We use K//2 super-topics, K sub-topics (matching K word-level).     #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] PA ...", flush=True)
+        try:
+            PA_SUPER = max(2, K // 2)
+            PA_SUB = K
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.PA(num_super={PA_SUPER}, num_sub={PA_SUB}, seed=1)"
+                f".fit(docs, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"mdl = tp.PAModel(k1={PA_SUPER}, k2={PA_SUB}, seed=1)\n"
+                "for d in docs:\n"
+                "    mdl.add_doc(d)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "PA",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": f"k1(super)={PA_SUPER}, k2(sub)={PA_SUB}",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP PA — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # PT (Pseudo-document Topic Model)                                     #
+        # topica: PT(num_topics=K, num_pseudo=P); tomotopy: PTModel(k=K, p=P)#
+        # Default p = 10*K in tomotopy 0.12+; match topica's default of 100. #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] PT ...", flush=True)
+        try:
+            PT_PSEUDO = 100
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.PT(num_topics={K}, num_pseudo={PT_PSEUDO}, seed=1)"
+                f".fit(docs, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"mdl = tp.PTModel(k={K}, p={PT_PSEUDO}, seed=1)\n"
+                "for d in docs:\n"
+                "    mdl.add_doc(d)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "PT",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": f"num_pseudo={PT_PSEUDO}",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP PT — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # SLDA (Supervised LDA)                                                #
+        # topica: SupervisedLDA — variational EM, real-valued response.       #
+        # tomotopy: SLDAModel(vars=['l']) — Gibbs + linear regression.        #
+        # Algorithms differ (VEM vs Gibbs); matched on K, ITERS, and the same #
+        # continuous response (rating 0/1).                                    #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] SLDA ...", flush=True)
+        try:
+            py_topica = (
+                "import json, sys, time, numpy as np\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                "y = np.array(data['rating'])\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.SupervisedLDA(num_topics={K}, seed=1)"
+                f".fit(docs, y, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                "docs = data['docs']\n"
+                "rating = data['rating']\n"
+                # 'l' = linear (real-valued) response variable
+                f"mdl = tp.SLDAModel(k={K}, vars=['l'], seed=1)\n"
+                "for d, r in zip(docs, rating):\n"
+                "    mdl.add_doc(d, y=[r])\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "SLDA",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": "topica: variational EM; tomotopy: Gibbs",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP SLDA — error: {exc}", flush=True)
+
+        # ------------------------------------------------------------------ #
+        # LabeledLDA                                                           #
+        # We use binary labels derived from rating (Liberal/Conservative).    #
+        # Both libraries use all-unique labels; topica infers K from the label #
+        # set, tomotopy requires k to be set to the number of unique labels.  #
+        # ------------------------------------------------------------------ #
+        print("  [matrix] LabeledLDA ...", flush=True)
+        try:
+            # Build a label list: each document gets one label based on rating.
+            label_names = ["Conservative", "Liberal"]
+            doc_labels = [
+                ["Liberal"] if r >= 0.5 else ["Conservative"]
+                for r in rating.tolist()
+            ]
+            n_labels = len(label_names)
+            labels_pkl = os.path.join(d, "labels.json")
+            json.dump(doc_labels, open(labels_pkl, "w"))
+
+            py_topica = (
+                "import json, sys, time\n"
+                f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+                "import topica\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                f"doc_labels = json.load(open({labels_pkl!r}))\n"
+                "docs = data['docs']\n"
+                f"t0 = time.perf_counter()\n"
+                f"topica.LabeledLDA(seed=1).fit("
+                f"docs, doc_labels, iters={ITERS})\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            py_tomo = (
+                "import json, time\n"
+                "import tomotopy as tp\n"
+                f"data = json.load(open({docs_pkl!r}))\n"
+                f"doc_labels = json.load(open({labels_pkl!r}))\n"
+                "docs = data['docs']\n"
+                # k must equal the number of unique labels in tomotopy
+                f"mdl = tp.LLDAModel(k={n_labels}, seed=1)\n"
+                "for d, lbls in zip(docs, doc_labels):\n"
+                "    mdl.add_doc(d, labels=lbls)\n"
+                f"t0 = time.perf_counter()\n"
+                f"mdl.train({ITERS}, workers=1)\n"
+                "print('FIT_TIME', time.perf_counter() - t0)\n"
+            )
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tm, tm_rss = _run_subprocess_fit(py_tomo)
+            results.append({
+                "model": "LabeledLDA",
+                "topica_time": tt, "tomo_time": tm,
+                "topica_rss_mb": tt_rss, "tomo_rss_mb": tm_rss,
+                "note": f"2 labels (Liberal/Conservative); K fixed by label set",
+            })
+            print(f"    topica {tt:.2f}s  tomotopy {tm:.2f}s", flush=True)
+        except Exception as exc:
+            print(f"    SKIP LabeledLDA — error: {exc}", flush=True)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# gensim LDA leg
+# ---------------------------------------------------------------------------
+
+def bench_gensim_lda(docs: list[list[str]]) -> dict | None:
+    """Time topica LDA vs gensim LdaModel at MATRIX_SIZE/K/ITERS, single-threaded.
+
+    Dictionary and doc2bow corpus are built outside the timed region.
+    We time only the LdaModel(...) training call, matching K and total sweeps
+    (passes=1, iterations=ITERS to match per-document passes through all data).
+    Returns a result dict or None if gensim is unavailable.
+    """
+    try:
+        import gensim  # noqa: F401 — availability check
+    except ImportError:
+        print("  [matrix] gensim LDA: skipped — gensim not importable", flush=True)
+        return None
+
+    K = MATRIX_K
+    ITERS = MATRIX_ITERS
+    PYTHON_PATH = str(ROOT / "python")
+
+    print("  [matrix] gensim LDA ...", flush=True)
+
+    with tempfile.TemporaryDirectory() as d:
+        docs_pkl = os.path.join(d, "docs.json")
+        json.dump({"docs": docs}, open(docs_pkl, "w"))
+
+        # topica LDA (same as matrix LDA leg, single-threaded).
+        py_topica = (
+            "import json, sys, time\n"
+            f"sys.path.insert(0, {PYTHON_PATH!r})\n"
+            "import topica\n"
+            f"data = json.load(open({docs_pkl!r}))\n"
+            "docs = data['docs']\n"
+            f"t0 = time.perf_counter()\n"
+            f"topica.LDA(num_topics={K}, seed=1, optimize_interval=0,"
+            f" num_threads=1).fit(docs, iters={ITERS})\n"
+            "print('FIT_TIME', time.perf_counter() - t0)\n"
+        )
+        # gensim LDA: build Dictionary + bow outside the timed region; time
+        # only the LdaModel constructor call.  passes=1, iterations=ITERS
+        # (one pass over documents, ITERS E-step iterations per document).
+        # chunksize=len(corpus) gives a single chunk (one online-update step).
+        # gensim LDA is single-process by default; there is no workers kwarg.
+        py_gensim = (
+            "import json, time\n"
+            "from gensim.corpora import Dictionary\n"
+            "from gensim.models import LdaModel\n"
+            f"data = json.load(open({docs_pkl!r}))\n"
+            "docs = data['docs']\n"
+            "dct = Dictionary(docs)\n"
+            "bow = [dct.doc2bow(d) for d in docs]\n"
+            # Build outside timed region, time only LdaModel training.
+            f"t0 = time.perf_counter()\n"
+            f"LdaModel(\n"
+            f"    bow,\n"
+            f"    num_topics={K},\n"
+            f"    id2word=dct,\n"
+            f"    passes=1,\n"
+            f"    iterations={ITERS},\n"
+            f"    update_every=1,\n"
+            f"    chunksize=len(bow),\n"  # single chunk = no online update splits
+            f"    random_state=1,\n"
+            f"    eval_every=None,\n"
+            f"    alpha='symmetric',\n"
+            f"    eta=0.01,\n"
+            f")\n"
+            "print('FIT_TIME', time.perf_counter() - t0)\n"
+        )
+
+        try:
+            tt, tt_rss = _run_subprocess_fit(py_topica)
+            tg, tg_rss = _run_subprocess_fit(py_gensim)
+            print(f"    topica {tt:.2f}s  gensim {tg:.2f}s", flush=True)
+            return {
+                "topica_time": tt, "gensim_time": tg,
+                "topica_rss_mb": tt_rss, "gensim_rss_mb": tg_rss,
+            }
+        except Exception as exc:
+            print(f"    SKIP gensim LDA — error: {exc}", flush=True)
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Matrix renderer
+# ---------------------------------------------------------------------------
+
+def render_model_matrix(matrix_records: list[dict] | None = None,
+                        gensim_record: dict | None = None) -> None:
+    """Write benchmarks/model_matrix.md from matrix_results.json."""
+    if matrix_records is None or gensim_record is None:
+        if not MATRIX_RESULTS_JSON.exists():
+            print(f"No matrix results at {MATRIX_RESULTS_JSON}; run --matrix first.")
+            return
+        blob = json.load(open(MATRIX_RESULTS_JSON))
+        matrix_records = blob.get("matrix", [])
+        gensim_record = blob.get("gensim_lda")
+
+    import io
+    buf = io.StringIO()
+    buf.write("## topica vs tomotopy same-model matrix\n\n")
+    buf.write(
+        f"Corpus: poliblog5k subsampled to {MATRIX_SIZE} docs. "
+        f"K={MATRIX_K} topics, {MATRIX_ITERS} iterations, single-threaded. "
+        "Ratio = reference time / topica time (>1 means topica faster). "
+        "RSS = peak resident set size. "
+        "Each fit runs in its own subprocess for a clean RSS measurement.\n\n"
+    )
+
+    header = [
+        "model", "topica (s)", "tomotopy (s)", "topica/tomo ratio",
+        "topica RSS (MB)", "tomo RSS (MB)", "notes",
+    ]
+    buf.write("| " + " | ".join(header) + " |\n")
+    buf.write("|" + "|".join(["---"] * len(header)) + "|\n")
+
+    for r in (matrix_records or []):
+        tt = r.get("topica_time", float("nan"))
+        tm = r.get("tomo_time", float("nan"))
+        ratio = f"{tm / tt:.2f}x" if tt and tm else "n/a"
+        tt_rss = r.get("topica_rss_mb", float("nan"))
+        tm_rss = r.get("tomo_rss_mb", float("nan"))
+        note = r.get("note", "")
+        buf.write(
+            f"| {r['model']} | {tt:.2f} | {tm:.2f} | {ratio} "
+            f"| {tt_rss:.0f} | {tm_rss:.0f} | {note} |\n"
+        )
+
+    buf.write("\n### gensim LDA comparison\n\n")
+    if gensim_record:
+        gt = gensim_record.get("topica_time", float("nan"))
+        gg = gensim_record.get("gensim_time", float("nan"))
+        ratio_g = f"{gg / gt:.2f}x" if gt and gg else "n/a"
+        gt_rss = gensim_record.get("topica_rss_mb", float("nan"))
+        gg_rss = gensim_record.get("gensim_rss_mb", float("nan"))
+        buf.write(
+            "| model | topica (s) | gensim (s) | topica/gensim ratio "
+            "| topica RSS (MB) | gensim RSS (MB) |\n"
+        )
+        buf.write("|---|---|---|---|---|---|\n")
+        buf.write(
+            f"| LDA (vs gensim) | {gt:.2f} | {gg:.2f} | {ratio_g} "
+            f"| {gt_rss:.0f} | {gg_rss:.0f} |\n"
+        )
+    else:
+        buf.write("_gensim LDA leg was skipped (gensim not available)._\n")
+
+    buf.write(
+        "\n_Note: HDP infers the number of topics; K is not fixed. "
+        "CTM implementations differ (topica: Laplace/STM E-step, "
+        "tomotopy: mean-field); speed comparison is valid, algorithmic "
+        "parity is not claimed. DMR: topica takes a numeric feature matrix; "
+        "tomotopy takes string metadata. SLDA: topica uses variational EM; "
+        "tomotopy uses Gibbs sampling._\n"
+    )
+
+    MATRIX_MD.write_text(buf.getvalue())
+    print(buf.getvalue(), flush=True)
+    print(f"Matrix table written to {MATRIX_MD}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Matrix runner
+# ---------------------------------------------------------------------------
+
+def run_matrix() -> None:
+    """Load corpus, run the tomotopy matrix + gensim leg, write outputs."""
+    _ensure_csv()
+    toks, rating_full, day_full = _load_full()
+    print(
+        f"poliblog5k: {len(toks)} docs total | "
+        f"MATRIX_SIZE={MATRIX_SIZE} K={MATRIX_K} ITERS={MATRIX_ITERS}\n",
+        flush=True,
+    )
+
+    docs, rating, day, vocab = _subsample(toks, rating_full, day_full, MATRIX_SIZE)
+    nd = len(docs)
+    nv = len(vocab)
+    print(f"Subsampled: {nd} docs, {nv} vocab\n", flush=True)
+
+    matrix_records = bench_tomotopy_matrix(docs, rating, day, None, vocab)
+    gensim_record = bench_gensim_lda(docs)
+
+    blob = {"matrix": matrix_records, "gensim_lda": gensim_record}
+    json.dump(blob, open(MATRIX_RESULTS_JSON, "w"), indent=2)
+    print(f"\nMatrix results written to {MATRIX_RESULTS_JSON}", flush=True)
+
+    render_model_matrix(matrix_records, gensim_record)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -913,7 +1533,20 @@ def main() -> None:
         action="store_true",
         help="Render outputs from an existing bench_results.json without running fits",
     )
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help=(
+            "Run topica-vs-tomotopy same-model matrix + gensim LDA leg at "
+            "MATRIX_SIZE, write matrix_results.json, and render model_matrix.md"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.matrix:
+        run_matrix()
+        print("\nMatrix run complete.", flush=True)
+        return
 
     if args.render:
         if not RESULTS_JSON.exists():
