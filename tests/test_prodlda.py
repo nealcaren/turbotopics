@@ -23,7 +23,7 @@ def _planted(k=3, block=8, n=240, length=15, seed=0):
 
 def _model(num_topics=3, **kw):
     return topica.ProdLDA(
-        num_topics=num_topics, epochs=150, batch_size=60, lr=0.01, dropout=0.0, **kw
+        num_topics=num_topics, batch_size=60, lr=0.01, dropout=0.0, **kw
     )
 
 
@@ -50,7 +50,7 @@ def test_prodlda_recovers_planted_blocks():
 def test_prodlda_top_words_all_topics_and_names():
     docs, vocab, _ = _planted()
     m = _model(seed=1)
-    m.fit(docs)
+    m.fit(docs, iters=150)
     allw = m.top_words(5)  # topic=None -> list per topic
     assert len(allw) == 3 and all(len(t) == 5 for t in allw)
     assert m.topic_names == ["topic_0", "topic_1", "topic_2"]
@@ -60,7 +60,7 @@ def test_prodlda_top_words_all_topics_and_names():
 def test_prodlda_transform_is_encoder_pass():
     docs, _, _ = _planted()
     m = _model(seed=2)
-    m.fit(docs)
+    m.fit(docs, iters=150)
     new = [["b0w1", "b0w2"], ["b1w0", "b1w3"], ["b2w5", "b2w4"]]
     theta = m.transform(new)
     assert theta.shape == (3, 3)
@@ -71,7 +71,7 @@ def test_prodlda_transform_is_encoder_pass():
 def test_prodlda_bound_and_trace():
     docs, _, _ = _planted()
     m = _model(seed=3)
-    m.fit(docs)
+    m.fit(docs, iters=150)
     assert m.epochs_run == 150
     assert len(m.bound_history) == 150
     # The ELBO improves over training (final beats the first epoch).
@@ -82,9 +82,9 @@ def test_prodlda_bound_and_trace():
 def test_prodlda_determinism():
     docs, _, _ = _planted()
     a = _model(seed=7)
-    a.fit(docs)
+    a.fit(docs, iters=150)
     b = _model(seed=7)
-    b.fit(docs)
+    b.fit(docs, iters=150)
     assert np.allclose(a.topic_word, b.topic_word)
     assert np.allclose(a.doc_topic, b.doc_topic)
 

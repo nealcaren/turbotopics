@@ -72,10 +72,10 @@ const BN_EPS: f64 = 1e-5;
 /// Trainable-free batch-normalization layer (affine = false): it stores only the
 /// running mean/variance used at evaluation time.
 #[derive(Clone)]
-struct BatchNorm {
-    running_mean: Vec<f64>,
-    running_var: Vec<f64>,
-    momentum: f64,
+pub struct BatchNorm {
+    pub running_mean: Vec<f64>,
+    pub running_var: Vec<f64>,
+    pub momentum: f64,
 }
 
 /// What the BN backward pass needs: the normalized activations and the per-feature
@@ -170,19 +170,19 @@ impl BatchNorm {
 /// The trainable parameters: encoder (`V -> hidden -> hidden -> (mu, logvar)`) and
 /// the unnormalized decoder `beta` (K x V, row-major).
 #[derive(Clone)]
-struct Weights {
-    v: usize,
-    hidden: usize,
-    k: usize,
-    w1: Vec<f64>, // hidden x V
-    b1: Vec<f64>, // hidden
-    w2: Vec<f64>, // hidden x hidden
-    b2: Vec<f64>, // hidden
-    w_mu: Vec<f64>, // K x hidden
-    b_mu: Vec<f64>, // K
-    w_ls: Vec<f64>, // K x hidden
-    b_ls: Vec<f64>, // K
-    beta: Vec<f64>, // K x V
+pub struct Weights {
+    pub v: usize,
+    pub hidden: usize,
+    pub k: usize,
+    pub w1: Vec<f64>, // hidden x V
+    pub b1: Vec<f64>, // hidden
+    pub w2: Vec<f64>, // hidden x hidden
+    pub b2: Vec<f64>, // hidden
+    pub w_mu: Vec<f64>, // K x hidden
+    pub b_mu: Vec<f64>, // K
+    pub w_ls: Vec<f64>, // K x hidden
+    pub b_ls: Vec<f64>, // K
+    pub beta: Vec<f64>, // K x V
 }
 
 impl Weights {
@@ -616,8 +616,8 @@ pub struct ProdldaModel {
     pub bound_history: Vec<f64>,
     pub converged: bool,
     pub epochs_run: usize,
-    weights: Weights,
-    bn_mu: BatchNorm,
+    pub weights: Weights,
+    pub bn_mu: BatchNorm,
 }
 
 impl ProdldaModel {

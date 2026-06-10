@@ -38,8 +38,8 @@ def main():
     doc_emb = topica.llm_embed(texts, model=EMBED_MODEL, cache=os.path.join(HERE, "crisis_emb.npz"))
 
     # 2. Fit an embedding-native, mixed-membership model.
-    model = topica.FASTopic(num_topics=10, epochs=200, seed=1)
-    model.fit(docs, doc_emb)
+    model = topica.FASTopic(num_topics=10, seed=1)
+    model.fit(docs, doc_emb, iters=200)
 
     # 3. Name the topics with an LLM (pin temperature for stable labels). This is
     # the one step that needs a labeling model; skip it gracefully if none is set

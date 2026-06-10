@@ -20,8 +20,8 @@ def _setup(k=3, block=6, e=8, n=120, seed=0):
 
 def test_etm_transform_roundtrip():
     docs, vocab, word_emb, _ = _setup()
-    m = topica.ETM(num_topics=3, em_iters=30, seed=1)
-    th = m.fit_transform(docs, word_emb, vocab)
+    m = topica.ETM(num_topics=3, seed=1)
+    th = m.fit_transform(docs, word_emb, vocab, iters=30)
     assert th.shape == (len(docs), 3)
     assert np.allclose(th.sum(axis=1), 1.0)
     held = m.transform(docs[:5])

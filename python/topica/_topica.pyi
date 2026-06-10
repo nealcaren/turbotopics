@@ -1664,6 +1664,7 @@ class Top2Vec:
     def top_words(
         self, n: int = 10, *, topic: int | None = None, representation: str | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def topic_neighbors(self, topic: int, *, n: int = 10) -> list[tuple[str, float]]: ...
     def transform(
         self,
@@ -1735,6 +1736,7 @@ class BERTopic:
     def top_words(
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def approximate_distribution(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -1773,13 +1775,11 @@ class ETM:
         num_topics: int,
         *,
         inference: str = "em",
-        em_iters: int = 100,
         em_tol: float = 1e-4,
         sigma_shrink: float = 0.0,
         prior_variance: float = 1e6,
         max_inner: int = 25,
         hidden_size: int = 800,
-        epochs: int = 150,
         batch_size: int = 1000,
         lr: float = 0.005,
         wdecay: float = 1.2e-6,
@@ -1790,9 +1790,12 @@ class ETM:
         data: Corpus | Sequence[Sequence[str]],
         word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
         vocabulary: Sequence[str],
+        *,
+        iters: int | None = None,
     ) -> None:
         """Fit on token documents plus word embeddings (len(vocabulary) x E) and
-        the aligned vocabulary, which defines the word ids."""
+        the aligned vocabulary, which defines the word ids. `iters` sets the number
+        of training iterations (EM iterations or VAE epochs)."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -1814,9 +1817,12 @@ class ETM:
     def topic_names(self, value: list[str]) -> None: ...
     @property
     def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
     def top_words(
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
         self, data: Corpus | Sequence[Sequence[str]]
     ) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1825,7 +1831,12 @@ class ETM:
         data: Corpus | Sequence[Sequence[str]],
         word_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
         vocabulary: Sequence[str],
+        *,
+        iters: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def save(self, path: str) -> None: ...
+    @staticmethod
+    def load(path: str) -> ETM: ...
     def __repr__(self) -> str: ...
 
 
@@ -1845,14 +1856,13 @@ class ProdLDA:
         alpha: float = 1.0,
         hidden_size: int = 100,
         dropout: float = 0.2,
-        epochs: int = 200,
         batch_size: int = 200,
         lr: float = 0.002,
         em_tol: float = 0.0,
         seed: int = 42,
     ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]]) -> None:
-        """Fit on a Corpus or a list of token lists."""
+    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int | None = None) -> None:
+        """Fit on a Corpus or a list of token lists. `iters` sets the number of epochs."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -1886,6 +1896,9 @@ class ProdLDA:
     def fit_transform(
         self, data: Corpus | Sequence[Sequence[str]]
     ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def save(self, path: str) -> None: ...
+    @staticmethod
+    def load(path: str) -> ProdLDA: ...
     def __repr__(self) -> str: ...
 
 
@@ -1903,7 +1916,6 @@ class FASTopic:
         self,
         num_topics: int,
         *,
-        epochs: int = 200,
         lr: float = 0.002,
         dt_alpha: float = 3.0,
         tw_alpha: float = 2.0,
@@ -1917,9 +1929,12 @@ class FASTopic:
         self,
         data: Corpus | Sequence[Sequence[str]],
         doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        *,
+        iters: int | None = None,
     ) -> None:
         """Fit on token documents plus frozen document embeddings (num_docs x E).
-        The vocabulary is taken from the corpus; the word embeddings are learned."""
+        The vocabulary is taken from the corpus; the word embeddings are learned.
+        `iters` sets the number of training epochs."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -1941,9 +1956,12 @@ class FASTopic:
     def topic_names(self, value: list[str]) -> None: ...
     @property
     def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
     def top_words(
         self, n: int = 10, *, topic: int | None = None
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
         self, doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]]
     ) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1952,6 +1970,9 @@ class FASTopic:
         data: Corpus | Sequence[Sequence[str]],
         doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
     ) -> numpy.typing.NDArray[numpy.float64]: ...
+    def save(self, path: str) -> None: ...
+    @staticmethod
+    def load(path: str) -> FASTopic: ...
     def __repr__(self) -> str: ...
 
 
