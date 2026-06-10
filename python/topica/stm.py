@@ -1058,11 +1058,14 @@ def transform(model, docs, *, prevalence=None, data=None, formula=None, X=None):
         Document-level DataFrame for the new documents. Required when
         ``formula`` is given.
     formula : str, optional
-        R-style formula string (e.g. ``"~ party + spline(year, df=3)"``).
-        When supplied with ``data``, the design matrix is built from the
-        formula using the same column encoding as at fit time (including
-        intercept stripping). An intercept is then prepended here so the
-        column order matches ``gamma``.
+        R-style formula string (e.g. ``"~ party + author"``). When supplied with
+        ``data``, the design matrix is built from the formula using the same
+        column encoding as at fit time (categorical coding, intercept stripping);
+        an intercept is then prepended so the column order matches ``gamma``.
+        Formulas with a ``spline()`` term are rejected here, because their knots
+        would be recomputed on the new documents rather than reused from fit;
+        build the design with ``design_matrix_predict`` and the fit-time knot
+        context (as :func:`predicted_prevalence` does) and pass it as ``X=``.
     X : array-like (num_docs, p), optional
         Pre-built design matrix without the intercept column. Alternative to
         ``prevalence``; they are equivalent.
@@ -1083,6 +1086,21 @@ def transform(model, docs, *, prevalence=None, data=None, formula=None, X=None):
         if formula is not None:
             if data is None:
                 raise ValueError("formula= requires data= (a pandas DataFrame).")
+            if "spline(" in formula:
+                # A spline term's knots are placed from the training data at fit
+                # time. Rebuilding the design from a bare formula here would
+                # recompute knots on the new data, giving a silently miscalibrated
+                # prior. Until the model retains its fit-time knot context, route
+                # spline prevalence designs through the pre-built X path: build
+                # X_new with design_matrix_predict and the training knot context
+                # (as predicted_prevalence does), then pass it as X=.
+                raise ValueError(
+                    "formula= with a spline() term is not supported in transform "
+                    "(its knots would be recomputed on the new documents rather "
+                    "than reused from fit). Build the design matrix with "
+                    "design_matrix_predict using the fit-time knot context and "
+                    "pass it as X=."
+                )
             from .formulas import design_matrix
             X_raw, _ = design_matrix(formula, data)
             X_raw = np.asarray(X_raw, dtype=np.float64)

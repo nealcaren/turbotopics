@@ -313,3 +313,15 @@ class TestAlignThenTransform:
         theta = model.transform(aligned)
         assert theta.shape == (2, 2)
         npt.assert_allclose(theta.sum(axis=1), np.ones(2), atol=1e-5)
+
+
+class TestSplineFormulaGuard:
+    def test_spline_formula_rejected(self, fitted_stm_and_data):
+        """A spline() prevalence formula is rejected in transform: its knots
+        would be recomputed on the new docs rather than reused from fit."""
+        import pandas as pd
+
+        model, docs, _ = fitted_stm_and_data
+        data = pd.DataFrame({"yr": list(range(len(docs)))})
+        with pytest.raises(ValueError, match="spline"):
+            stm.transform(model, docs, formula="~ spline(yr, df=3)", data=data)
