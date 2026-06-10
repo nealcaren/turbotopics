@@ -193,16 +193,6 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("BERTopic",     "coherence"):  "phase 4: add coherence method to BERTopic (UMass over top words)",
     ("Top2Vec",      "coherence"):  "phase 4: add coherence method to Top2Vec (UMass over top words)",
 
-    # --- Phase 6: held-out transform for the remaining generative models ---
-    # All five are fittable Dirichlet models whose held-out theta can be inferred
-    # with the fitted phi (Gibbs inference for the keyword/seeded/pseudo models;
-    # a baseline, covariate-free projection for SAGE's sparse-additive phi).
-    ("KeyATM",       "transform"): "phase 6: add transform (Gibbs held-out inference with fitted phi)",
-    ("SeededLDA",    "transform"): "phase 6: add transform (Gibbs held-out inference with fitted phi)",
-    ("SAGE",         "transform"): "phase 6: add transform (baseline, covariate-free projection)",
-    ("PA",           "transform"): "phase 6: add transform (sub-topic held-out inference)",
-    ("PT",           "transform"): "phase 6: add transform (pseudo-topic held-out inference)",
-
 }
 
 # ---------------------------------------------------------------------------

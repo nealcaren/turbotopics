@@ -4216,6 +4216,37 @@ impl SAGE {
         })
     }
 
+    /// Infer document-topic distributions for new, unseen documents under the
+    /// fitted model (sklearn-style ``transform``). Holds the fitted
+    /// group-averaged topic-word distributions fixed and runs collapsed Gibbs
+    /// to infer θ for each document. Returns shape
+    /// ``(num_new_docs, num_topics)`` with rows summing to 1.
+    ///
+    /// **Approximation:** held-out inference uses the group-averaged
+    /// topic-word matrix (the marginal over groups) and does not condition on
+    /// a group covariate for new documents. This is a baseline projection;
+    /// the group-specific word distributions are a training-time device and
+    /// cannot be recovered for documents whose group label is unknown.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let phi = self.topic_marginal();
+        let alpha = vec![self.alpha; self.num_topics];
+        transform_gibbs(py, data, id_to_word, &phi, &alpha, iterations, burn_in,
+                        num_samples, sample_interval, seed.unwrap_or(self.seed))
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "SAGE(num_topics={}, num_groups={}, fitted={})",
@@ -6833,6 +6864,36 @@ impl PT {
         })
     }
 
+    /// Infer document-topic distributions for new, unseen documents under the
+    /// fitted model (sklearn-style ``transform``). Holds the fitted topic-word
+    /// distributions fixed and runs collapsed Gibbs to infer θ for each
+    /// document. Returns shape ``(num_new_docs, num_topics)`` with rows
+    /// summing to 1.
+    ///
+    /// **Approximation:** the pseudo-document layer is a training-time
+    /// aggregation device. Held-out documents infer θ over the K topics
+    /// directly under the fitted topic-word matrix, without pseudo-document
+    /// assignment.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let phi = self.phi.as_ref().unwrap();
+        let alpha = vec![self.alpha; self.num_topics];
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+                        num_samples, sample_interval, seed.unwrap_or(self.seed))
+    }
+
     fn __repr__(&self) -> String {
         format!("PT(num_topics={}, num_pseudo={}, fitted={})", self.num_topics, self.num_pseudo, self.fitted)
     }
@@ -7376,6 +7437,36 @@ impl SeededLDA {
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             theta_draws: None, corpus: s.corpus,
         })
+    }
+
+    /// Infer document-topic distributions for new, unseen documents under the
+    /// fitted model (sklearn-style ``transform``). Holds the fitted topic-word
+    /// distributions fixed and runs collapsed Gibbs to infer θ for each
+    /// document. Returns shape ``(num_new_docs, num_topics)`` with rows
+    /// summing to 1.
+    ///
+    /// **Approximation:** the seed-word boost is baked into the fitted
+    /// topic-word matrix. New documents infer θ under those distributions
+    /// without re-estimating the seed prior.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let phi = self.phi.as_ref().unwrap();
+        let k = self.num_topics_val();
+        let alpha = vec![self.alpha; k];
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+                        num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
     fn __repr__(&self) -> String {
@@ -9715,6 +9806,40 @@ impl KeyATM {
         })
     }
 
+    /// Infer document-topic distributions for new, unseen documents under the
+    /// fitted model (sklearn-style ``transform``). Holds the fitted effective
+    /// topic-word distributions fixed and runs collapsed Gibbs to infer θ for
+    /// each document. Returns shape ``(num_new_docs, num_topics)`` with rows
+    /// summing to 1.
+    ///
+    /// **Approximation:** held-out inference uses the fitted effective P(w |
+    /// topic), which already marginalizes over the keyword switch, and the
+    /// estimated asymmetric document-topic prior α (falling back to the
+    /// symmetric base value when α was not estimated). The keyword switch
+    /// variable is not re-estimated for new tokens.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let phi = self.phi.as_ref().unwrap();
+        let alpha: Vec<f64> = match &self.alpha_vec {
+            Some(v) => v.clone(),
+            None => vec![self.alpha; self.num_topics],
+        };
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+                        num_samples, sample_interval, seed.unwrap_or(self.seed))
+    }
+
     fn __repr__(&self) -> String {
         format!("KeyATM(keyword_topics={}, num_topics={}, fitted={})", self.key_names.len(), self.num_topics, self.fitted)
     }
@@ -9938,6 +10063,36 @@ impl PA {
             super_sub: arr2_back(s.super_sub), corpus: s.corpus,
             theta_draws: None,
         })
+    }
+
+    /// Infer sub-topic proportions for new, unseen documents under the fitted
+    /// model (sklearn-style ``transform``). Holds the fitted sub-topic–word
+    /// distributions fixed and runs collapsed Gibbs to infer θ over the
+    /// ``num_sub`` sub-topics for each document. Returns shape
+    /// ``(num_new_docs, num_sub)`` with rows summing to 1.
+    ///
+    /// **Approximation:** held-out inference projects directly onto the
+    /// fitted sub-topics, marginalizing the super-topic layer. The
+    /// super-topic assignments are a training-time device and are not
+    /// re-estimated for new documents.
+    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None))]
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+        iterations: usize,
+        burn_in: usize,
+        num_samples: usize,
+        sample_interval: usize,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
+        let phi = self.phi.as_ref().unwrap();
+        let alpha = vec![self.alpha; self.num_sub];
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+                        num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
     fn __repr__(&self) -> String {

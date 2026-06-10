@@ -64,10 +64,10 @@ def transform(self, docs) -> np.ndarray:  # shape (n_docs, K)
 `transform` infers the topic mixture for new documents (without updating the
 model). It is the basis for held-out perplexity, `eval_heldout`, and `search_k`.
 Only the models with no flat document-topic representation are structurally
-exempt: `HLDA` (a topic tree) and `DTM` (time-sliced). The keyword, seeded, and
-anchored Gibbs models (`KeyATM`, `SeededLDA`, `SAGE`, `PA`, `PT`) can infer a
-held-out theta from their fitted phi, so they are tracked in `KNOWN_GAPS` as
-work to do, not exempted.
+exempt: `HLDA` (a topic tree) and `DTM` (time-sliced). All five keyword,
+seeded, and anchored Gibbs models (`KeyATM`, `SeededLDA`, `SAGE`, `PA`, `PT`)
+implement `transform` by running collapsed Gibbs with the fitted phi held
+fixed.
 
 ### Tier 2 — family-specific attributes
 
