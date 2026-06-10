@@ -57,6 +57,42 @@ def test_estimate_effect_on_gibbs_draws_and_point():
     assert moc_se >= ols_se - 1e-9
 
 
+def test_prevalence_ci_is_model_neutral():
+    # The draws-based credible-band primitive that time_prevalence_ci wraps works
+    # on any model, not just the dynamic keyATM. Here: a plain LDA grouped by a
+    # binary covariate, off retained MCMC draws.
+    docs, x = _corpus()
+    groups = ["even" if xi[0] == 0 else "odd" for xi in x]
+    m = topica.LDA(num_topics=2, seed=1)
+    m.fit(docs, iters=200, keep_theta_draws=True, num_theta_draws=20)
+
+    out = topica.prevalence_ci(m, groups, ci=0.9)
+    assert out["labels"] == ["even", "odd"]
+    for key in ("mean", "ci_low", "ci_high", "sd"):
+        assert out[key].shape == (2, 2)
+    assert np.all(out["ci_low"] <= out["mean"] + 1e-9)
+    assert np.all(out["mean"] <= out["ci_high"] + 1e-9)
+    # Normalized prevalence rows sum to 1.
+    assert np.allclose(out["mean"].sum(axis=1), 1.0)
+    # Explicit label ordering is honored.
+    flipped = topica.prevalence_ci(m, groups, labels=["odd", "even"])
+    assert flipped["labels"] == ["odd", "even"]
+    assert np.allclose(flipped["mean"][0], out["mean"][1])
+
+
+def test_prevalence_ci_falls_back_without_retained_draws():
+    # No retained draws: it still works via the Dirichlet approximation, which
+    # needs the corpus for document lengths.
+    docs, x = _corpus()
+    groups = [int(xi[0]) for xi in x]
+    m = topica.LDA(num_topics=2, seed=2)
+    m.fit(docs, iters=150)  # keep_theta_draws defaults off here
+    out = topica.prevalence_ci(m, groups, corpus=docs, nsims=15, seed=0)
+    assert out["mean"].shape == (2, 2)
+    with pytest.raises(ValueError, match="one label per document"):
+        topica.prevalence_ci(m, groups[:-1], corpus=docs, nsims=10)
+
+
 def test_dirichlet_validation():
     with pytest.raises(ValueError):
         topica.dirichlet_theta_samples(np.zeros((4, 3)), np.zeros(5))  # mismatched lengths

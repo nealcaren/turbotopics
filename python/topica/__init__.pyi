@@ -220,9 +220,32 @@ def time_prevalence_ci(
 ) -> dict:
     """Per-period topic prevalence with credible intervals from the dynamic keyATM posterior.
 
-    Requires a dynamic KeyATM fit with keep_theta_draws=True (the default).
-    Returns a dict with keys: labels, mean, ci_low, ci_high, sd (all arrays
-    shape (T, K) except labels which is a list).
+    A thin wrapper over prevalence_ci with the period order pinned to the model's
+    time_labels. Requires a dynamic KeyATM fit with keep_theta_draws=True (the
+    default). Returns a dict with keys: labels, mean, ci_low, ci_high, sd (all
+    arrays shape (T, K) except labels which is a list).
+    """
+    ...
+
+
+def prevalence_ci(
+    model: Any,
+    groups: Sequence[object],
+    *,
+    ci: float = 0.95,
+    normalize: bool = True,
+    corpus: Any | None = None,
+    nsims: int | None = None,
+    seed: int = 0,
+    labels: Sequence[object] | None = None,
+) -> dict:
+    """Per-group topic prevalence with posterior credible bands, for any model.
+
+    The draws-based companion to by_strata: groups documents by group label and
+    reads the empirical credible band off the posterior theta draws (via
+    composition_theta, so it works for Dirichlet and logistic-normal models).
+    Returns a dict with keys: labels, mean, ci_low, ci_high, sd (arrays shape
+    (num_groups, K) except labels which is a list).
     """
     ...
 

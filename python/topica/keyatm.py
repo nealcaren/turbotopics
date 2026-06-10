@@ -265,61 +265,22 @@ def time_prevalence_ci(model, timestamps, *, ci=0.95, normalize=True):
             "model.theta_draws is None: refit with keep_theta_draws=True "
             "(the default) to enable per-period posterior credible intervals"
         )
-
-    draws = np.asarray(theta_draws, dtype=np.float64)  # (S, D, K)
-    if draws.ndim != 3:
+    d = np.asarray(theta_draws).shape[1]
+    if len(np.asarray(timestamps)) != d:
         raise ValueError(
-            f"theta_draws must be 3-D (num_draws, num_docs, num_topics); got shape {draws.shape}"
-        )
-    s, d, k = draws.shape
-
-    timestamps = np.asarray(timestamps)
-    if timestamps.shape[0] != d:
-        raise ValueError(
-            f"timestamps has length {timestamps.shape[0]} but theta_draws has {d} documents; "
-            "timestamps must be one value per document"
+            f"timestamps has length {len(np.asarray(timestamps))} but theta_draws has "
+            f"{d} documents; timestamps must be one value per document"
         )
 
-    # Build a map from each distinct timestamp string to its index in time_labels.
-    # time_labels is Rust-sorted (the authoritative order); we must not rely on
-    # Python's str-sort matching it, so we build the index explicitly.
-    label_to_idx = {lbl: i for i, lbl in enumerate(time_labels)}
-    t_count = len(time_labels)
+    # The aggregation is model-neutral: group the retained theta draws by period
+    # and read posterior quantiles off them. The only keyATM-specific parts are
+    # requiring the HMM's own draws (above) and pinning the period order to
+    # time_labels, so this is a thin wrapper over the general primitive.
+    from .effects import prevalence_ci
 
-    # Convert each timestamp to its string form and look up the period index.
-    ts_str = np.asarray([str(v) for v in timestamps])
-    period_idx = np.array([label_to_idx[s] for s in ts_str], dtype=np.intp)
-
-    # per_draw_period[s, t, k] = mean theta over documents in period t, draw s.
-    per_draw = np.zeros((s, t_count, k), dtype=np.float64)
-    for t_idx in range(t_count):
-        mask = period_idx == t_idx
-        if not mask.any():
-            continue
-        # draws[:, mask, :] has shape (S, n_period, K); mean over documents.
-        per_draw[:, t_idx, :] = draws[:, mask, :].mean(axis=1)
-
-    if normalize:
-        row_sums = per_draw.sum(axis=2, keepdims=True)
-        # Avoid division by zero for empty periods (row_sum == 0 stays 0).
-        nz = row_sums > 0
-        per_draw = np.where(nz, per_draw / np.where(nz, row_sums, 1.0), 0.0)
-
-    alpha_lo = (1.0 - ci) / 2.0
-    alpha_hi = 1.0 - alpha_lo
-
-    mean = per_draw.mean(axis=0)                          # (T, K)
-    ci_low = np.quantile(per_draw, alpha_lo, axis=0)      # (T, K)
-    ci_high = np.quantile(per_draw, alpha_hi, axis=0)     # (T, K)
-    sd = per_draw.std(axis=0, ddof=1) if s > 1 else np.zeros_like(mean)
-
-    return {
-        "labels": time_labels,
-        "mean": mean,
-        "ci_low": ci_low,
-        "ci_high": ci_high,
-        "sd": sd,
-    }
+    return prevalence_ci(
+        model, timestamps, ci=ci, normalize=normalize, labels=time_labels
+    )
 
 
 def refine_keywords(docs, keywords, *, min_count=2, min_doc_freq=1, verbose=False):

@@ -116,6 +116,7 @@ from .conformance import check_conformance  # noqa: E402
 from .effects import (  # noqa: E402  general, work on any model's theta
     estimate_effect,
     by_strata,
+    prevalence_ci,
     top_topics,
     posterior_theta_samples,
     dirichlet_theta_samples,
@@ -272,6 +273,7 @@ __all__ = [
     "topic_label_prompts",
     "estimate_effect",
     "by_strata",
+    "prevalence_ci",
     "top_topics",
     "posterior_theta_samples",
     "dirichlet_theta_samples",
