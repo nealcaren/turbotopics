@@ -116,6 +116,7 @@ from .conformance import check_conformance  # noqa: E402
 from .effects import (  # noqa: E402  general, work on any model's theta
     estimate_effect,
     by_strata,
+    prevalence_ci,
     top_topics,
     posterior_theta_samples,
     dirichlet_theta_samples,
@@ -126,6 +127,7 @@ from .effects import (  # noqa: E402  general, work on any model's theta
     permutation_test,
     PermutationResult,
 )
+from .keyatm import time_prevalence_ci  # noqa: E402  (dynamic keyATM credible bands)
 from . import phrases  # noqa: E402
 from .coherence import (  # noqa: E402
     coherence,
@@ -271,6 +273,7 @@ __all__ = [
     "topic_label_prompts",
     "estimate_effect",
     "by_strata",
+    "prevalence_ci",
     "top_topics",
     "posterior_theta_samples",
     "dirichlet_theta_samples",
@@ -280,6 +283,7 @@ __all__ = [
     "PredictedPrevalence",
     "permutation_test",
     "PermutationResult",
+    "time_prevalence_ci",
     "EmbeddingLDA",
     "embedding_seeds",
     "llm_embed",

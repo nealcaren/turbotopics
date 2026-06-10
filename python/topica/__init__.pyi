@@ -42,6 +42,7 @@ from .effects import (
     standard_errors as standard_errors,
     model_family as model_family,
 )
+from .keyatm import time_prevalence_ci as time_prevalence_ci
 from .embedding import (
     EmbeddingLDA as EmbeddingLDA,
     embedding_seeds as embedding_seeds,
@@ -207,6 +208,45 @@ def topic_stability(runs: Any, *, topn: int = 10, metric: str = "cosine") -> flo
 
 def report(model: Any, topn: int = 8) -> str:
     """One-call overview of a fitted model. Alias for ``summary``."""
+    ...
+
+
+def time_prevalence_ci(
+    model: Any,
+    timestamps: Sequence[object],
+    *,
+    ci: float = 0.95,
+    normalize: bool = True,
+) -> dict:
+    """Per-period topic prevalence with credible intervals from the dynamic keyATM posterior.
+
+    A thin wrapper over prevalence_ci with the period order pinned to the model's
+    time_labels. Requires a dynamic KeyATM fit with keep_theta_draws=True (the
+    default). Returns a dict with keys: labels, mean, ci_low, ci_high, sd (all
+    arrays shape (T, K) except labels which is a list).
+    """
+    ...
+
+
+def prevalence_ci(
+    model: Any,
+    groups: Sequence[object],
+    *,
+    ci: float = 0.95,
+    normalize: bool = True,
+    corpus: Any | None = None,
+    nsims: int | None = None,
+    seed: int = 0,
+    labels: Sequence[object] | None = None,
+) -> dict:
+    """Per-group topic prevalence with posterior credible bands, for any model.
+
+    The draws-based companion to by_strata: groups documents by group label and
+    reads the empirical credible band off the posterior theta draws (via
+    composition_theta, so it works for Dirichlet and logistic-normal models).
+    Returns a dict with keys: labels, mean, ci_low, ci_high, sd (arrays shape
+    (num_groups, K) except labels which is a list).
+    """
     ...
 
 

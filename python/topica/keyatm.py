@@ -215,6 +215,74 @@ def visualize_keywords(docs, keywords):
     return out
 
 
+def time_prevalence_ci(model, timestamps, *, ci=0.95, normalize=True):
+    """Per-period topic prevalence with credible intervals from the dynamic keyATM posterior.
+
+    For a dynamic :class:`~topica.KeyATM` (fit with ``timestamps=`` and
+    ``keep_theta_draws=True``), this computes per-period prevalence uncertainty
+    directly from the retained MCMC ``theta_draws``. For each posterior draw and
+    each time period, the per-draw average of theta over the documents in that
+    period is computed, giving a (S, T, K) array of per-draw period-level
+    prevalences. The point estimate is the posterior mean over draws; ``ci_low``
+    and ``ci_high`` are the empirical (1-ci)/2 and (1+ci)/2 quantiles; ``sd`` is
+    the posterior standard deviation.
+
+    The periods are ordered to match ``model.time_labels`` exactly, so the result
+    aligns with ``model.time_prevalence``.
+
+    Parameters
+    ----------
+    model
+        A fitted dynamic :class:`~topica.KeyATM` with non-empty ``time_labels``
+        and non-``None`` ``theta_draws``. Refit with ``keep_theta_draws=True``
+        (the default) if draws are absent.
+    timestamps
+        One value per document — the same array passed to ``fit``.
+    ci
+        Credible interval coverage (default 0.95 gives a 95 percent interval).
+    normalize
+        When ``True`` (default), each per-draw per-period prevalence row is
+        normalized to sum to 1 before computing the summary statistics.
+
+    Returns
+    -------
+    dict with keys:
+        - ``labels``: list of period labels (equals ``model.time_labels``)
+        - ``mean``: ndarray shape (T, K), posterior mean prevalence per period
+        - ``ci_low``: ndarray shape (T, K), lower credible bound
+        - ``ci_high``: ndarray shape (T, K), upper credible bound
+        - ``sd``: ndarray shape (T, K), posterior standard deviation
+    """
+    time_labels = list(getattr(model, "time_labels", []))
+    if not time_labels:
+        raise ValueError(
+            "model does not have time_labels: this helper requires a dynamic KeyATM "
+            "(fit with timestamps= and num_states=)"
+        )
+    theta_draws = getattr(model, "theta_draws", None)
+    if theta_draws is None:
+        raise ValueError(
+            "model.theta_draws is None: refit with keep_theta_draws=True "
+            "(the default) to enable per-period posterior credible intervals"
+        )
+    d = np.asarray(theta_draws).shape[1]
+    if len(np.asarray(timestamps)) != d:
+        raise ValueError(
+            f"timestamps has length {len(np.asarray(timestamps))} but theta_draws has "
+            f"{d} documents; timestamps must be one value per document"
+        )
+
+    # The aggregation is model-neutral: group the retained theta draws by period
+    # and read posterior quantiles off them. The only keyATM-specific parts are
+    # requiring the HMM's own draws (above) and pinning the period order to
+    # time_labels, so this is a thin wrapper over the general primitive.
+    from .effects import prevalence_ci
+
+    return prevalence_ci(
+        model, timestamps, ci=ci, normalize=normalize, labels=time_labels
+    )
+
+
 def refine_keywords(docs, keywords, *, min_count=2, min_doc_freq=1, verbose=False):
     """Drop keywords too rare to anchor a topic (≈ ``keyATM::refine_keywords``).
 

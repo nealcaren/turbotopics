@@ -198,6 +198,109 @@ def composition_theta(model, corpus=None, *, nsims=25, seed=0):
     )
 
 
+def prevalence_ci(model, groups, *, ci=0.95, normalize=True, corpus=None,
+                  nsims=None, seed=0, labels=None):
+    """Per-group topic prevalence with posterior credible bands.
+
+    Splits the documents by ``groups`` (one label per document) and, within each
+    group, reports the mean topic prevalence with an empirical credible interval
+    drawn from the model's posterior over theta. For each posterior draw and each
+    group we average theta over the documents in that group, giving a
+    ``(S, num_groups, num_topics)`` stack of per-draw group prevalences; the point
+    estimate is the posterior mean over draws and the band is the empirical
+    ``(1-ci)/2`` and ``(1+ci)/2`` quantiles.
+
+    This is the draws-based companion to :func:`by_strata`. ``by_strata`` widens a
+    descriptive interval by Rubin's rules (a normal approximation); ``prevalence_ci``
+    reads the credible band straight off the posterior draws, which is what
+    keyATM's ``plot_timetrend`` does. It is model-neutral: the draws come from
+    :func:`composition_theta`, so it prefers a Gibbs model's retained MCMC
+    ``theta_draws`` (pass ``keep_theta_draws=True`` at fit) and otherwise falls
+    back to the Dirichlet approximation (Gibbs, needs ``corpus=``) or the
+    logistic-normal posterior (STM/CTM). :func:`topica.time_prevalence_ci` is the
+    dynamic-keyATM wrapper, with ``groups`` the timestamps and ``labels`` fixed to
+    the model's ``time_labels``.
+
+    Parameters
+    ----------
+    model
+        A fitted model with a posterior over theta (any Dirichlet or
+        logistic-normal model).
+    groups
+        One label per document; documents are pooled within each distinct value.
+    ci
+        Credible-interval coverage (default 0.95 gives a 95 percent band).
+    normalize
+        When ``True`` (default), each per-draw per-group prevalence row is rescaled
+        to sum to 1 before the summary statistics, so it reads as a topic share.
+    corpus
+        The ``Corpus`` (or token lists) the model was fit on. Needed only when the
+        model has no retained ``theta_draws`` and the Dirichlet fallback must
+        recover document lengths.
+    nsims
+        Number of posterior draws. ``None`` (default) uses all retained MCMC draws
+        as they are; an integer resamples to that many via :func:`composition_theta`.
+    seed
+        Seed for the draw sampler (used only on the resample / fallback paths).
+    labels
+        Optional explicit ordering of the group labels (matched to ``groups`` by
+        string form). When omitted, groups are sorted by their string form.
+
+    Returns
+    -------
+    dict
+        ``labels`` (the group labels in row order), and ``mean``, ``ci_low``,
+        ``ci_high``, ``sd`` each a ``(num_groups, num_topics)`` array.
+    """
+    draws = getattr(model, "theta_draws", None)
+    if draws is not None and len(draws) and nsims is None:
+        draws = np.asarray(draws, dtype=np.float64)          # use all retained draws
+    else:
+        draws = composition_theta(model, corpus, nsims=nsims or 25, seed=seed)
+    if draws.ndim != 3:
+        raise ValueError(
+            f"theta draws must be 3-D (num_draws, num_docs, num_topics); got {draws.shape}"
+        )
+    s, d, k = draws.shape
+
+    groups = np.asarray(groups)
+    if groups.shape[0] != d:
+        raise ValueError(
+            f"groups has length {groups.shape[0]} but the model has {d} documents; "
+            "groups must be one label per document"
+        )
+
+    group_str = np.asarray([str(v) for v in groups])
+    if labels is None:
+        uniq = sorted(np.unique(groups), key=lambda v: str(v))
+        labels = [u.item() if hasattr(u, "item") else u for u in uniq]
+    label_to_idx = {str(lbl): i for i, lbl in enumerate(labels)}
+    missing = set(group_str) - set(label_to_idx)
+    if missing:
+        raise ValueError(f"groups contains values not in labels: {sorted(missing)}")
+    idx = np.array([label_to_idx[g] for g in group_str], dtype=np.intp)
+
+    per_draw = np.zeros((s, len(labels), k), dtype=np.float64)
+    for t in range(len(labels)):
+        mask = idx == t
+        if mask.any():
+            per_draw[:, t, :] = draws[:, mask, :].mean(axis=1)
+
+    if normalize:
+        row_sums = per_draw.sum(axis=2, keepdims=True)
+        nz = row_sums > 0
+        per_draw = np.where(nz, per_draw / np.where(nz, row_sums, 1.0), 0.0)
+
+    lo = (1.0 - ci) / 2.0
+    return {
+        "labels": list(labels),
+        "mean": per_draw.mean(axis=0),
+        "ci_low": np.quantile(per_draw, lo, axis=0),
+        "ci_high": np.quantile(per_draw, 1.0 - lo, axis=0),
+        "sd": per_draw.std(axis=0, ddof=1) if s > 1 else np.zeros((len(labels), k)),
+    }
+
+
 @dataclass
 class TopicPrevalence:
     """Mean prevalence of one topic with an uncertainty-propagated interval."""
