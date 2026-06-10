@@ -19,6 +19,22 @@ use crate::dmr::lbfgs_minimize;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rayon::prelude::*;
 
+/// Prior on the prevalence coefficients γ in the STM M-step.
+///
+/// `Pooled` (default) fits γ by ridge regression — the original STM `"Pooled"`
+/// strategy: all topics share a single penalised regression.
+///
+/// `L1 { alpha }` fits an elastic-net path by coordinate descent (one column
+/// of Λ at a time) and selects the penalty by AIC. `alpha` is the elastic-net
+/// mix: 1.0 is pure lasso, values in (0,1) add a ridge component.  Recommended
+/// for high-dimensional prevalence designs (many one-hot levels) where the
+/// pooled ridge does not induce enough sparsity.
+#[derive(Clone, Copy, Debug)]
+pub enum GammaPrior {
+    Pooled,
+    L1 { alpha: f64 },
+}
+
 /// `exp(η)` extended with a trailing 1 (the reference category), length K.
 fn expeta(eta: &[f64]) -> Vec<f64> {
     let mut e = Vec::with_capacity(eta.len() + 1);
@@ -480,6 +496,189 @@ pub fn infer_theta(
     e.iter().map(|&x| x / s).collect()
 }
 
+/// Elastic-net (L1/L2 mix) solver for the prevalence regression Λ[:,t] ~ X β_t.
+///
+/// Solves each of the K-1 response columns independently by coordinate descent on
+/// a log-spaced lambda path, selects the penalty by AIC, and returns the
+/// (F×(K-1)) coefficient matrix on the original (unstandardised) scale.
+///
+/// The intercept (column 0 of `x`, the all-ones column) is never penalised.
+/// All other columns are internally standardised (mean-centred and scaled by their
+/// standard deviation); the coefficients are mapped back to the original scale
+/// before returning so the caller sees the same row/column layout as `fit_gamma`.
+///
+/// `alpha` is the elastic-net mixing parameter (glmnet convention): `alpha=1`
+/// is pure lasso, `alpha→0` approaches ridge. The lasso-relevant lambda_max is
+/// `max_j |x_j · y| / (n · alpha)` and the path descends to `eps * lambda_max`
+/// (with `eps = 1e-4`) over `n_lambda = 50` log-spaced steps with warm starts.
+///
+/// AIC = n · ln(RSS/n) + 2 · df, where df counts nonzero penalised coefficients.
+fn fit_gamma_enet(
+    x: &[Vec<f64>],
+    lambda: &[Vec<f64>],
+    f: usize,
+    km1: usize,
+    alpha: f64,
+) -> Vec<Vec<f64>> {
+    let n = x.len();
+    let n_f64 = n as f64;
+
+    // Standardise penalised predictors (columns 1..F).
+    // Column 0 is the intercept; it is passed through unchanged.
+    let p = f - 1; // number of penalised predictors
+    let mut col_mean = vec![0.0f64; p];
+    let mut col_std = vec![1.0f64; p];
+    for j in 0..p {
+        let s: f64 = x.iter().map(|row| row[j + 1]).sum();
+        col_mean[j] = s / n_f64;
+    }
+    for j in 0..p {
+        let var: f64 = x.iter().map(|row| {
+            let d = row[j + 1] - col_mean[j];
+            d * d
+        }).sum::<f64>() / n_f64;
+        col_std[j] = if var > 1e-12 { var.sqrt() } else { 1.0 };
+    }
+
+    // Build standardised design matrix (n × p), excluding the intercept column.
+    let xs: Vec<Vec<f64>> = x.iter().map(|row| {
+        (0..p).map(|j| (row[j + 1] - col_mean[j]) / col_std[j]).collect()
+    }).collect();
+
+    // Pre-compute column norms² of the standardised design (all = n for unit-variance).
+    let mut xj_norm2 = vec![0.0f64; p];
+    for j in 0..p {
+        xj_norm2[j] = xs.iter().map(|row| row[j] * row[j]).sum();
+        if xj_norm2[j] < 1e-12 { xj_norm2[j] = 1.0; } // constant column guard
+    }
+
+    // Coordinate-descent loop for one response column y (length n).
+    // Returns coefficients (intercept_coef, penalised_coefs[p]) on the standardised scale.
+    let solve_column = |y: &[f64]| -> Vec<f64> {
+        // Compute lambda_max = max_j |<xs_j, r>| / (n * alpha), evaluated at beta=0
+        // (so r = y - intercept*1). Intercept at beta=0 is the mean of y.
+        let y_mean: f64 = y.iter().sum::<f64>() / n_f64;
+        // Centre y for the penalised part (OLS intercept absorbs the mean).
+        let yc: Vec<f64> = y.iter().map(|&yi| yi - y_mean).collect();
+
+        let alpha_safe = alpha.max(1e-6); // guard against alpha≈0
+        let lam_max = (0..p)
+            .map(|j| {
+                let dot: f64 = xs.iter().zip(yc.iter()).map(|(row, &ri)| row[j] * ri).sum();
+                dot.abs() / (n_f64 * alpha_safe)
+            })
+            .fold(0.0f64, f64::max);
+
+        // If all columns are constant (lambda_max≈0) return a zero solution.
+        if lam_max < 1e-12 {
+            let mut out = vec![0.0f64; p + 1];
+            out[0] = y_mean;
+            return out;
+        }
+
+        let n_lambda = 50usize;
+        let eps = 1e-4f64;
+        let lam_min = lam_max * eps;
+        // Log-spaced path from lambda_max down to lambda_min.
+        let lambdas: Vec<f64> = (0..n_lambda)
+            .map(|i| {
+                let t = i as f64 / (n_lambda - 1) as f64;
+                (lam_max.ln() * (1.0 - t) + lam_min.ln() * t).exp()
+            })
+            .collect();
+
+        let mut best_coef: Vec<f64> = {
+            let mut c = vec![0.0f64; p + 1];
+            c[0] = y_mean;
+            c
+        };
+        let mut best_aic = f64::INFINITY;
+
+        // Warm-start coefficients (intercept + penalised).
+        let mut coef = vec![0.0f64; p + 1]; // [0] = intercept, [1..=p] = penalised betas (std scale)
+        coef[0] = y_mean;
+
+        // Residual vector (initialised at zero-beta prediction = intercept).
+        let mut r: Vec<f64> = y.iter().map(|&yi| yi - coef[0]).collect();
+
+        for &lam in &lambdas {
+            // Coordinate descent with warm start.
+            for _iter in 0..1000 {
+                let mut max_change = 0.0f64;
+
+                // Update intercept (unpenalised, OLS estimate from residual).
+                let r_mean: f64 = r.iter().sum::<f64>() / n_f64;
+                let delta_int = r_mean;
+                if delta_int.abs() > 1e-14 {
+                    coef[0] += delta_int;
+                    for ri in r.iter_mut() { *ri -= delta_int; }
+                    max_change = max_change.max(delta_int.abs());
+                }
+
+                // Update each penalised predictor.
+                for j in 0..p {
+                    let old = coef[j + 1];
+                    // Partial residual: add back contribution of current coef.
+                    let rj_dot: f64 = xs.iter().zip(r.iter()).map(|(row, &ri)| row[j] * (ri + old * row[j])).sum();
+                    // Soft-threshold update.
+                    let z = rj_dot / xj_norm2[j];
+                    let thresh = lam * alpha_safe;
+                    let new_coef = if z > thresh {
+                        // Ridge component: scale by 1/(1 + lam*(1-alpha)/xj_norm2*n).
+                        (z - thresh) / (1.0 + lam * (1.0 - alpha_safe) * n_f64 / xj_norm2[j])
+                    } else if z < -thresh {
+                        (z + thresh) / (1.0 + lam * (1.0 - alpha_safe) * n_f64 / xj_norm2[j])
+                    } else {
+                        0.0
+                    };
+                    let delta = new_coef - old;
+                    if delta.abs() > 1e-14 {
+                        coef[j + 1] = new_coef;
+                        for (row, ri) in xs.iter().zip(r.iter_mut()) {
+                            *ri -= delta * row[j];
+                        }
+                        max_change = max_change.max(delta.abs());
+                    }
+                }
+
+                if max_change < 1e-7 { break; }
+            }
+
+            // AIC = n * ln(RSS/n) + 2 * df
+            let rss: f64 = r.iter().map(|ri| ri * ri).sum();
+            let df = coef[1..].iter().filter(|&&c| c.abs() > 1e-10).count() as f64;
+            let aic = if rss > 0.0 {
+                n_f64 * (rss / n_f64).ln() + 2.0 * df
+            } else {
+                -n_f64 * f64::MAX.ln() + 2.0 * df
+            };
+            if aic < best_aic {
+                best_aic = aic;
+                best_coef = coef.clone();
+            }
+        }
+        best_coef
+    };
+
+    // Solve each response column and map back to original scale.
+    let mut g = vec![vec![0.0f64; km1]; f];
+    for t in 0..km1 {
+        let y: Vec<f64> = lambda.iter().map(|row| row[t]).collect();
+        let coef = solve_column(&y);
+        // coef[0] = intercept on centred-y, coef[1..p+1] = penalised on standardised x.
+        // Back-transform: beta_orig_j = coef_std_j / col_std[j]
+        // Intercept absorbs: intercept_orig = intercept_std - sum_j (beta_orig_j * col_mean[j])
+        let mut intercept = coef[0];
+        for j in 0..p {
+            let orig_j = coef[j + 1] / col_std[j];
+            g[j + 1][t] = orig_j;
+            intercept -= orig_j * col_mean[j];
+        }
+        g[0][t] = intercept;
+    }
+    g
+}
+
 /// Ridge regression of the variational means Λ (D×(K-1)) on prevalence design
 /// `x` (D×F): `γ = (XᵀX + ridge·I)⁻¹ Xᵀ Λ` (F×(K-1)).
 fn fit_gamma(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, km1: usize, ridge: f64) -> Vec<Vec<f64>> {
@@ -541,6 +740,11 @@ fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
 /// relative change in the corpus bound falls below `em_tol` (R `stm`'s `emtol`,
 /// default 1e-5). Pass `em_tol = 0.0` to disable early stopping and always run
 /// the full `em_iters`.
+///
+/// `gamma_prior` selects the prevalence-coefficient regression: `Pooled` (the
+/// default, ridge) or `L1 { alpha }` (elastic-net coordinate descent with
+/// AIC-selected penalty). When no prevalence design is supplied the parameter
+/// has no effect.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_ctm<R: Rng>(
     docs: &[Vec<u32>],
@@ -552,6 +756,7 @@ pub fn fit_ctm<R: Rng>(
     prevalence: Option<&[Vec<f64>]>,
     content: Option<(&[usize], usize)>,
     init_spectral: bool,
+    gamma_prior: GammaPrior,
     rng: &mut R,
 ) -> CtmModel {
     let k = num_topics;
@@ -749,7 +954,10 @@ pub fn fit_ctm<R: Rng>(
 
         // M-step: prevalence regression (γ) or shared mean (μ).
         if let Some(x) = prevalence {
-            gamma = Some(fit_gamma(x, &lambda, nf.unwrap(), km1, 1e-6));
+            gamma = Some(match gamma_prior {
+                GammaPrior::Pooled => fit_gamma(x, &lambda, nf.unwrap(), km1, 1e-6),
+                GammaPrior::L1 { alpha } => fit_gamma_enet(x, &lambda, nf.unwrap(), km1, alpha),
+            });
         } else {
             for i in 0..km1 {
                 mu_shared[i] = lambda_sum[i] / d as f64;
@@ -887,7 +1095,7 @@ mod tests {
                 docs.push(vec![6, 7, 8, 6, 7, 8, 6, 7, 8, 6]);
             }
         }
-        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, &mut rng);
+        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, GammaPrior::Pooled, &mut rng);
         let theta = model.doc_topics();
         // Sanity: θ rows sum to 1 and are valid.
         for row in &theta {
@@ -918,7 +1126,7 @@ mod tests {
             }
         }
         // K=2 (CTM needs >=2 topics); content groups = 2.
-        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, &mut rng);
+        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, GammaPrior::Pooled, &mut rng);
         let cb = model.content_beta.expect("content_beta present");
         // cb[group][topic][word]. The dominant topic for group 0 should favour
         // {0,1}; for group 1 {2,3}. Check that for each group some topic does.
@@ -946,7 +1154,7 @@ mod tests {
             }
         }
 
-        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, &mut rng);
+        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, GammaPrior::Pooled, &mut rng);
         // The bound trajectory is (weakly) monotone increasing.
         let h = &converged.bound_history;
         assert!(h.len() >= 2);
@@ -959,9 +1167,95 @@ mod tests {
 
         // em_tol = 0 disables early stopping: run the full cap.
         let mut rng2 = ChaCha8Rng::seed_from_u64(7);
-        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, &mut rng2);
+        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, GammaPrior::Pooled, &mut rng2);
         assert!(!capped.converged);
         assert_eq!(capped.em_iters_run, 8);
         assert_eq!(capped.bound_history.len(), 8);
+    }
+
+    // Build a synthetic regression problem with n observations, p predictors
+    // (plus an intercept), where only `n_active` of the p predictors are truly
+    // nonzero. Returns (X, Lambda, true_coefs_excl_intercept).
+    fn make_sparse_regression(
+        n: usize,
+        p: usize,
+        n_active: usize,
+        seed: u64,
+    ) -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>) {
+        // Simple LCG for deterministic data without pulling in a full rng crate
+        // at test time.  Generates uniform [0,1) floats.
+        let mut state = seed ^ 0xdeadbeef_cafef00d;
+        let mut rand_f64 = move || -> f64 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as f64 / (u32::MAX as f64)
+        };
+
+        // True coefficients: n_active nonzero (values 1..=n_active), rest zero.
+        let mut true_coef = vec![0.0f64; p];
+        for j in 0..n_active {
+            true_coef[j] = (j + 1) as f64;
+        }
+
+        // X: n × (p+1) with intercept prepended; predictors are Gaussian-ish.
+        let mut x: Vec<Vec<f64>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut row = vec![1.0f64]; // intercept
+            for _ in 0..p {
+                // Box-Muller for Gaussian-ish draws.
+                let u1 = rand_f64().max(1e-15);
+                let u2 = rand_f64();
+                let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+                row.push(z);
+            }
+            x.push(row);
+        }
+
+        // Lambda[:,0] = X[:,1:] · true_coef + small noise (SNR high).
+        let mut lam: Vec<Vec<f64>> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut y = 0.5; // intercept contribution
+            for j in 0..p {
+                y += x[i][j + 1] * true_coef[j];
+            }
+            // Add small noise.
+            let u1 = rand_f64().max(1e-15);
+            let u2 = rand_f64();
+            let noise = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos() * 0.1;
+            lam.push(vec![y + noise]);
+        }
+
+        (x, lam, true_coef)
+    }
+
+    #[test]
+    fn enet_sparser_than_ridge_on_sparse_signal() {
+        // Design: 200 obs, 30 predictors, only 3 are truly active (large signal).
+        // Elastic-net (lasso, alpha=1) should zero most inactive predictors;
+        // ridge keeps all nonzero.
+        let (x, lam, true_coef) = make_sparse_regression(200, 30, 3, 42);
+        let f = x[0].len(); // 31 (intercept + 30 predictors)
+        let km1 = 1;
+
+        let g_enet = fit_gamma_enet(&x, &lam, f, km1, 1.0);
+        let g_ridge = fit_gamma(&x, &lam, f, km1, 1e-6);
+
+        // Count zeros (|coef| < 1e-6) among the 30 penalised predictors.
+        let enet_zeros = g_enet[1..].iter().filter(|r| r[0].abs() < 1e-6).count();
+        let ridge_zeros = g_ridge[1..].iter().filter(|r| r[0].abs() < 1e-6).count();
+
+        // Elastic-net should produce substantially more zeros than ridge.
+        assert!(
+            enet_zeros > ridge_zeros + 5,
+            "enet should zero more inactive predictors than ridge: enet_zeros={enet_zeros}, ridge_zeros={ridge_zeros}"
+        );
+
+        // The 3 active predictors (index 0, 1, 2 in the penalised block,
+        // i.e. g[1], g[2], g[3]) should have the correct sign.
+        for j in 0..3 {
+            assert!(
+                g_enet[j + 1][0] * true_coef[j] > 0.0,
+                "active covariate {j} has wrong sign in enet solution"
+            );
+        }
     }
 }
