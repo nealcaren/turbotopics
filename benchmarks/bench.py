@@ -937,10 +937,12 @@ def bench_tomotopy_matrix(
 ) -> list[dict]:
     """Run topica vs tomotopy on each shared model at MATRIX_SIZE, single-threaded.
 
-    Each fit runs in its own subprocess via peak_rss_mb so RSS is clean.
-    Construction / add_doc time is excluded from the timed region where
-    tomotopy supports it; the topica fits are timed identically.  Returns a
-    list of result dicts, one per model.
+    Each fit runs in its own subprocess via peak_rss_mb so RSS is clean. Timing
+    is end-to-end from the tokenized documents: the tomotopy timer includes the
+    add_doc corpus-loading loop and topica's fit() includes its internal corpus
+    construction, so both measure the full cost of fitting a model from token
+    lists. (Timing only tomotopy's train() while topica's fit() also builds the
+    corpus would understate topica.) Returns a list of result dicts, one per model.
     """
     K = MATRIX_K
     ITERS = MATRIX_ITERS
@@ -976,9 +978,9 @@ def bench_tomotopy_matrix(
                 f"data = json.load(open({docs_pkl!r}))\n"
                 "docs = data['docs']\n"
                 f"mdl = tp.LDAModel(k={K}, seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d in docs:\n"
                 "    mdl.add_doc(d)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1018,9 +1020,9 @@ def bench_tomotopy_matrix(
                 f"data = json.load(open({docs_pkl!r}))\n"
                 "docs = data['docs']\n"
                 f"mdl = tp.CTModel(k={K})\n"
+                f"t0 = time.perf_counter()\n"
                 "for d in docs:\n"
                 "    mdl.add_doc(d)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1064,9 +1066,9 @@ def bench_tomotopy_matrix(
                 "docs = data['docs']\n"
                 "rating = data['rating']\n"
                 f"mdl = tp.DMRModel(k={K}, seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d, r in zip(docs, rating):\n"
                 "    mdl.add_doc(d, metadata=str(r))\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1106,9 +1108,9 @@ def bench_tomotopy_matrix(
                 f"data = json.load(open({docs_pkl!r}))\n"
                 "docs = data['docs']\n"
                 f"mdl = tp.HDPModel(seed=42)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d in docs:\n"
                 "    mdl.add_doc(d)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "elapsed = time.perf_counter() - t0\n"
                 "print('FIT_TIME', elapsed)\n"
@@ -1162,9 +1164,9 @@ def bench_tomotopy_matrix(
                 f"data = json.load(open({docs_pkl!r}))\n"
                 "docs = data['docs']\n"
                 f"mdl = tp.PAModel(k1={PA_SUPER}, k2={PA_SUB}, seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d in docs:\n"
                 "    mdl.add_doc(d)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1205,9 +1207,9 @@ def bench_tomotopy_matrix(
                 f"data = json.load(open({docs_pkl!r}))\n"
                 "docs = data['docs']\n"
                 f"mdl = tp.PTModel(k={K}, p={PT_PSEUDO}, seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d in docs:\n"
                 "    mdl.add_doc(d)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1252,9 +1254,9 @@ def bench_tomotopy_matrix(
                 "rating = data['rating']\n"
                 # 'l' = linear (real-valued) response variable
                 f"mdl = tp.SLDAModel(k={K}, vars=['l'], seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d, r in zip(docs, rating):\n"
                 "    mdl.add_doc(d, y=[r])\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1308,9 +1310,9 @@ def bench_tomotopy_matrix(
                 "docs = data['docs']\n"
                 # k must equal the number of unique labels in tomotopy
                 f"mdl = tp.LLDAModel(k={n_labels}, seed=1)\n"
+                f"t0 = time.perf_counter()\n"
                 "for d, lbls in zip(docs, doc_labels):\n"
                 "    mdl.add_doc(d, labels=lbls)\n"
-                f"t0 = time.perf_counter()\n"
                 f"mdl.train({ITERS}, workers=1)\n"
                 "print('FIT_TIME', time.perf_counter() - t0)\n"
             )
@@ -1336,10 +1338,11 @@ def bench_tomotopy_matrix(
 def bench_gensim_lda(docs: list[list[str]]) -> dict | None:
     """Time topica LDA vs gensim LdaModel at MATRIX_SIZE/K/ITERS, single-threaded.
 
-    Dictionary and doc2bow corpus are built outside the timed region.
-    We time only the LdaModel(...) training call, matching K and total sweeps
-    (passes=1, iterations=ITERS to match per-document passes through all data).
-    Returns a result dict or None if gensim is unavailable.
+    Timing is end-to-end from the tokenized documents: gensim's Dictionary +
+    doc2bow build is inside the timed region (matching topica's fit(), which
+    builds its corpus internally), then the LdaModel training, matching K and
+    total sweeps (passes=1, iterations=ITERS). Returns a result dict or None if
+    gensim is unavailable.
     """
     try:
         import gensim  # noqa: F401 — availability check
@@ -1380,10 +1383,11 @@ def bench_gensim_lda(docs: list[list[str]]) -> dict | None:
             "from gensim.models import LdaModel\n"
             f"data = json.load(open({docs_pkl!r}))\n"
             "docs = data['docs']\n"
+            # End-to-end: Dictionary + doc2bow are inside the timed region, to
+            # match topica's fit(docs) which builds its corpus internally.
+            f"t0 = time.perf_counter()\n"
             "dct = Dictionary(docs)\n"
             "bow = [dct.doc2bow(d) for d in docs]\n"
-            # Build outside timed region, time only LdaModel training.
-            f"t0 = time.perf_counter()\n"
             f"LdaModel(\n"
             f"    bow,\n"
             f"    num_topics={K},\n"
