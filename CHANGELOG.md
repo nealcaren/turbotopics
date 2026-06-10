@@ -6,6 +6,61 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-10
+
+This release completes the structural-topic-model and keyATM drop-in parity work
+and rounds out the model-agnostic effect-estimation surface. It also moves the
+heavy CI (wheels, sdist) to release tags and builds the test job optimized, so a
+normal push runs only the fast test suite.
+
+### Added
+
+- `permutation_test(model, covariate, ...)` for a binary prevalence covariate: a
+  distribution-free check on whether a topic's prevalence differs across the two
+  groups, returning a `PermutationResult` per topic (#36).
+- `select_model` / `plot_models`: fit N models at a fixed K under different seeds
+  and pick the best by a held-out or coherence criterion, mirroring R `stm`'s
+  `selectModel`; returns a `SelectModelResult` (#37).
+- `prep_documents` / `plot_removed`: R `stm`-style preprocessing diagnostics that
+  report how many documents, words, and tokens each vocabulary threshold removes,
+  with metadata re-alignment via the `Corpus`'s kept indices (#41).
+- A uniform convergence interface on every iterative model: `model.fit_history`
+  (per-iteration `(iter, objective)`) and `model.converged`. The collapsed-Gibbs
+  models gained an opt-in early stop (`convergence_tol` / `check_every`, default
+  off so the full `iters` run is bit-for-bit unchanged); the variational models
+  trace and early-stop on the ELBO (#46).
+- `prevalence_ci(model, groups, ...)`: model-neutral per-group topic-prevalence
+  credible bands read directly from a model's posterior theta draws (the
+  draws-based companion to `by_strata`). `time_prevalence_ci(model, timestamps)`
+  is the dynamic-keyATM wrapper that pins the period order to `time_labels`, so
+  the dynamic time trend now carries the HMM posterior's own uncertainty rather
+  than a generic ribbon (#42).
+- Covariate-aware `stm.transform(model, docs, prevalence=/formula=/X=)`: held-out
+  topic inference that builds each new document's prior from its covariates and
+  the fitted `gamma` (`mu_d = X_d gamma`), matching R `stm`'s `fitNewDocuments`.
+  A model-neutral `align_corpus(new_docs, model)` maps new tokens onto the fitted
+  vocabulary (dropping out-of-vocabulary tokens) before transform (#39).
+- `STM.fit(gamma_prior="pooled"|"l1", gamma_enet=...)`: an L1/elastic-net prior on
+  the prevalence coefficients, fit by coordinate descent with an AIC-selected
+  penalty, for high-dimensional prevalence designs (a factor with many levels).
+  `"pooled"` (ridge, the default) is unchanged; `gamma_enet` is the elastic-net
+  mix (R `stm`'s `gamma.enet`) (#40).
+
+### Fixed
+
+- `search_k(held_out=...)` now composes with a `make_heldout` split: it dispatches
+  on the `Heldout` type and reports the held-out log-likelihood, instead of
+  raising a `TypeError` from the legacy perplexity path (#55).
+
+### Changed
+
+- CI: `build-wheels` and `sdist` run only on release tags (`v*`) and manual
+  dispatch, not on every push/PR; the wheels are consumed only by the release
+  job. The 3-platform test job still runs on every push/PR and now builds with
+  `--release` plus a cached Rust toolchain, cutting the test legs from roughly
+  twenty minutes to a few. Committed tests no longer assume a macOS-only
+  `/private/tmp`.
+
 ## [0.14.0] - 2026-06-10
 
 This release makes the estimator interface uniform across the whole library and
