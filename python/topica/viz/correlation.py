@@ -116,12 +116,21 @@ class TopicCorrelation(Panel):
         return (max(4.0, 0.4 * len(self._order) + 1.5),) * 2
 
     def _draw(self, fig):
+        import matplotlib as mpl
+
         order = self._order
         m = len(order)
         cor = self._cor[np.ix_(order, order)]
         vmax = max(float(np.abs(cor - np.eye(m)).max()), 1e-3)
+        # The diagonal is self-correlation (always 1); it carries no information and,
+        # left in, saturates the diverging scale and visually dominates the panel.
+        # Mask it to a neutral background so the off-diagonal structure reads.
+        disp = cor.copy()
+        np.fill_diagonal(disp, np.nan)
+        cmap = mpl.colormaps[DIV_CMAP].copy()
+        cmap.set_bad("#f0f0f0")
         ax = fig.subplots()
-        im = ax.imshow(cor, cmap=DIV_CMAP, vmin=-vmax, vmax=vmax)  # diverging, 0-centered
+        im = ax.imshow(disp, cmap=cmap, vmin=-vmax, vmax=vmax)  # diverging, 0-centered
         ax.set_xticks(range(m))
         ax.set_yticks(range(m))
         tick = [str(self._topics[i]) for i in order]
