@@ -111,6 +111,8 @@ from . import stm  # noqa: E402  (stm imports names defined above)
 from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
 from . import effects  # noqa: E402  (model-neutral prevalence analysis)
 from . import validation  # noqa: E402  (post-hoc topic diagnostics surface)
+from . import conformance  # noqa: E402  (estimator contract and registry)
+from .conformance import check_conformance  # noqa: E402
 from .effects import (  # noqa: E402  general, work on any model's theta
     estimate_effect,
     by_strata,
@@ -287,6 +289,8 @@ __all__ = [
     "HeldoutResult",
     "mmr",
     "keywords",
+    "conformance",
+    "check_conformance",
     "preprocess",
     "learn_phrases",
     "apply_phrases",

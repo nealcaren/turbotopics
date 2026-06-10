@@ -120,4 +120,6 @@ nav:
       - STM toolkit: api/stm.md
       - keyATM toolkit: api/keyatm.md
       - Keywords & preprocessing: api/keywords.md
+  - Contributing:
+      - Estimator contract: contributing/estimator-contract.md
   - Citing: citing.md
