@@ -144,6 +144,216 @@ def diagnostics(model, texts=None, *, n=10, coherence_type=None, stability=False
         return rows
 
 
+# ---------------------------------------------------------------------------
+# make_heldout / eval_heldout: R stm-style within-corpus word-heldout
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Heldout:
+    """Result of :func:`make_heldout`: the training corpus and the withheld words.
+
+    We sample a fraction of documents and remove a fraction of their tokens to
+    create a within-corpus heldout set. The caller fits a model on
+    ``heldout.documents`` (the reduced corpus), then scores the withheld words
+    with :func:`eval_heldout`.
+
+    Workflow::
+
+        h = make_heldout(corpus)
+        model.fit(h.documents)
+        result = eval_heldout(model, h)
+
+    Attributes
+    ----------
+    documents : the full corpus as token lists (length D, same order as the
+        input), with held-out tokens removed from the sampled documents.
+        Unsampled documents are unchanged. Fit your model on this.
+    missing : list of ``(doc_index, held_out_tokens)`` for each sampled
+        document. ``doc_index`` is the original position; ``held_out_tokens``
+        is the list of token strings that were removed.
+    doc_indices : the sorted array of document indices that were sampled.
+    """
+
+    documents: list
+    missing: list
+    doc_indices: np.ndarray
+
+
+@dataclass
+class HeldoutResult:
+    """Result of :func:`eval_heldout`: per-document and aggregate held-out log-likelihoods.
+
+    Higher (less negative) values indicate better model fit on the withheld
+    words. The headline is ``mean_per_doc_loglik``.
+
+    Attributes
+    ----------
+    mean_per_doc_loglik : mean over scored documents of the per-document
+        held-out log-likelihood. Higher is better.
+    total_loglik : sum of per-document log-likelihoods over all scored docs.
+    n_docs : number of documents that had at least one held-out token in the
+        model vocabulary (documents with no in-vocab held-out tokens are
+        skipped).
+    n_tokens : total number of scored tokens.
+    per_doc_loglik : array of per-document log-likelihoods (length n_docs).
+    """
+
+    mean_per_doc_loglik: float
+    total_loglik: float
+    n_docs: int
+    n_tokens: int
+    per_doc_loglik: np.ndarray
+
+
+def make_heldout(corpus, *, prop_docs=0.5, prop_words=0.5, seed=0):
+    """Build a within-corpus word-heldout set (R stm's ``make.heldout``).
+
+    We sample ``floor(prop_docs * D)`` documents and remove
+    ``floor(prop_words * len(doc))`` randomly chosen token positions from each.
+    The remaining tokens stay in the corpus; the removed tokens form the heldout
+    set. Fit a model on ``.documents`` and score it with :func:`eval_heldout`.
+
+    Documents too short to split (fewer than 2 tokens, or those for which the
+    split would leave 0 retained or 0 held-out tokens) are silently skipped
+    rather than raising an error; the sampled set may therefore be slightly
+    smaller than ``floor(prop_docs * D)``.
+
+    Parameters
+    ----------
+    corpus : a ``Corpus`` (its ``.documents()`` method is called), a list of
+        raw strings (split on whitespace), or a list of token lists.
+    prop_docs : fraction of documents to sample; default 0.5.
+    prop_words : fraction of tokens to hold out per sampled document; default 0.5.
+    seed : numpy Generator seed for reproducibility.
+
+    Returns
+    -------
+    A :class:`Heldout` dataclass. Pass ``.documents`` to ``model.fit`` and
+    the whole object to :func:`eval_heldout`.
+    """
+    if not 0.0 < prop_docs < 1.0:
+        raise ValueError(f"prop_docs must be in (0, 1), got {prop_docs!r}")
+    if not 0.0 < prop_words < 1.0:
+        raise ValueError(f"prop_words must be in (0, 1), got {prop_words!r}")
+
+    # Normalize input
+    if hasattr(corpus, "documents"):
+        raw = corpus.documents()
+    elif len(corpus) and isinstance(corpus[0], str):
+        raw = [t.split() for t in corpus]
+    else:
+        raw = [list(d) for d in corpus]
+
+    D = len(raw)
+    rng = np.random.default_rng(seed)
+
+    n_sample = int(np.floor(prop_docs * D))
+    candidate_idx = rng.choice(D, size=n_sample, replace=False)
+    candidate_idx.sort()
+
+    # Build the training corpus (copy of raw, some docs shortened)
+    documents = [list(d) for d in raw]
+    missing = []
+    sampled_indices = []
+
+    for doc_idx in candidate_idx:
+        doc = raw[doc_idx]
+        n_tokens = len(doc)
+        n_hold = int(np.floor(prop_words * n_tokens))
+        n_keep = n_tokens - n_hold
+        # Must retain at least 1 and hold out at least 1
+        if n_keep < 1 or n_hold < 1:
+            continue
+        hold_positions = rng.choice(n_tokens, size=n_hold, replace=False)
+        hold_set = set(hold_positions.tolist())
+        retained = [tok for pos, tok in enumerate(doc) if pos not in hold_set]
+        held_out_tokens = [doc[pos] for pos in sorted(hold_positions)]
+        documents[doc_idx] = retained
+        missing.append((int(doc_idx), held_out_tokens))
+        sampled_indices.append(int(doc_idx))
+
+    return Heldout(
+        documents=documents,
+        missing=missing,
+        doc_indices=np.array(sampled_indices, dtype=np.intp),
+    )
+
+
+def eval_heldout(model, heldout, *, seed=0):
+    """Score held-out words from :func:`make_heldout` under a fitted model (R stm's ``eval.heldout``).
+
+    We infer each sampled document's topic mixture from its retained tokens
+    (``heldout.documents[doc_index]``) via the model's ``transform``, then score
+    the withheld tokens under ``p(w) = sum_k theta_k * phi[k, w]``.
+
+    Requires that ``model`` was fit on ``heldout.documents`` (the training corpus
+    returned by :func:`make_heldout`). Works for any generative model that
+    exposes ``transform`` and ``topic_word``: LDA, DMR, CTM, STM, HDP,
+    LabeledLDA, and SupervisedLDA. The keyword/anchored Gibbs models (keyATM,
+    SeededLDA, SAGE, PA, PT) do not expose ``transform`` and so fall outside this
+    diagnostic, and the embedding-cluster models (BERTopic, Top2Vec) define no
+    document likelihood; both raise a clear error.
+
+    Parameters
+    ----------
+    model : a fitted generative model (must have been fit on ``heldout.documents``).
+    heldout : a :class:`Heldout` returned by :func:`make_heldout`.
+    seed : RNG seed for the Gibbs ``transform`` (variational models ignore it).
+
+    Returns
+    -------
+    A :class:`HeldoutResult` dataclass. The headline metric is
+    ``.mean_per_doc_loglik``; higher (less negative) is better.
+    """
+    if type(model).__name__ in ("BERTopic", "Top2Vec"):
+        raise ValueError(
+            f"{type(model).__name__} defines topics by class-based TF-IDF over "
+            "document clusters, not a generative word distribution, so it has no "
+            "held-out log-likelihood. Compare clustering models with coherence or "
+            "topic_diversity instead."
+        )
+    phi = _as_topic_word(model)
+    if phi.shape[0] == 0:
+        raise ValueError("the model has no topics (empty topic_word)")
+    vocab = {w: i for i, w in enumerate(model.vocabulary)}
+
+    # Batch all retained docs through transform in one call
+    retained_docs = [list(heldout.documents[doc_idx]) for doc_idx, _ in heldout.missing]
+    if not retained_docs:
+        raise ValueError("heldout.missing is empty; nothing to score")
+
+    theta = _transform_theta(model, retained_docs, seed)  # (n_sampled, K)
+
+    per_doc_ll = []
+    total_loglik = 0.0
+    total_tokens = 0
+
+    for i, (doc_idx, held_tokens) in enumerate(heldout.missing):
+        ids = [vocab[w] for w in held_tokens if w in vocab]
+        if not ids:
+            continue
+        pw = np.clip(theta[i] @ phi[:, ids], 1e-12, None)
+        doc_ll = float(np.log(pw).sum())
+        per_doc_ll.append(doc_ll)
+        total_loglik += doc_ll
+        total_tokens += len(ids)
+
+    if not per_doc_ll:
+        raise ValueError(
+            "none of the held-out tokens appeared in the model vocabulary; "
+            "check that the model was fit on heldout.documents"
+        )
+
+    n_docs = len(per_doc_ll)
+    return HeldoutResult(
+        mean_per_doc_loglik=total_loglik / n_docs,
+        total_loglik=total_loglik,
+        n_docs=n_docs,
+        n_tokens=total_tokens,
+        per_doc_loglik=np.array(per_doc_ll, dtype=np.float64),
+    )
+
+
 def _accepts_kwarg(fn, name):
     """Whether ``fn`` accepts the keyword argument ``name``. PyO3 methods expose a
     text signature, so this works on the Rust models; if a callable has no
@@ -536,8 +746,8 @@ def search_k(
             "coherence_metric": "u_mass",
             "exclusivity": _mean_exclusivity(m.topic_word, coherence_n),
         }
-        if model == "lda" and held_out is not None:
-            row["perplexity"] = float(m.perplexity(held_out, seed=seed))
+        if held_out is not None:
+            row["perplexity"] = float(perplexity(m, held_out, seed=seed))
         rows.append(row)
     return rows
 
@@ -1223,6 +1433,10 @@ def bootstrap_stability(
 __all__ = [
     "diagnostics",
     "perplexity",
+    "make_heldout",
+    "eval_heldout",
+    "Heldout",
+    "HeldoutResult",
     "frex",
     "mmr",
     "label_topics",
