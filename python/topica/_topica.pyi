@@ -285,6 +285,14 @@ class DMR:
         the intercept-only baseline is used. Shape (num_new_docs, num_topics)."""
         ...
 
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -332,6 +340,10 @@ class CTM:
     @property
     def converged(self) -> bool:
         """True if EM met em_tol; False if it hit the iters cap."""
+        ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration variational bound trace: list of (iteration, bound) pairs."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -436,6 +448,10 @@ class STM:
     @property
     def converged(self) -> bool:
         """True if EM met em_tol; False if it hit the iters cap."""
+        ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration variational bound trace: list of (iteration, bound) pairs."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -560,6 +576,14 @@ class HDP:
     @property
     def log_likelihood_history(self) -> list[tuple[int, float]]:
         """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Uniform convergence trace aliasing log_likelihood_history."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; HDP has no early-stop criterion."""
         ...
     @property
     def concentration_history(self) -> list[tuple[int, float, float]]:
@@ -690,6 +714,14 @@ class DTM:
         """The final variational bound (ELBO) reached during fitting."""
         ...
     @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace: list of (iteration, objective) pairs. Empty for DTM."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; DTM has no early-stop criterion."""
+        ...
+    @property
     def vocabulary(self) -> list[str]: ...
     @property
     def topic_names(self) -> list[str]: ...
@@ -790,6 +822,14 @@ class SupervisedLDA:
         """Infer document-topic theta for new documents by collapsed Gibbs
         against the fitted topic-word matrix (the response is not used). Shape
         (num_new_docs, num_topics). Predict the response with transform @ eta."""
+        ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
         ...
     def __repr__(self) -> str: ...
 
@@ -917,6 +957,14 @@ class SAGE:
     def load(path: str) -> "SAGE": ...
     @property
     def doc_names(self) -> list[str]: ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1019,6 +1067,14 @@ class LabeledLDA:
         available. Shape (num_new_docs, num_topics); columns align with labels."""
         ...
 
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1072,13 +1128,23 @@ class LDA:
         progress_interval: int = 50,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
     ) -> None:
         """Run Gibbs sampling to fit the model on data.
 
         With ``keep_theta_draws`` (default on), the last ``num_theta_draws``
         thinned MCMC theta snapshots are retained as :attr:`theta_draws` for
         ``composition_theta`` standard errors. Set ``keep_theta_draws=False`` to
-        save memory (``num_theta_draws x num_docs x num_topics`` f32)."""
+        save memory (``num_theta_draws x num_docs x num_topics`` f32).
+
+        ``check_every`` controls how often (in iterations) the log-likelihood is
+        recorded in :attr:`fit_history`. Set ``check_every=0`` to disable tracing.
+        ``convergence_tol > 0`` enables early stopping: training halts when the
+        relative change in log-likelihood across two consecutive check points falls
+        below ``convergence_tol``. The default (0.0) disables early stopping and
+        reproduces the historical fit bit-for-bit.
+        """
         ...
 
     @property
@@ -1151,6 +1217,18 @@ class LDA:
 
     def log_likelihood(self) -> float:
         """MALLET-formula model log-likelihood of the final sampler state (in-sample)."""
+        ...
+
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration log-likelihood trace: list of (iteration, log_likelihood) pairs,
+        recorded every ``check_every`` iterations. Empty when ``check_every=0``."""
+        ...
+
+    @property
+    def converged(self) -> bool:
+        """True if early stopping fired (``convergence_tol > 0`` and the relative
+        change in log-likelihood fell below the tolerance). False by default."""
         ...
 
     def evaluate(
@@ -1332,6 +1410,14 @@ class PT:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "PT": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1370,6 +1456,14 @@ class GSDMM:
     @property
     def log_likelihood_history(self) -> list[tuple[int, float]]:
         """Convergence trace: (iteration, per-token log-likelihood) pairs."""
+        ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Uniform convergence trace aliasing log_likelihood_history."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; GSDMM has no early-stop criterion."""
         ...
     @property
     def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1479,6 +1573,14 @@ class PA:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "PA": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1530,6 +1632,14 @@ class HLDA:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "HLDA": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty; HLDA has no flat K-topic objective."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1610,6 +1720,14 @@ class SeededLDA:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "SeededLDA": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; no early-stop criterion yet."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1684,6 +1802,14 @@ class Top2Vec:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "Top2Vec": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Always []; Top2Vec is not an iterative sampler."""
+        ...
+    @property
+    def converged(self) -> None:  # type: ignore[override]
+        """Always None; Top2Vec is a cluster model with no iterative objective."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1757,6 +1883,14 @@ class BERTopic:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "BERTopic": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Always []; BERTopic is not an iterative sampler."""
+        ...
+    @property
+    def converged(self) -> None:  # type: ignore[override]
+        """Always None; BERTopic is a cluster model with no iterative objective."""
+        ...
     def __repr__(self) -> str: ...
 
 
@@ -1811,6 +1945,10 @@ class ETM:
     def bound(self) -> float: ...
     @property
     def converged(self) -> bool: ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration variational bound trace: list of (iteration, bound) pairs."""
+        ...
     @property
     def topic_names(self) -> list[str]: ...
     @topic_names.setter
@@ -1876,6 +2014,10 @@ class ProdLDA:
     def bound_history(self) -> list[float]: ...
     @property
     def converged(self) -> bool: ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration variational ELBO trace: list of (iteration, bound) pairs."""
+        ...
     @property
     def epochs_run(self) -> int: ...
     @property
@@ -1950,6 +2092,10 @@ class FASTopic:
     def loss_history(self) -> list[float]: ...
     @property
     def converged(self) -> bool: ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration Sinkhorn loss trace (negated for higher-is-better): list of (iteration, value)."""
+        ...
     @property
     def topic_names(self) -> list[str]: ...
     @topic_names.setter
@@ -2162,4 +2308,12 @@ class KeyATM:
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "KeyATM": ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration log-likelihood trace: list of (iteration, log_likelihood) pairs."""
+        ...
+    @property
+    def converged(self) -> bool:
+        """Always False; KeyATM has no early-stop criterion."""
+        ...
     def __repr__(self) -> str: ...
