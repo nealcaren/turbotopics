@@ -45,6 +45,11 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      # Cache the cargo registry and target/ across runs so the release compile
+      # is paid once and reused, not rebuilt cold every time.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -55,6 +60,11 @@ jobs:
       # across the build and test commands (activation does not persist between
       # steps). `shell: bash` selects Git bash on Windows, so the same
       # activation path logic works on all three platforms.
+      #
+      # --release: the Gibbs/EM loops are an order of magnitude slower in a debug
+      # build, and the suite is dominated by model fits, so an optimized build
+      # turns a ~20-minute debug run into a few minutes. The extra compile time is
+      # repaid many times over (and cached by rust-cache above).
       - name: Build extension and run tests
         shell: bash
         run: |
@@ -62,7 +72,7 @@ jobs:
           if [ -f .venv/bin/activate ]; then source .venv/bin/activate; else source .venv/Scripts/activate; fi
           python -m pip install --upgrade pip
           pip install maturin numpy pytest pandas formulaic matplotlib
-          maturin develop --features python
+          maturin develop --release --features python
           pytest -q
 
   # ---------------------------------------------------------------------------
@@ -75,6 +85,10 @@ jobs:
   # ---------------------------------------------------------------------------
   build-wheels:
     name: wheel / ${{ matrix.target }}
+    # Wheels are only consumed by the release job, so build them at release time
+    # (a v* tag) or on demand, not on every push/PR. Day-to-day validation is the
+    # `test` job above.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -143,6 +157,9 @@ jobs:
   # ---------------------------------------------------------------------------
   sdist:
     name: sdist
+    # Like the wheels, the sdist is only needed for a release; build it on a v*
+    # tag or on demand, not on every push/PR.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
