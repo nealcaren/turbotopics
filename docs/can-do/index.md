@@ -8,8 +8,9 @@ If your goal is a publishable analysis, pair it with
 
 - :material-shape: **[The models](../guides/models.md)**
 
-    Thirteen model families, from LDA through STM, HDP, dynamic and supervised
-    topics, to short-text models, all with one consistent API.
+    More than a dozen model families, from LDA through STM and its STS
+    sentiment-discourse extension, HDP, dynamic and supervised topics, to
+    short-text and embedding-based models, all with one consistent API.
 
 - :material-broom: **[Preprocessing](../guides/preprocessing.md)**
 
@@ -23,8 +24,8 @@ If your goal is a publishable analysis, pair it with
 
 - :material-check-decagram: **[Diagnostics & validation](../guides/diagnostics.md)**
 
-    Coherence, exclusivity, intrusion tests, stability, alignment, FREX labels,
-    and pyLDAvis, all model-agnostic.
+    Coherence, exclusivity, intrusion tests, stability, alignment, ensemble
+    consensus across runs, FREX labels, and pyLDAvis, all model-agnostic.
 
 - :material-compare: **[Distinguishing words](../guides/keywords.md)**
 

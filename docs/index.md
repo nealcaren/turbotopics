@@ -27,7 +27,8 @@ for i, words in enumerate(model.top_words(5)):
 ## Why topica
 
 - **One package, many models.** LDA, ProdLDA, DMR, Labeled LDA, SAGE, CTM, the full STM
-  (prevalence **and** content covariates), HDP, dynamic topics, supervised LDA,
+  (prevalence **and** content covariates) and its STS sentiment-discourse extension,
+  HDP, dynamic topics, supervised LDA,
   short-text models, and embedding-based models (BERTopic, Top2Vec, ETM,
   FASTopic). See [the models](guides/models.md) and
   [embedding topics](guides/embedding.md).
@@ -52,6 +53,7 @@ for i, words in enumerate(model.top_words(5)):
 | [`LabeledLDA`](api/models.md#topica.LabeledLDA) | Supervised topics tied to document labels |
 | [`CTM`](api/models.md#topica.CTM) | Correlated topics (logistic-normal) |
 | [`STM`](api/models.md#topica.STM) | Structural Topic Model: prevalence **and** content covariates |
+| [`STS`](api/models.md#topica.STS) | Structural Topic and Sentiment-Discourse: covariate-driven topic sentiment on top of STM |
 | [`SAGE`](api/models.md#topica.SAGE) | The same topic worded differently across groups |
 | [`HDP`](api/models.md#topica.HDP) | Nonparametric LDA that *infers* the number of topics |
 | [`DTM`](api/models.md#topica.DTM) | Dynamic topics that evolve across time slices |
