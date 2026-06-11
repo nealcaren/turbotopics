@@ -58,6 +58,8 @@ benchmarks/speed_vs_size.json
 benchmarks/website_table.md
 benchmarks/matrix_results.json
 benchmarks/model_matrix.md
+benchmarks/k_crossover_results.json
+benchmarks/k_crossover.md
 paper/fig_thread_scaling.pdf
 paper/fig_memory.pdf
 

@@ -58,16 +58,17 @@ which one is faster turns on the number of topics K, because the two make
 opposite algorithmic bets. tomotopy computes a dense topic distribution for every
 token and vectorizes it with Eigen, which is fastest when K is small; topica
 (like MALLET) uses a sparse sampler that visits only the topics a word actually
-occupies, which wins when K is large. On a 3,500-document, 2,632-word corpus (200
-Gibbs iterations, single core, fit time only) the two cross near K=200:
+occupies, which wins when K is large. On a 3,500-document, 2,632-word corpus (500
+Gibbs iterations, single core, fit time only) the two cross between K=50 and
+K=100:
 
 | K | topica | tomotopy | faster |
 |---:|-------:|---------:|--------|
-| 20 | 12.1s | 5.3s | tomotopy 2.3× |
-| 50 | 13.4s | 7.4s | tomotopy 1.8× |
-| 100 | 15.0s | 11.1s | tomotopy 1.35× |
-| 200 | 18.1s | 19.1s | topica 1.06× |
-| 400 | 23.8s | 35.1s | topica 1.48× |
+| 20 | 20.2s | 13.4s | tomotopy 1.51× |
+| 50 | 22.5s | 17.5s | tomotopy 1.29× |
+| 100 | 25.0s | 28.3s | topica 1.13× |
+| 200 | 30.3s | 47.5s | topica 1.57× |
+| 400 | 39.1s | 90.5s | topica 2.31× |
 
 topica's time barely moves as K grows, because the sparse sampler touches only
 the topics each word occupies; tomotopy's rises with K, because it scores all K
@@ -75,7 +76,11 @@ every token. Fine-grained topic models, the large-K regime social scientists
 often want, favor topica's sampler; small-K fits favor tomotopy's. Either way
 topica also retains the MCMC posterior draws its uncertainty tooling needs
 (`composition_theta`, `prevalence_ci`) at no measurable extra cost, which neither
-MALLET nor tomotopy computes at all.
+MALLET nor tomotopy computes at all. Reproduce the sweep with:
+
+```bash
+python benchmarks/k_crossover.py
+```
 
 ## Memory
 
@@ -151,12 +156,12 @@ regime least favorable to topica's sparse samplers.
 
 | model | topica | tomotopy | ratio |
 |-------|-------:|---------:|------:|
-| CTM | 40.6s | 116.3s | **2.86×** |
-| DMR | 22.2s | 15.8s | 0.71× |
-| LDA | 21.6s | 12.4s | 0.58× |
-| LabeledLDA | 7.3s | 3.5s | 0.47× |
-| PA | 259s | 99s | 0.38× |
-| PT | 90s | 15s | 0.17× |
+| CTM | 39.4s | 118.2s | **3.00×** |
+| DMR | 20.2s | 15.8s | 0.78× |
+| LDA | 19.7s | 12.6s | 0.64× |
+| LabeledLDA | 5.5s | 3.4s | 0.62× |
+| PA | 204s | 89s | 0.44× |
+| PT | 77s | 15s | 0.20× |
 
 topica wins decisively on CTM (its structural-topic-model core uses a Laplace
 E-step, faster than tomotopy's mean-field CTM), is within ~2× on the SparseLDA
