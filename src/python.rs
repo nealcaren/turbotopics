@@ -42,6 +42,7 @@ use crate::variational::LogisticNormalModel;
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use rand_pcg::Pcg64Mcg;
 use rayon::prelude::*;
 use regex::Regex;
 
@@ -1032,7 +1033,7 @@ impl LDA {
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, num_topics)?;
 
         let mut model = TopicModel::new(num_topics, alpha_sum, self.beta, num_types);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         model.initialize(&corpus, &mut rng);
 
         let optimize_interval = self.optimize_interval;
@@ -1124,7 +1125,7 @@ impl LDA {
             // per-worker RNGs so parallel runs are deterministic.
             let mut sweep: u64 = 0;
             let mut do_sweep =
-                |model: &mut TopicModel, rng: &mut ChaCha8Rng| {
+                |model: &mut TopicModel, rng: &mut Pcg64Mcg| {
                     sweep += 1;
                     if num_threads <= 1 {
                         sampler::run_iteration(model, &corpus, rng);
@@ -1649,7 +1650,7 @@ impl LDA {
         }
         let (docs, n_tokens, n_oov) = self.map_heldout(data)?;
         let model = self.model.as_ref().unwrap();
-        let mut rng = ChaCha8Rng::seed_from_u64(seed.unwrap_or(self.seed));
+        let mut rng = Pcg64Mcg::seed_from_u64(seed.unwrap_or(self.seed));
 
         let ll = py.allow_threads(move || {
             let mut total = 0.0;
@@ -1848,7 +1849,7 @@ impl LDA {
         let (docs, _n, _oov) = self.map_heldout(data)?;
         let model = self.model.as_ref().unwrap();
         let k = self.num_topics;
-        let mut rng = ChaCha8Rng::seed_from_u64(seed.unwrap_or(self.seed));
+        let mut rng = Pcg64Mcg::seed_from_u64(seed.unwrap_or(self.seed));
 
         let thetas: Vec<Vec<f64>> = py.allow_threads(move || {
             docs.iter()
@@ -2213,7 +2214,7 @@ fn parallel_sweep(model: &mut TopicModel, docs: &[Vec<u32>], num_threads: usize,
             let mut ttc = original_ttc.clone();
             let mut tpt = original_tpt.clone();
             let mut dt: Vec<Vec<u32>> = dt_all[start..end].to_vec();
-            let mut rng = ChaCha8Rng::seed_from_u64(
+            let mut rng = Pcg64Mcg::seed_from_u64(
                 sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
             sampler::run_sweep(
@@ -2985,7 +2986,7 @@ impl DMR {
         // λ starts at zero -> α ≡ 1 (symmetric) before optimization kicks in.
         let mut lambda = vec![vec![0.0f64; nf]; k];
         let mut model = TopicModel::new(k, k as f64, self.beta, num_types);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         model.initialize(&corpus, &mut rng);
 
         let optimize_interval = self.optimize_interval;
@@ -3389,7 +3390,7 @@ impl DMR {
                 .zip(alphas.par_iter())
                 .enumerate()
                 .map(|(i, (d, alpha))| {
-                    let mut rng = ChaCha8Rng::seed_from_u64(base_seed.wrapping_add(i as u64));
+                    let mut rng = Pcg64Mcg::seed_from_u64(base_seed.wrapping_add(i as u64));
                     infer_theta_gibbs(
                         &phi_rows, alpha, d, iterations, burn_in, num_samples, sample_interval,
                         &mut rng,
@@ -3607,7 +3608,7 @@ impl LabeledLDA {
         let total_tokens = corpus.total_tokens().max(1) as f64;
         let alpha_sum = self.alpha * k as f64;
         let mut model = TopicModel::new(k, alpha_sum, self.beta, num_types);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         labeled::initialize_labeled(&mut model, &corpus.docs, &allowed, &mut rng);
 
         let check_every_labeled = if check_every == 0 { 0 } else if convergence_tol > 0.0 { check_every.max(1) } else { check_every };
@@ -4131,7 +4132,7 @@ impl SAGE {
 
         let mut model = sage::SageModel::new(k, group_n, num_types, alpha, self.prior_variance);
         model.set_background(&corpus.docs);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         model.initialize(&corpus.docs, &groups_idx, &mut rng);
 
         let optimize_interval = self.optimize_interval;
@@ -6567,7 +6568,7 @@ impl HDP {
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
         let (alpha, gamma, eta, conc) = (self.alpha, self.gamma, self.eta, self.resample_conc);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         // 0 = auto: ~50 evenly spaced trace points across the run.
         let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
 
@@ -6603,7 +6604,7 @@ impl HDP {
         // Draw from Dirichlet(njk[d] + alpha*beta[k]) for each draw request.
         let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
         if draw_cap > 0 {
-            let mut draw_rng = ChaCha8Rng::seed_from_u64(self.seed.wrapping_add(1));
+            let mut draw_rng = Pcg64Mcg::seed_from_u64(self.seed.wrapping_add(1));
             for _ in 0..draw_cap {
                 let snap: Vec<Vec<f32>> = model.njk.iter().map(|counts| {
                     let mut gammas: Vec<f64> = (0..k)
@@ -7755,7 +7756,7 @@ impl PT {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         let (model, ll_history, converged_flag, corpus) = py.allow_threads(move || {
             let (m, hist, conv) = pt::fit_ptm_with_draws(
                 &corpus.docs, num_types, k, p, a, b, iters, draws_opts,
@@ -8016,7 +8017,7 @@ impl GSDMM {
         }
         let num_types = corpus.num_types();
         let (k, a, b) = (self.k_max, self.alpha, self.beta);
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
         let (model, corpus) = py.allow_threads(move || {
             let m = gsdmm::fit_gsdmm(&corpus.docs, num_types, k, a, b, iters, ll_interval, &mut rng);
@@ -8369,7 +8370,7 @@ impl SeededLDA {
         let check_every = if check_every == 0 { 0 } else if convergence_tol > 0.0 { check_every.max(1) } else { check_every };
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         let (model, ll_history, converged, corpus) = py.allow_threads(move || {
             let (m, ll, conv) = seeded::fit_seeded_lda(
                 &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, doc_alpha,
@@ -11034,7 +11035,7 @@ impl KeyATM {
         let (alpha, beta, beta_key, g1, g2) =
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
         let estimate_alpha = self.estimate_alpha;
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         let nthreads = num_threads.max(1);
         let weight_scheme = match weights {
             "information-theory" | "info" => keyatm::WeightScheme::InfoTheory,
@@ -11601,7 +11602,7 @@ impl PA {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+        let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         let (model, ll_history, converged_flag, corpus) = py.allow_threads(move || {
             let (m, hist, conv) = pa::fit_pam_with_draws(
                 &corpus.docs, num_types, s, k, a, b, iters, draws_opts,

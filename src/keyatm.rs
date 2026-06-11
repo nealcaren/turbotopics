@@ -819,8 +819,8 @@ fn parallel_sweep_keyatm(
     num_threads: usize,
     sweep_seed: u64,
 ) {
-    use rand_chacha::rand_core::SeedableRng;
-    use rand_chacha::ChaCha8Rng;
+    use rand_pcg::Pcg64Mcg;
+    use rand::SeedableRng;
     use rayon::prelude::*;
 
     let p = sample_params(model);
@@ -855,7 +855,7 @@ fn parallel_sweep_keyatm(
             let mut ndk: Vec<Vec<f64>> = model.ndk[start..end].to_vec();
             let mut asgn: Vec<Vec<(usize, u8)>> = assignments[start..end].to_vec();
             let mut scratch = vec![0.0f64; 2 * p.num_topics];
-            let mut rng = ChaCha8Rng::seed_from_u64(
+            let mut rng = Pcg64Mcg::seed_from_u64(
                 sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
 
@@ -1536,8 +1536,8 @@ pub fn fit_keyatm_dynamic<R: Rng>(
                 .collect()
         };
         if num_threads > 1 {
-            use rand_chacha::rand_core::SeedableRng;
-            use rand_chacha::ChaCha8Rng;
+            use rand_pcg::Pcg64Mcg;
+            use rand::SeedableRng;
             use rayon::prelude::*;
             let base: u64 = rng.gen();
             let ndk = &model.ndk;
@@ -1546,7 +1546,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
                 .zip(ranges.par_iter())
                 .enumerate()
                 .for_each(|(r, (alpha, &(d_start, d_end)))| {
-                    let mut srng = ChaCha8Rng::seed_from_u64(
+                    let mut srng = Pcg64Mcg::seed_from_u64(
                         base ^ (r as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
                     );
                     dyn_sample_alpha_state(

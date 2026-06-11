@@ -83,9 +83,9 @@ _CORPUS_4 = _make_four_cluster_corpus(n_each=100, tokens_per_doc=15, seed=0)
 _N_DOCS_4 = len(_CORPUS_4)   # 400
 
 
-def _fit_2topic(num_threads, seed=1):
-    """Fit a 2-topic model on the two-cluster corpus."""
-    model = LDA(2, seed=seed, optimize_interval=0, num_threads=num_threads)
+def _fit_2topic(num_threads, seed=1, num_topics=2):
+    """Fit a model on the two-cluster corpus (2 topics by default)."""
+    model = LDA(num_topics, seed=seed, optimize_interval=0, num_threads=num_threads)
     model.fit(_CORPUS_2, iters=300, num_samples=3, sample_interval=10)
     return model
 
@@ -226,9 +226,15 @@ class TestParallelDeterminism:
         assert np.array_equal(m_a.topic_word, m_b.topic_word)
 
     def test_different_seeds_t2_differ(self):
-        """Different seeds with the same num_threads must give different results."""
-        m1 = _fit_2topic(num_threads=2, seed=1)
-        m2 = _fit_2topic(num_threads=2, seed=99)
+        """Different seeds with the same num_threads must give different results.
+
+        Uses an over-specified K (5 topics for a 2-cluster corpus): the extra
+        topics split seed-dependently, so the seed affects the fit. At K equal
+        to the cluster count the sampler converges to the unique solution for
+        any seed (correct, but it makes this assertion untestable).
+        """
+        m1 = _fit_2topic(num_threads=2, seed=1, num_topics=5)
+        m2 = _fit_2topic(num_threads=2, seed=99, num_topics=5)
         assert not np.array_equal(m1.topic_word, m2.topic_word), (
             "Different seeds with num_threads=2 gave identical topic_word — unexpected"
         )

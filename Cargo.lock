@@ -731,6 +731,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_pcg"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59cad018caf63deb318e5a4586d99a24424a364f40f1e5778c29aca23f4fc73e"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "rawpointer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,6 +951,7 @@ dependencies = [
  "pyo3",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
+ "rand_pcg",
  "rayon",
  "regex",
  "serde",
