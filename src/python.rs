@@ -38,6 +38,7 @@ use crate::etm_vae;
 use crate::fastopic;
 use crate::labeled;
 use crate::sage;
+use crate::variational::LogisticNormalModel;
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -4648,16 +4649,22 @@ fn infer_theta_batch_per_doc(
     out
 }
 
-fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
-    let d = model.lambda.len();
-    let km1 = model.num_topics.saturating_sub(1);
-    let mut mean = Array2::<f64>::zeros((d, km1));
-    let mut cov = Array3::<f64>::zeros((d, km1, km1));
+/// Build the (eta_mean, eta_cov) numpy arrays for any logistic-normal model from
+/// its `LogisticNormalModel` posterior: mean is (D, eta_dim), cov is
+/// (D, eta_dim, eta_dim) un-flattening each row of `eta_cov()`. Generic over the
+/// fitted struct — CtmModel (K-1) and StsModel (2K-1) share this path.
+fn eta_posterior(m: &dyn LogisticNormalModel) -> (Array2<f64>, Array3<f64>) {
+    let mean_rows = m.eta_mean();
+    let cov_rows = m.eta_cov();
+    let d = mean_rows.len();
+    let dim = m.eta_dim();
+    let mut mean = Array2::<f64>::zeros((d, dim));
+    let mut cov = Array3::<f64>::zeros((d, dim, dim));
     for di in 0..d {
-        for i in 0..km1 {
-            mean[[di, i]] = model.lambda[di][i];
-            for j in 0..km1 {
-                cov[[di, i, j]] = model.nu[di][i * km1 + j];
+        for i in 0..dim {
+            mean[[di, i]] = mean_rows[di][i];
+            for j in 0..dim {
+                cov[[di, i, j]] = cov_rows[di][i * dim + j];
             }
         }
     }
@@ -6141,6 +6148,9 @@ impl STS {
             arr
         });
 
+        let (em, ec) = eta_posterior(&model);
+        self.eta_mean = Some(em);
+        self.eta_cov = Some(ec);
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
@@ -6150,18 +6160,6 @@ impl STS {
         self.kappa_s = model.kappa_s;
         self.mv = model.mv;
         self.sigma = model.sigma;
-        let mut em = Array2::<f64>::zeros((model.alpha.len(), n));
-        let mut ec = Array3::<f64>::zeros((model.alpha.len(), n, n));
-        for di in 0..model.alpha.len() {
-            for i in 0..n {
-                em[[di, i]] = model.alpha[di][i];
-                for j in 0..n {
-                    ec[[di, i, j]] = model.nu[di][i * n + j];
-                }
-            }
-        }
-        self.eta_mean = Some(em);
-        self.eta_cov = Some(ec);
         self.corpus = Some(corpus);
         self.bound = model.bound_history.last().copied().unwrap_or(f64::NAN);
         self.bound_history = model.bound_history;
