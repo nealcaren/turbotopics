@@ -76,10 +76,12 @@ topica runs on a parallel Rust core. It is several times faster than R `stm` —
 | Model | Reference | topica speedup |
 |-------|-----------|----------------|
 | STM | R `stm` | **3–6× single-threaded, ~10–22× multithreaded** |
-| LDA | Java MALLET | parity single-threaded, **~2×** multithreaded |
+| LDA | Java MALLET | parity single-threaded; multithread speedup **grows with corpus size** |
 | keyATM | R `keyATM` | parity single-threaded, **~2×** multithreaded |
 
-Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology, and reproduce the table with `python benchmarks/speed_vs_r.py`.
+For the approximate parallel Gibbs samplers the multithreaded speedup **grows with corpus size**: the per-sweep count-table merge is fixed overhead, so larger corpora amortize it over more sampling work. LDA's eight-core speedup over MALLET runs about 3× at 2,000 documents and reaches ~4× at 5,000, so the small-corpus figures above understate what large-corpus users see.
+
+Every fit is reproducible from a fixed seed and validated against its reference. See [Benchmarks](https://nealcaren.github.io/topica/benchmarks/) for the full methodology; reproduce the 2,000-document table with `python benchmarks/speed_vs_r.py` and the size-varying curve with `python benchmarks/speed_vs_size.py`.
 
 ## Install from source
 

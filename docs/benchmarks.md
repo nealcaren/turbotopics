@@ -114,6 +114,32 @@ reproducible in one command:
 python benchmarks/speed_vs_r.py
 ```
 
+## Multithread scaling with corpus size
+
+The tables above are a single 2,000-document corpus. For the approximate
+parallel Gibbs samplers (LDA, keyATM), the multithread speedup **grows with
+corpus size**: each sweep ends with a count-table merge whose cost is fixed
+(independent of how many tokens moved), so a larger corpus amortizes it over more
+sampling work and parallelizes better. Single-threaded, topica stays at parity
+with MALLET at every size; the multithreaded gain is what widens. LDA, K=20,
+1,000 Gibbs sweeps, eight cores, seeded subsamples of `poliblog5k`:
+
+| docs | MALLET (1 core) | topica (1 core) | topica (8 cores) | topica vs MALLET, 8 cores | topica thread scaling |
+|-----:|----------------:|----------------:|-----------------:|--------------------------:|----------------------:|
+| 2,000 | 31.9s | 28.5s | 9.8s | 3.3× | 2.9× |
+| 3,500 | 38.6s | 39.6s | 10.3s | 3.7× | 3.8× |
+| 5,000 | 60.9s | 63.5s | 15.4s | 4.0× | 4.1× |
+
+So the small-corpus multithreaded figures understate what users see on real,
+larger corpora. keyATM parallelizes too but scales less cleanly here: its
+per-worker sweep clones a dense topic-word table, a larger fixed cost than LDA's
+sparse delta merge, so its thread scaling is more variable (tracked as
+optimization headroom). Reproduce the curve with:
+
+```bash
+python benchmarks/speed_vs_size.py
+```
+
 ## Across the family vs tomotopy
 
 tomotopy implements much of the same count-based family in C++, so we can compare
