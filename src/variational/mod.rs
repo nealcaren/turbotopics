@@ -13,6 +13,9 @@ pub use sparse::doc_sparse;
 pub mod mstep;
 pub use mstep::fit_gamma_ridge;
 
+pub mod laplace;
+pub use laplace::laplace_estep;
+
 use crate::estimator::Estimator;
 
 /// Tier-2 contract for the logistic-normal variational family. Implementing this

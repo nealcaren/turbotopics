@@ -19,7 +19,6 @@ use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use crate::estimator::{Estimator, ModelFamily};
 use crate::variational::LogisticNormalModel;
-use rayon::prelude::*;
 
 /// Prior on the prevalence coefficients γ in the STM M-step.
 ///
@@ -867,11 +866,8 @@ pub fn fit_ctm<R: Rng>(
         // order and then accumulated serially, so the sufficient statistics are
         // summed in the exact same order as the serial loop — the fit stays
         // bit-for-bit deterministic regardless of thread count.
-        let doc_results: Vec<(usize, Vec<f64>, HpbResult)> = sparse
-            .par_iter()
-            .enumerate()
-            .filter(|(_, (words, _))| !words.is_empty())
-            .map(|(di, (words, counts))| {
+        let doc_results: Vec<(usize, (Vec<f64>, HpbResult))> =
+            crate::variational::laplace_estep(&sparse, |di, words, counts| {
                 let mu_d = doc_mu(di, &gamma, &mu_shared);
                 // The E-step β is the document's group β (content) or the shared β.
                 let beta_doc: &[Vec<f64>] = match groups {
@@ -891,17 +887,16 @@ pub fn fit_ctm<R: Rng>(
                     1e-5,
                 );
                 let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
-                (di, opt, res)
-            })
-            .collect();
+                (opt, res)
+            });
 
         // Corpus bound for this E-step (sum of the per-document evidence bounds),
         // computed with the parameters from the previous M-step — the quantity
         // whose relative change drives convergence.
-        let total_bound: f64 = doc_results.iter().map(|(_, _, res)| res.bound).sum();
+        let total_bound: f64 = doc_results.iter().map(|(_, (_, res))| res.bound).sum();
         bound_history.push(total_bound);
 
-        for (di, opt, res) in &doc_results {
+        for (di, (opt, res)) in &doc_results {
             let di = *di;
             let words = &sparse[di].0;
             lambda[di] = opt.clone();
