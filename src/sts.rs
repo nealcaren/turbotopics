@@ -313,7 +313,7 @@ pub fn sts_precision(
 // Fitted model + EM driver (PR1: κ held fixed; the Poisson κ M-step is PR2)
 // ---------------------------------------------------------------------------
 
-use crate::variational::lbfgs_minimize;
+use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use rayon::prelude::*;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rand::Rng;
@@ -364,55 +364,6 @@ impl StsModel {
     }
 }
 
-fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
-    let mut idx: Vec<usize> = doc.iter().map(|&w| w as usize).collect();
-    idx.sort_unstable();
-    idx.dedup();
-    let mut counts = vec![0.0f64; idx.len()];
-    let pos: std::collections::HashMap<usize, usize> =
-        idx.iter().enumerate().map(|(i, &w)| (w, i)).collect();
-    for &w in doc {
-        counts[pos[&(w as usize)]] += 1.0;
-    }
-    (idx, counts)
-}
-
-/// Pooled ridge regression of the per-document latent `λ` on covariates `x`
-/// (the `opt.mu` "Pooled" mode / [`crate::ctm`]'s `fit_gamma`): returns `Γ` as
-/// `F × n`, with `Γ[i][t]` the coefficient of covariate `i` for latent `t`.
-fn fit_gamma_ridge(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, n: usize, ridge: f64) -> Vec<Vec<f64>> {
-    let mut xtx = vec![0.0f64; f * f];
-    let mut xtl = vec![0.0f64; f * n];
-    for (xd, ld) in x.iter().zip(lambda) {
-        for i in 0..f {
-            for j in 0..f {
-                xtx[i * f + j] += xd[i] * xd[j];
-            }
-            for t in 0..n {
-                xtl[i * n + t] += xd[i] * ld[t];
-            }
-        }
-    }
-    for i in 0..f {
-        xtx[i * f + i] += ridge;
-    }
-    let inv = spd_inverse(&xtx, f).unwrap_or_else(|| {
-        let mut a = xtx.clone();
-        make_diagonally_dominant(&mut a, f);
-        spd_inverse(&a, f).unwrap()
-    });
-    let mut gamma = vec![vec![0.0f64; n]; f];
-    for i in 0..f {
-        for t in 0..n {
-            let mut s = 0.0;
-            for j in 0..f {
-                s += inv[i * f + j] * xtl[j * n + t];
-            }
-            gamma[i][t] = s;
-        }
-    }
-    gamma
-}
 
 /// A two-parameter Poisson regression `log E[y_g] = offset_g + a + b·z_g` fit by
 /// Newton's method with a small ridge. Returns `(a, b)` = `(κ^(t), κ^(s))` for one

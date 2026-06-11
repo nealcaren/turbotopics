@@ -4591,7 +4591,7 @@ fn infer_theta_batch(
     let rows: Vec<Vec<f64>> = py.allow_threads(|| {
         docs.par_iter()
             .map(|doc| {
-                let (words, counts) = ctm::doc_sparse(doc);
+                let (words, counts) = crate::variational::doc_sparse(doc);
                 ctm::infer_theta(beta, mu, &siginv, &words, &counts)
             })
             .collect()
@@ -4634,7 +4634,7 @@ fn infer_theta_batch_per_doc(
         docs.par_iter()
             .zip(mus.par_iter())
             .map(|(doc, mu_d)| {
-                let (words, counts) = ctm::doc_sparse(doc);
+                let (words, counts) = crate::variational::doc_sparse(doc);
                 ctm::infer_theta(beta, mu_d, &siginv, &words, &counts)
             })
             .collect()

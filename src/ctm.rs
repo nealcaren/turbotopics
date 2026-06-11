@@ -15,7 +15,7 @@
 
 use rand::Rng;
 
-use crate::variational::lbfgs_minimize;
+use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rayon::prelude::*;
 
@@ -447,19 +447,6 @@ impl CtmModel {
     }
 }
 
-/// Convert a token sequence to (unique word ids, counts). A BTreeMap keeps the
-/// word order deterministic (sorted), so float summation order — and thus the
-/// fitted model — is fully reproducible for a given seed.
-pub(crate) fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
-    use std::collections::BTreeMap;
-    let mut m: BTreeMap<usize, f64> = BTreeMap::new();
-    for &w in doc {
-        *m.entry(w as usize).or_insert(0.0) += 1.0;
-    }
-    let words: Vec<usize> = m.keys().copied().collect();
-    let counts: Vec<f64> = words.iter().map(|w| m[w]).collect();
-    (words, counts)
-}
 
 /// Infer the topic proportions θ (length K) for a *new* document by the
 /// variational E-step against fixed global parameters: the topic-word matrix
@@ -505,7 +492,7 @@ pub fn infer_theta(
 /// The intercept (column 0 of `x`, the all-ones column) is never penalised.
 /// All other columns are internally standardised (mean-centred and scaled by their
 /// standard deviation); the coefficients are mapped back to the original scale
-/// before returning so the caller sees the same row/column layout as `fit_gamma`.
+/// before returning so the caller sees the same row/column layout as `fit_gamma_ridge`.
 ///
 /// `alpha` is the elastic-net mixing parameter (glmnet convention): `alpha=1`
 /// is pure lasso, `alpha→0` approaches ridge. The lasso-relevant lambda_max is
@@ -679,46 +666,6 @@ fn fit_gamma_enet(
     g
 }
 
-/// Ridge regression of the variational means Λ (D×(K-1)) on prevalence design
-/// `x` (D×F): `γ = (XᵀX + ridge·I)⁻¹ Xᵀ Λ` (F×(K-1)).
-fn fit_gamma(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, km1: usize, ridge: f64) -> Vec<Vec<f64>> {
-    let mut xtx = vec![0.0f64; f * f];
-    for xd in x {
-        for a in 0..f {
-            for b in 0..f {
-                xtx[a * f + b] += xd[a] * xd[b];
-            }
-        }
-    }
-    for a in 0..f {
-        xtx[a * f + a] += ridge;
-    }
-    let inv = spd_inverse(&xtx, f).unwrap_or_else(|| {
-        let mut m = xtx.clone();
-        make_diagonally_dominant(&mut m, f);
-        spd_inverse(&m, f).unwrap()
-    });
-    // XᵀΛ (F×(K-1))
-    let mut xtl = vec![vec![0.0f64; km1]; f];
-    for (d, xd) in x.iter().enumerate() {
-        for a in 0..f {
-            for t in 0..km1 {
-                xtl[a][t] += xd[a] * lambda[d][t];
-            }
-        }
-    }
-    let mut g = vec![vec![0.0f64; km1]; f];
-    for a in 0..f {
-        for t in 0..km1 {
-            let mut s = 0.0;
-            for b in 0..f {
-                s += inv[a * f + b] * xtl[b][t];
-            }
-            g[a][t] = s;
-        }
-    }
-    g
-}
 
 /// `μ_d = X_d γ` (length K-1).
 fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
@@ -955,7 +902,7 @@ pub fn fit_ctm<R: Rng>(
         // M-step: prevalence regression (γ) or shared mean (μ).
         if let Some(x) = prevalence {
             gamma = Some(match gamma_prior {
-                GammaPrior::Pooled => fit_gamma(x, &lambda, nf.unwrap(), km1, 1e-6),
+                GammaPrior::Pooled => fit_gamma_ridge(x, &lambda, nf.unwrap(), km1, 1e-6),
                 GammaPrior::L1 { alpha } => fit_gamma_enet(x, &lambda, nf.unwrap(), km1, alpha),
             });
         } else {
@@ -1237,7 +1184,7 @@ mod tests {
         let km1 = 1;
 
         let g_enet = fit_gamma_enet(&x, &lam, f, km1, 1.0);
-        let g_ridge = fit_gamma(&x, &lam, f, km1, 1e-6);
+        let g_ridge = fit_gamma_ridge(&x, &lam, f, km1, 1e-6);
 
         // Count zeros (|coef| < 1e-6) among the 30 penalised predictors.
         let enet_zeros = g_enet[1..].iter().filter(|r| r[0].abs() < 1e-6).count();

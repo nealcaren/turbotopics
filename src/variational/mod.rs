@@ -7,6 +7,12 @@
 pub mod lbfgs;
 pub use lbfgs::lbfgs_minimize;
 
+pub mod sparse;
+pub use sparse::doc_sparse;
+
+pub mod mstep;
+pub use mstep::fit_gamma_ridge;
+
 use crate::estimator::Estimator;
 
 /// Tier-2 contract for the logistic-normal variational family. Implementing this
