@@ -26,8 +26,11 @@ pub enum ModelFamily {
 pub trait Estimator {
     /// Number of topics K.
     fn num_topics(&self) -> usize;
-    /// Topic-word matrix, shape (K, V).
-    fn topic_word(&self) -> &[Vec<f64>];
+    /// Topic-word matrix, shape (K, V). Returned by value: most Gibbs models
+    /// compute φ on demand from their count tables rather than storing it, so a
+    /// borrowed slice cannot be the shared contract. Logistic-normal models that
+    /// do store β simply clone it (a cold, inspection-path call).
+    fn topic_word(&self) -> Vec<Vec<f64>>;
     /// Document-topic matrix, shape (D, K); rows sum to 1.
     fn doc_topic(&self) -> Vec<Vec<f64>>;
     /// Per-iteration convergence trace as (iteration, objective) pairs; empty if
@@ -42,8 +45,10 @@ pub trait Estimator {
 
 /// Tier-2 contract for the Dirichlet (collapsed-Gibbs) family.
 pub trait DirichletModel: Estimator {
-    /// Document-topic Dirichlet concentration, length K.
-    fn alpha(&self) -> &[f64];
+    /// Document-topic Dirichlet concentration, length K. Returned by value:
+    /// most Gibbs models store a symmetric scalar α and broadcast it to length
+    /// K here; the asymmetric-α models (LDA/SAGE) clone their stored vector.
+    fn alpha(&self) -> Vec<f64>;
     /// Retained MCMC theta draws, shape (S, D, K); empty if not retained.
     fn theta_draws(&self) -> Vec<Vec<Vec<f64>>>;
     /// Per-document token counts, length D.

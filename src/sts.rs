@@ -362,7 +362,7 @@ impl StsModel {
 
 impl Estimator for StsModel {
     fn num_topics(&self) -> usize { self.k }
-    fn topic_word(&self) -> &[Vec<f64>] { &self.beta }
+    fn topic_word(&self) -> Vec<Vec<f64>> { self.beta.clone() }
     fn doc_topic(&self) -> Vec<Vec<f64>> { self.doc_topics() }
     fn fit_history(&self) -> Vec<(usize, f64)> {
         self.bound_history.iter().enumerate().map(|(i, &b)| (i + 1, b)).collect()

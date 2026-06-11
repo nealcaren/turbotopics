@@ -453,8 +453,8 @@ impl Estimator for CtmModel {
         self.num_topics
     }
 
-    fn topic_word(&self) -> &[Vec<f64>] {
-        &self.beta
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.beta.clone()
     }
 
     fn doc_topic(&self) -> Vec<Vec<f64>> {
