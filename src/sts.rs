@@ -314,6 +314,7 @@ pub fn sts_precision(
 // ---------------------------------------------------------------------------
 
 use crate::dmr::lbfgs_minimize;
+use rayon::prelude::*;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rand::Rng;
 
@@ -855,60 +856,79 @@ pub fn fit_sts<R: Rng>(
             None => 0.0,
         };
 
-        // Aggregated expected word-topic counts φ_{g,v,k} for the κ M-step.
+        // E-step. Per-document variational inference is independent across
+        // documents, so run it in parallel and reduce serially in document order:
+        // the sufficient statistics (φ, bound) are summed in the same order as a
+        // serial loop, so the fit stays bit-for-bit deterministic regardless of
+        // thread count (the guarantee ctm.rs makes for STM/CTM). Each document
+        // returns its α̂, ν_d, bound contribution, and sparse responsibilities.
+        type DocOut = (usize, Vec<f64>, Vec<f64>, f64, Vec<(usize, Vec<f64>)>);
+        let doc_results: Vec<DocOut> = sparse
+            .par_iter()
+            .enumerate()
+            .filter(|(_, (words, _))| !words.is_empty())
+            .map(|(di, (words, counts))| {
+                let mu_d = doc_mu(di, &gamma, &mu_shared);
+                let a_hat = lbfgs_minimize(
+                    alpha[di].clone(),
+                    |a| {
+                        (
+                            -sts_lhood(a, &kappa, &mv, words, counts, &mu_d, &siginv, k),
+                            sts_grad(a, &kappa, &mv, words, counts, &mu_d, &siginv, k)
+                                .iter()
+                                .map(|g| -g)
+                                .collect(),
+                        )
+                    },
+                    100,
+                    7,
+                    1e-5,
+                );
+                let mut prec = sts_precision(&a_hat, &kappa, &mv, words, counts, &siginv, k);
+                let (nu_d, half_ld) = match cholesky(&prec, n) {
+                    Some(l) => (spd_inverse_from_chol(&l, n), half_logdet(&l, n)),
+                    None => {
+                        make_diagonally_dominant(&mut prec, n);
+                        let l = cholesky(&prec, n).expect("PD after diagonal dominance");
+                        (spd_inverse_from_chol(&l, n), half_logdet(&l, n))
+                    }
+                };
+                // bound = f(α̂) − 0.5·log|prec| − 0.5·log|Σ| (standard Laplace ELBO;
+                // ll − 0.5 quad collapses to sts_lhood at the optimum).
+                let f_at = sts_lhood(&a_hat, &kappa, &mv, words, counts, &mu_d, &siginv, k);
+                let bound_contrib = f_at - half_ld - entropy;
+
+                // Responsibilities φ_{d,w,k} = c_{d,w}·θ_k β_{k,w}/Σ θ β (sparse over
+                // the document's words), reduced into the aggregation group below.
+                let db = doc_beta(&a_hat, &kappa, &mv, k);
+                let phi_contrib: Vec<(usize, Vec<f64>)> = words
+                    .iter()
+                    .enumerate()
+                    .map(|(wi, &w)| {
+                        let denom: f64 = (0..k).map(|t| db.expeta[t] * db.beta[t][w]).sum();
+                        let row = (0..k)
+                            .map(|t| counts[wi] * db.expeta[t] * db.beta[t][w] / denom)
+                            .collect();
+                        (w, row)
+                    })
+                    .collect();
+                (di, a_hat, nu_d, bound_contrib, phi_contrib)
+            })
+            .collect();
+
+        // Serial reduction in document order (deterministic).
         let mut phi_by_group = vec![vec![vec![0.0f64; k]; v]; num_groups];
-
         let mut total_bound = 0.0;
-        for (di, (words, counts)) in sparse.iter().enumerate() {
-            if words.is_empty() {
-                continue;
-            }
-            let mu_d = doc_mu(di, &gamma, &mu_shared);
-            let a_hat = lbfgs_minimize(
-                alpha[di].clone(),
-                |a| {
-                    (
-                        -sts_lhood(a, &kappa, &mv, words, counts, &mu_d, &siginv, k),
-                        sts_grad(a, &kappa, &mv, words, counts, &mu_d, &siginv, k)
-                            .iter()
-                            .map(|g| -g)
-                            .collect(),
-                    )
-                },
-                100,
-                7,
-                1e-5,
-            );
-            alpha[di] = a_hat.clone();
-
-            let mut prec = sts_precision(&a_hat, &kappa, &mv, words, counts, &siginv, k);
-            let (nu_d, half_ld) = match cholesky(&prec, n) {
-                Some(l) => (spd_inverse_from_chol(&l, n), half_logdet(&l, n)),
-                None => {
-                    make_diagonally_dominant(&mut prec, n);
-                    let l = cholesky(&prec, n).expect("PD after diagonal dominance");
-                    (spd_inverse_from_chol(&l, n), half_logdet(&l, n))
-                }
-            };
-            nu_store[di] = nu_d;
-            // bound = f(α̂) − 0.5·log|prec| − 0.5·log|Σ|  (standard Laplace ELBO;
-            // ll − 0.5 quad collapses to sts_lhood at the optimum).
-            let f_at = sts_lhood(&a_hat, &kappa, &mv, words, counts, &mu_d, &siginv, k);
-            total_bound += f_at - half_ld - entropy;
-
-            // Accumulate responsibilities φ_{d,v,k} = c_{d,v}·θ_k β_{k,v}/Σ θ β
-            // into the document's aggregation group.
-            let db = doc_beta(&a_hat, &kappa, &mv, k);
+        for (di, a_hat, nu_d, bound_contrib, phi_contrib) in doc_results {
             let g = group[di];
-            for (wi, &w) in words.iter().enumerate() {
-                let mut denom = 0.0;
+            for (w, row) in &phi_contrib {
                 for t in 0..k {
-                    denom += db.expeta[t] * db.beta[t][w];
-                }
-                for t in 0..k {
-                    phi_by_group[g][w][t] += counts[wi] * db.expeta[t] * db.beta[t][w] / denom;
+                    phi_by_group[g][*w][t] += row[t];
                 }
             }
+            total_bound += bound_contrib;
+            alpha[di] = a_hat;
+            nu_store[di] = nu_d;
         }
         bound_history.push(total_bound);
 
