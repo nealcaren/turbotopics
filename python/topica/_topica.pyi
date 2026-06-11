@@ -678,13 +678,15 @@ class HDP:
         gamma: float = 0.1,
         eta: float = 0.01,
         seed: int = 42,
-        resample_conc: bool = True,
+        resample_conc: bool = False,
     ) -> None:
-        """alpha/gamma are the document- and corpus-level DP concentrations
-        (initial values; resampled from the data when resample_conc=True, the
-        default). The defaults 0.1/0.1 match the reference HDP convention; gamma
-        is the dominant lever on the inferred topic count. eta is the topic-word
-        Dirichlet (base measure). alpha, gamma, eta must be > 0."""
+        """alpha/gamma are the document- and corpus-level DP concentrations.
+        gamma is the dominant lever on the inferred topic count (0.1 is
+        conservative; raise it for more topics). resample_conc defaults to False
+        (fixed concentrations -> a stable topic count); set it True to adapt the
+        concentrations to the data, which is now capped to avoid the runaway
+        topic count it used to cause (issue #68). eta is the topic-word Dirichlet
+        (base measure). alpha, gamma, eta must be > 0."""
         ...
 
     def fit(

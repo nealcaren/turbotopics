@@ -185,6 +185,16 @@ fn sample_index<R: Rng>(probs: &[f64], rng: &mut R) -> usize {
 // Sampler
 // ---------------------------------------------------------------------------
 
+/// Upper bound on a resampled DP concentration. The Escobar-West update for γ
+/// draws from `Gamma(a + K, b - log η)`, whose mean grows linearly with the
+/// topic count K; once K is large the rate term cannot pull γ back down, so γ
+/// and K reinforce each other without bound (issue #68: K ran to 774 with γ at
+/// 102). Healthy fits keep both concentrations in roughly `[0.05, 1.5]`, so this
+/// cap leaves normal adaptation untouched while preventing the runaway. It only
+/// matters when `resample_conc = true`; the default fits with fixed
+/// concentrations and never reaches it.
+const CONCENTRATION_MAX: f64 = 2.0;
+
 impl HdpModel {
     /// Drop any topic with no tokens, returning its stick mass to β_u and
     /// reindexing assignments/counts so topic indices stay contiguous.
@@ -260,7 +270,8 @@ impl HdpModel {
         let eta = sample_beta_dist(self.gamma + 1.0, m, rng).max(1e-12);
         let pi = (a + k - 1.0) / (a + k - 1.0 + m * (b - eta.ln()));
         let shape = if rng.gen::<f64>() < pi { a + k } else { a + k - 1.0 };
-        self.gamma = (sample_gamma(shape, rng) / (b - eta.ln())).max(1e-3);
+        self.gamma = (sample_gamma(shape, rng) / (b - eta.ln()))
+            .clamp(1e-3, CONCENTRATION_MAX);
     }
 
     /// Resample the document-level concentration α0 given per-document word
@@ -291,7 +302,7 @@ impl HdpModel {
             let shape = a + total_tables as f64 - sum_s;
             let rate = b - sum_log_w;
             if shape > 0.0 && rate > 0.0 {
-                self.alpha = (sample_gamma(shape, rng) / rate).max(1e-3);
+                self.alpha = (sample_gamma(shape, rng) / rate).clamp(1e-3, CONCENTRATION_MAX);
             }
         }
     }
@@ -527,6 +538,37 @@ mod tests {
         assert_eq!(trace.last().unwrap().1, model.num_topics());
         // The fit improves from the first recorded sweep to the last.
         assert!(trace.last().unwrap().2 > trace.first().unwrap().2);
+    }
+
+    #[test]
+    fn concentration_resampling_is_capped() {
+        // Issue #68: with many topics, the Escobar-West gamma update draws from
+        // Gamma(a+K, .) whose mean grows with K, so gamma (and K) ran away to the
+        // hundreds. Drive the resamplers from a large-K state and confirm both
+        // concentrations stay bounded by CONCENTRATION_MAX.
+        let k = 300usize;
+        let v = 50usize;
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let mut model = HdpModel {
+            num_types: v,
+            eta: 0.01,
+            alpha: 1.0,
+            gamma: 1.0,
+            nkw: vec![vec![1u32; v]; k],
+            nk: vec![v as u32; k],
+            beta: vec![1.0 / (k as f64 + 1.0); k],
+            beta_u: 1.0 / (k as f64 + 1.0),
+            z: Vec::new(),
+            njk: vec![(0..k).map(|t| (t % 3 + 1) as u32).collect(); 200],
+            trace: Vec::new(),
+        };
+        for _ in 0..50 {
+            let (m_total, t_j) = model.resample_beta(&mut rng);
+            model.resample_gamma(m_total, &mut rng);
+            model.resample_alpha(&t_j, &mut rng);
+            assert!(model.gamma <= CONCENTRATION_MAX + 1e-9, "gamma {} > cap", model.gamma);
+            assert!(model.alpha <= CONCENTRATION_MAX + 1e-9, "alpha {} > cap", model.alpha);
+        }
     }
 
     #[test]
