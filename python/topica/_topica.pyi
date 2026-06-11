@@ -551,16 +551,17 @@ class HDP:
     def __init__(
         self,
         *,
-        alpha: float = 1.0,
-        gamma: float = 1.0,
+        alpha: float = 0.1,
+        gamma: float = 0.1,
         eta: float = 0.01,
         seed: int = 42,
         resample_conc: bool = True,
     ) -> None:
         """alpha/gamma are the document- and corpus-level DP concentrations
         (initial values; resampled from the data when resample_conc=True, the
-        default). eta is the topic-word Dirichlet (base measure). alpha, gamma,
-        eta must be > 0."""
+        default). The defaults 0.1/0.1 match the reference HDP convention; gamma
+        is the dominant lever on the inferred topic count. eta is the topic-word
+        Dirichlet (base measure). alpha, gamma, eta must be > 0."""
         ...
 
     def fit(

@@ -89,7 +89,9 @@ def _fit_for_composition():
 
     models = {}
     m = topica.LDA(3, seed=1); m.fit(corpus, iters=120); models["LDA"] = m
-    m = topica.HDP(seed=1); m.fit(corpus, iters=120); models["HDP"] = m
+    # Explicit concentration so HDP instantiates >1 topic on this small random
+    # corpus (the default 0.1/0.1 is tuned for real-scale corpora).
+    m = topica.HDP(seed=1, alpha=1.0, gamma=1.0); m.fit(corpus, iters=120); models["HDP"] = m
     m = topica.KeyATM({"a": ["w0"], "b": ["w1"]}, num_topics=3)
     m.fit(corpus, iters=120); models["KeyATM"] = m
     m = topica.SeededLDA({"a": ["w0"], "b": ["w1"]}, residual=1)

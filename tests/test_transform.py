@@ -88,7 +88,9 @@ class TestGibbsTransform:
 
     def test_hdp(self):
         docs, _ = _two_topic_corpus()
-        m = topica.HDP(seed=1)
+        # Default 0.1/0.1 is tuned for real-scale corpora; this small two-topic
+        # corpus needs explicit concentration to instantiate both topics.
+        m = topica.HDP(seed=1, alpha=1.0, gamma=1.0)
         m.fit(docs, iters=300)
         theta = m.transform(NEW)
         k = m.num_topics

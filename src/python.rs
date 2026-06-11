@@ -5933,8 +5933,15 @@ impl HDP {
     /// corpus-level DP concentrations; `eta` is the topic-word Dirichlet (base
     /// measure). With `resample_conc=True` (default) `alpha`/`gamma` are
     /// resampled each sweep and the given values are just starting points.
+    ///
+    /// The defaults `alpha=0.1`, `gamma=0.1` match the reference HDP convention
+    /// (and tomotopy's). `gamma` is the dominant lever on the inferred topic
+    /// count; larger values find more topics. The earlier `1.0` defaults seeded
+    /// a runaway-topic regime, because the concentration resampler's gamma
+    /// posterior shape grows with the current topic count, so a high-K start
+    /// feeds a higher gamma and sustains it.
     #[new]
-    #[pyo3(signature = (*, alpha=1.0, gamma=1.0, eta=0.01, seed=42, resample_conc=true))]
+    #[pyo3(signature = (*, alpha=0.1, gamma=0.1, eta=0.01, seed=42, resample_conc=true))]
     fn new(alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool) -> PyResult<Self> {
         if !finite_pos(alpha) || !finite_pos(gamma) {
             return Err(PyValueError::new_err("alpha and gamma must be > 0"));

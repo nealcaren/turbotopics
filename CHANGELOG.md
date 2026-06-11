@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Changed
+
+- `HDP` default concentrations are now `alpha=0.1`, `gamma=0.1` (were `1.0`,
+  `1.0`), matching the reference HDP convention. The `1.0` defaults inferred far
+  too many topics on real corpora. This reduces the inferred topic count but does
+  not fully fix the underlying runaway-topic feedback over long runs, tracked in
+  #68.
+
 ## [0.15.0] - 2026-06-10
 
 This release completes the structural-topic-model and keyATM drop-in parity work

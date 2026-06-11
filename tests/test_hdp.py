@@ -24,7 +24,10 @@ def _planted_corpus(n_blocks=5, words_per_block=6, n_docs=250):
 class TestInference:
     def test_infers_reasonable_k(self):
         docs, _, n_blocks = _planted_corpus()
-        m = HDP(seed=1)
+        # The default concentrations (0.1/0.1) are tuned for real-scale corpora;
+        # this tiny planted corpus needs more concentration to instantiate the
+        # planted topics, so we set them explicitly (cf. the Rust unit test).
+        m = HDP(seed=1, alpha=1.0, gamma=1.0)
         m.fit(docs, iters=120)
         # Auto-K is approximate and HDP slightly over-segments; it must at least
         # find the planted topics and not explode.
@@ -32,7 +35,7 @@ class TestInference:
 
     def test_recovers_planted_blocks(self):
         docs, vocab, n_blocks = _planted_corpus()
-        m = HDP(seed=1)
+        m = HDP(seed=1, alpha=1.0, gamma=1.0)
         m.fit(docs, iters=120)
         wps = len(vocab) // n_blocks
         blocks = [
@@ -151,7 +154,7 @@ class TestDiscoveryTrace:
 
     def test_log_likelihood_improves(self):
         docs, _, _ = _planted_corpus()
-        m = HDP(seed=1)
+        m = HDP(seed=1, alpha=1.0, gamma=1.0)
         m.fit(docs, iters=120, report_interval=5)
         lls = [ll for _, ll in m.log_likelihood_history]
         assert lls[-1] > lls[0]
