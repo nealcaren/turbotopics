@@ -53,6 +53,7 @@
 //! ```
 
 use rand::Rng;
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 
 // ---------------------------------------------------------------------------
 // Token weighting (keyATM's "weighted LDA")
@@ -484,6 +485,31 @@ impl KeyAtmModel {
                 })
                 .collect(),
         )
+    }
+}
+
+impl Estimator for KeyAtmModel {
+    fn num_topics(&self) -> usize { self.num_topics }
+    fn topic_word(&self) -> Vec<Vec<f64>> { self.topic_word_all() }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { self.doc_topic() }
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.log_likelihood_history.iter().map(|&(i, ll, _)| (i, ll)).collect()
+    }
+    fn converged(&self) -> Option<bool> { None }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
+}
+
+impl DirichletModel for KeyAtmModel {
+    fn alpha(&self) -> Vec<f64> {
+        self.alpha_vec.clone().unwrap_or_else(|| vec![self.alpha; self.num_topics])
+    }
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        self.theta_draws.iter().map(|d| {
+            d.iter().map(|r| r.iter().map(|&x| x as f64).collect()).collect()
+        }).collect()
+    }
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.ndk.iter().map(|r| r.iter().sum::<f64>() as usize).collect()
     }
 }
 
@@ -1950,5 +1976,23 @@ mod tests {
             &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng2,
         );
         assert!(none.log_likelihood_history.is_empty());
+    }
+
+    #[test]
+    fn keyatm_conforms() {
+        let v = 30usize;
+        let docs: Vec<Vec<u32>> = (0..60usize)
+            .map(|d| (0..5).map(|i| ((i + d * 3) % v) as u32).collect())
+            .collect();
+        let keywords: Vec<Vec<usize>> = vec![vec![0, 1], vec![10, 11], vec![]];
+        let mut rng = ChaCha8Rng::seed_from_u64(77);
+        let m = fit_keyatm(
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true,
+            WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+        );
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

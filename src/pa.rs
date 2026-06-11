@@ -50,6 +50,7 @@
 //! for a fixed `rng`.
 
 use rand::Rng;
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 
 /// A fitted Pachinko Allocation model (four-level, two-tier).
 pub struct PamModel {
@@ -144,6 +145,27 @@ impl PamModel {
             }
         }
         out
+    }
+}
+
+impl Estimator for PamModel {
+    fn num_topics(&self) -> usize { self.num_sub }
+    fn topic_word(&self) -> Vec<Vec<f64>> { PamModel::topic_word(self) }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { PamModel::doc_topic(self) }
+    fn fit_history(&self) -> Vec<(usize, f64)> { Vec::new() }
+    fn converged(&self) -> Option<bool> { None }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
+}
+
+impl DirichletModel for PamModel {
+    fn alpha(&self) -> Vec<f64> { vec![self.alpha; self.num_sub] }
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        self.theta_draws.iter().map(|d| {
+            d.iter().map(|r| r.iter().map(|&x| x as f64).collect()).collect()
+        }).collect()
+    }
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.zk.iter().map(|d| d.len()).collect()
     }
 }
 
@@ -530,5 +552,18 @@ mod tests {
         let m1 = fit_pam(&docs, 12, 2, 4, 0.1, 0.01, 30, &mut r1);
         let m2 = fit_pam(&docs, 12, 2, 4, 0.1, 0.01, 30, &mut r2);
         assert_eq!(m1.topic_word(), m2.topic_word());
+    }
+
+    #[test]
+    fn pam_conforms() {
+        let docs: Vec<Vec<u32>> = (0..40)
+            .map(|d| (0..8).map(|i| ((i + d * 3) % 12) as u32).collect())
+            .collect();
+        let mut rng = ChaCha8Rng::seed_from_u64(11);
+        let m = fit_pam(&docs, 12, 2, 3, 0.1, 0.01, 20, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

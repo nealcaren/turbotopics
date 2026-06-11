@@ -1,5 +1,6 @@
 use rand::Rng;
 use crate::corpus::Corpus;
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TopicModel {
@@ -208,5 +209,100 @@ impl TopicModel {
             }
         }
         0
+    }
+
+    /// Smoothed topic-word point estimate φ (K×V):
+    /// φ[t][w] = (β + count(w,t)) / (β·V + tokens_per_topic[t]), unpacking the
+    /// packed type_topic_counts via topic_mask/topic_bits. Matches build_phi_cache.
+    pub fn topic_word(&self) -> Vec<Vec<f64>> {
+        let k = self.num_topics;
+        let v = self.num_types;
+        let denom: Vec<f64> = (0..k)
+            .map(|t| self.beta_sum + self.tokens_per_topic[t] as f64)
+            .collect();
+        // start every cell at the no-count value β/denom
+        let mut phi: Vec<Vec<f64>> =
+            (0..k).map(|t| vec![self.beta / denom[t]; v]).collect();
+        for w in 0..v {
+            for &entry in &self.type_topic_counts[w] {
+                if entry == 0 { break; }
+                let t = (entry & self.topic_mask) as usize;
+                let count = (entry >> self.topic_bits) as f64;
+                phi[t][w] = (self.beta + count) / denom[t];
+            }
+        }
+        phi
+    }
+
+    /// Smoothed document-topic point estimate θ (D×K):
+    /// θ[d][t] = (count_t(d) + α[t]) / (N_d + α_sum). Matches the load_state build.
+    pub fn doc_topic(&self) -> Vec<Vec<f64>> {
+        let k = self.num_topics;
+        self.doc_topics
+            .iter()
+            .map(|topics| {
+                let mut cnt = vec![0.0f64; k];
+                for &t in topics { cnt[t as usize] += 1.0; }
+                let denom = topics.len() as f64 + self.alpha_sum;
+                (0..k).map(|t| (cnt[t] + self.alpha[t]) / denom).collect()
+            })
+            .collect()
+    }
+}
+
+impl Estimator for TopicModel {
+    fn num_topics(&self) -> usize { self.num_topics }
+    fn topic_word(&self) -> Vec<Vec<f64>> { TopicModel::topic_word(self) }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { TopicModel::doc_topic(self) }
+    fn fit_history(&self) -> Vec<(usize, f64)> { Vec::new() }
+    fn converged(&self) -> Option<bool> { None }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
+}
+
+impl DirichletModel for TopicModel {
+    fn alpha(&self) -> Vec<f64> { self.alpha.clone() }
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> { Vec::new() }
+    fn doc_lengths(&self) -> Vec<usize> { self.doc_topics.iter().map(|d| d.len()).collect() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::corpus::Corpus;
+    use crate::sampler::run_iteration;
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    fn small_corpus() -> Corpus {
+        // 20 docs, vocabulary size 10, 5 tokens each
+        let v = 10usize;
+        let docs: Vec<Vec<u32>> = (0..20usize)
+            .map(|d| (0..5).map(|i| ((i + d * 3) % v) as u32).collect())
+            .collect();
+        Corpus {
+            id_to_word: (0..v).map(|i| format!("w{i}")).collect(),
+            docs,
+            doc_names: (0..20).map(|i| format!("d{i}")).collect(),
+            doc_labels: vec![String::new(); 20],
+            doc_freqs: vec![0u32; v],
+            total_freqs: vec![0u32; v],
+        }
+    }
+
+    #[test]
+    fn topicmodel_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let corpus = small_corpus();
+        let v = corpus.num_types();
+        let mut m = TopicModel::new(3, 3.0, 0.1, v);
+        m.initialize(&corpus, &mut rng);
+        for _ in 0..10 {
+            run_iteration(&mut m, &corpus, &mut rng);
+        }
+
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

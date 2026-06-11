@@ -3,7 +3,7 @@
 //! layer or a release. The full multi-model registry and EXEMPT set are populated
 //! in a later step; this file establishes the check.
 
-use crate::estimator::{Estimator, ModelFamily};
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 use crate::variational::LogisticNormalModel;
 
 /// Check a fitted model against the Tier-0 contract and its family's Tier-2
@@ -28,6 +28,37 @@ pub fn check_conformance(m: &dyn Estimator) -> Vec<String> {
             if (s - 1.0).abs() > 1e-6 {
                 v.push(format!("doc_topic row {d} sums to {s}, expected 1"));
                 break;
+            }
+        }
+    }
+    v
+}
+
+/// Tier-2 shape check for Dirichlet (collapsed-Gibbs) models: alpha length,
+/// doc_lengths length, and theta_draws nesting.
+#[allow(dead_code)]
+pub fn check_dirichlet(m: &dyn DirichletModel) -> Vec<String> {
+    let mut v = Vec::new();
+    let k = m.num_topics();
+    let d = m.doc_topic().len();
+    if m.alpha().len() != k {
+        v.push(format!("alpha has len {} but num_topics is {}", m.alpha().len(), k));
+    }
+    if m.doc_lengths().len() != d {
+        v.push(format!("doc_lengths has len {} but doc_topic has {} rows", m.doc_lengths().len(), d));
+    }
+    let draws = m.theta_draws();
+    if !draws.is_empty() {
+        for (s, draw) in draws.iter().enumerate() {
+            if draw.len() != d {
+                v.push(format!("theta_draws[{s}] has {} rows but doc_topic has {d}", draw.len()));
+                break;
+            }
+            for (di, row) in draw.iter().enumerate() {
+                if row.len() != k {
+                    v.push(format!("theta_draws[{s}][{di}] has len {} but num_topics is {k}", row.len()));
+                    break;
+                }
             }
         }
     }
