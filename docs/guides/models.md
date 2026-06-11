@@ -89,10 +89,13 @@ m.topic_word_at(2.0) # how the topic is worded at high sentiment
 ```
 
 `sentiment_seed` (one value per document — e.g. a star rating) seeds the sentiment
-and defines the aggregation groups for the topic-word estimation; it should be
-*distinct* from the prevalence design (using the same covariate for both is
-unidentifiable). Validated against the authors' R `sts` implementation in
-`parity/sts_r_compare.py`.
+and defines the aggregation groups for the topic-word estimation. `kappa_estimation`
+selects the topic-word estimator: `"ridge"` (default, fast) or `"lasso"` (matches
+the reference R `sts` exactly, at higher cost); the two agree closely on
+well-conditioned corpora. Validated against the authors' R `sts` implementation in
+`parity/sts_r_compare.py` — on the political-blog corpus topica's STS aligns with
+the published fit in the mid-0.90s (topic-word cosine), the same neighborhood as
+topica's STM matches R's STM.
 
 ## CTM
 

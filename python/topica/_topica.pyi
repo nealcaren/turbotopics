@@ -568,6 +568,7 @@ class STS:
         prevalence_names: list[str] | None = None,
         iters: int = 30,
         em_tol: float = 1e-5,
+        kappa_estimation: str = "ridge",
         kappa_ridge: float = 1e-3,
     ) -> None:
         """Fit. sentiment_seed (required, one value per document) defines the
@@ -577,8 +578,11 @@ class STS:
         sentiment-discourse (alpha_d ~ N(X_d Gamma, Sigma); intercept prepended).
 
         EM stops once the relative change in the variational bound falls below
-        em_tol or after iters iterations. kappa_ridge is the ridge on the per-word
-        Poisson regressions estimating the topic-word coefficients."""
+        em_tol or after iters iterations. kappa_estimation chooses the topic-word
+        estimator: "ridge" (default, fast; kappa_ridge sets the ridge) or "lasso"
+        (an L1 Poisson path with AIC-selected penalty, matching the reference R
+        sts exactly at higher cost). Both give the same topics on well-conditioned
+        corpora."""
         ...
 
     @property

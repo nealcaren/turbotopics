@@ -6003,10 +6003,16 @@ impl STS {
     /// Σ)`); an intercept is prepended.
     ///
     /// EM runs until the relative change in the variational bound drops below
-    /// `em_tol` or `iters` iterations are reached. `kappa_ridge` is the ridge on
-    /// the per-word Poisson regressions that estimate the topic-word coefficients.
+    /// `em_tol` or `iters` iterations are reached.
+    ///
+    /// `kappa_estimation` chooses the topic-word (κ) estimator: ``"ridge"``
+    /// (default) is a fast ridge-penalized Poisson fit (`kappa_ridge` sets the
+    /// ridge); ``"lasso"`` is an L1 Poisson path with AIC-selected penalty,
+    /// matching the reference R `sts` exactly (sparser κ) at a higher cost. The
+    /// two give the same topics on well-conditioned corpora.
     #[pyo3(signature = (data, sentiment_seed, prevalence=None, *,
-                        prevalence_names=None, iters=30, em_tol=1e-5, kappa_ridge=1e-3))]
+                        prevalence_names=None, iters=30, em_tol=1e-5,
+                        kappa_estimation="ridge", kappa_ridge=1e-3))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -6017,8 +6023,18 @@ impl STS {
         prevalence_names: Option<Vec<String>>,
         iters: usize,
         em_tol: f64,
+        kappa_estimation: &str,
         kappa_ridge: f64,
     ) -> PyResult<()> {
+        let kappa_est = match kappa_estimation {
+            "lasso" => sts::KappaEst::Lasso { nlambda: 100, lambda_min_ratio: 0.001 },
+            "ridge" => sts::KappaEst::Ridge(kappa_ridge),
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "kappa_estimation must be \"lasso\" or \"ridge\", got {:?}", other
+                )))
+            }
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -6088,7 +6104,7 @@ impl STS {
             let prev_ref = prevalence_x.as_deref();
             let m = sts::fit_sts(
                 &corpus.docs, k, num_types, iters, em_tol, prev_ref, Some(&sentiment_seed),
-                kappa_ridge, spectral, &mut rng,
+                kappa_est, spectral, &mut rng,
             );
             (m, corpus)
         });

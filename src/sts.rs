@@ -466,18 +466,139 @@ fn poisson_2param(y: &[f64], z: &[f64], offset: &[f64], ridge: f64) -> (f64, f64
     (a, b)
 }
 
+fn poisson_deviance(y: &[f64], mu: &[f64]) -> f64 {
+    let mut d = 0.0;
+    for i in 0..y.len() {
+        let yi = y[i];
+        let term = if yi > 0.0 { yi * (yi / mu[i]).ln() } else { 0.0 };
+        d += term - (yi - mu[i]);
+    }
+    2.0 * d
+}
+
+fn soft_threshold(z: f64, g: f64) -> f64 {
+    if z > g {
+        z - g
+    } else if z < -g {
+        z + g
+    } else {
+        0.0
+    }
+}
+
+/// L1-penalized (lasso) Poisson regression over a λ path with the penalty selected
+/// by AIC — the glmnet path used by the reference `opt.kappa.R` (`family="poisson"`,
+/// `alpha=1`, `intercept=FALSE`, `standardize=FALSE`). Fit by IRLS with inner
+/// coordinate descent (Friedman, Hastie & Tibshirani 2010); warm-started down the
+/// path. `x` is `n×p`, with a fixed `offset`. Returns the AIC-selected coefficients.
+fn poisson_lasso(x: &[Vec<f64>], y: &[f64], offset: &[f64], nlambda: usize, lambda_min_ratio: f64) -> Vec<f64> {
+    let n = x.len();
+    let p = if n > 0 { x[0].len() } else { 0 };
+    if p == 0 {
+        return Vec::new();
+    }
+
+    // λ_max: the smallest λ that zeros every coefficient (gradient at β=0).
+    let mu0: Vec<f64> = offset.iter().map(|&o| o.clamp(-30.0, 30.0).exp()).collect();
+    let mut lam_max: f64 = 0.0;
+    for j in 0..p {
+        let g: f64 = (0..n).map(|i| x[i][j] * (y[i] - mu0[i])).sum();
+        lam_max = lam_max.max(g.abs());
+    }
+    if lam_max <= 0.0 {
+        return vec![0.0; p];
+    }
+
+    let mut beta = vec![0.0f64; p];
+    let mut xbeta = vec![0.0f64; n];
+    let mut best_beta = beta.clone();
+    let mut best_aic = f64::INFINITY;
+
+    for li in 0..nlambda {
+        let frac = li as f64 / (nlambda.max(2) - 1) as f64;
+        let lam = lam_max * lambda_min_ratio.powf(frac);
+
+        // IRLS: weighted-LS coordinate descent around the current fit.
+        for _ in 0..25 {
+            let mut w = vec![0.0f64; n];
+            let mut target = vec![0.0f64; n]; // working response for Xβ (offset removed)
+            for i in 0..n {
+                let mu = (offset[i] + xbeta[i]).clamp(-30.0, 30.0).exp();
+                w[i] = mu.max(1e-6);
+                target[i] = xbeta[i] + (y[i] - mu) / w[i];
+            }
+            let mut max_step = 0.0f64;
+            for _ in 0..50 {
+                let mut pass_step = 0.0f64;
+                for j in 0..p {
+                    let mut denom = 0.0;
+                    let mut rho = 0.0;
+                    for i in 0..n {
+                        if x[i][j] == 0.0 {
+                            continue;
+                        }
+                        denom += w[i] * x[i][j] * x[i][j];
+                        let resid = target[i] - xbeta[i] + x[i][j] * beta[j];
+                        rho += w[i] * x[i][j] * resid;
+                    }
+                    if denom < 1e-12 {
+                        continue;
+                    }
+                    let new_bj = soft_threshold(rho, lam) / denom;
+                    let delta = new_bj - beta[j];
+                    if delta != 0.0 {
+                        for i in 0..n {
+                            xbeta[i] += x[i][j] * delta;
+                        }
+                        beta[j] = new_bj;
+                        pass_step = pass_step.max(delta.abs());
+                    }
+                }
+                if pass_step < 1e-7 {
+                    break;
+                }
+                max_step = max_step.max(pass_step);
+            }
+            if max_step < 1e-6 {
+                break;
+            }
+        }
+
+        let mu: Vec<f64> = (0..n).map(|i| (offset[i] + xbeta[i]).clamp(-30.0, 30.0).exp()).collect();
+        let dev = poisson_deviance(y, &mu);
+        let df = beta.iter().filter(|&&b| b != 0.0).count();
+        let aic = dev + 2.0 * df as f64;
+        if aic < best_aic {
+            best_aic = aic;
+            best_beta = beta.clone();
+        }
+    }
+    best_beta
+}
+
+/// How the topic-word coefficients `κ` are estimated in the M-step.
+#[derive(Clone, Copy)]
+pub enum KappaEst {
+    /// Ridge-penalized Poisson (Newton) per (word, topic). Stable and fast.
+    Ridge(f64),
+    /// L1 (lasso) Poisson over a λ path with AIC-selected penalty — the reference
+    /// `opt.kappa.R` default (glmnet). Sparser κ; closer to the R `sts` solution.
+    Lasso { nlambda: usize, lambda_min_ratio: f64 },
+}
+
 /// M-step for the topic-word coefficients `κ` (Chen & Mankad §4.2; `opt.kappa.R`).
 ///
 /// Estimating `κ` is a multinomial logistic regression, recast via the
 /// multinomial–Poisson equivalence (Taddy 2015) into independent Poisson
 /// regressions per vocabulary word, with a document-fixed-effect offset. The
-/// design is block-diagonal across topics, so each (word, topic) is a small
-/// 2-parameter Poisson fit over the aggregation groups: intercept `κ^(t)_{k,v}`
-/// and slope `κ^(s)_{k,v}` on the group-mean sentiment.
+/// design is block-diagonal across topics: per word, topic `k` contributes an
+/// intercept `κ^(t)_{k,v}` and a slope `κ^(s)_{k,v}` on the group-mean sentiment.
+/// [`KappaEst::Ridge`] fits each topic's 2 parameters independently; the reference
+/// default [`KappaEst::Lasso`] fits the joint `2K` design with a shared λ path and
+/// global AIC, exactly as glmnet does.
 ///
 /// `phi_by_group[g][v][k] = Σ_{d∈g} φ_{d,v,k}` are the aggregated expected
 /// word-topic counts; `alpha_agg[g][k]` the group-mean `α^(s)`.
-#[allow(clippy::too_many_arguments)]
 fn opt_kappa(
     phi_by_group: &[Vec<Vec<f64>>],
     alpha_agg: &[Vec<f64>],
@@ -485,7 +606,7 @@ fn opt_kappa(
     k: usize,
     v: usize,
     num_groups: usize,
-    ridge: f64,
+    est: KappaEst,
 ) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     // Group-topic totals φ_{g,k} = Σ_v φ_{g,v,k} → the offset log φ_{g,k} + m_v.
     let mut phi_sum = vec![vec![0.0f64; k]; num_groups];
@@ -496,21 +617,58 @@ fn opt_kappa(
     }
     let mut kappa_t = vec![vec![0.0f64; v]; k];
     let mut kappa_s = vec![vec![0.0f64; v]; k];
-    let mut z = vec![0.0f64; num_groups];
-    let mut off = vec![0.0f64; num_groups];
-    let mut y = vec![0.0f64; num_groups];
-    for t in 0..k {
-        for g in 0..num_groups {
-            z[g] = alpha_agg[g][t];
-        }
-        for word in 0..v {
-            for g in 0..num_groups {
-                off[g] = (phi_sum[g][t].max(1e-12)).ln() + mv[word];
-                y[g] = phi_by_group[g][word][t];
+
+    match est {
+        KappaEst::Ridge(ridge) => {
+            let mut z = vec![0.0f64; num_groups];
+            let mut off = vec![0.0f64; num_groups];
+            let mut y = vec![0.0f64; num_groups];
+            for t in 0..k {
+                for g in 0..num_groups {
+                    z[g] = alpha_agg[g][t];
+                }
+                for word in 0..v {
+                    for g in 0..num_groups {
+                        off[g] = (phi_sum[g][t].max(1e-12)).ln() + mv[word];
+                        y[g] = phi_by_group[g][word][t];
+                    }
+                    let (a, b) = poisson_2param(&y, &z, &off, ridge);
+                    kappa_t[t][word] = a;
+                    kappa_s[t][word] = b;
+                }
             }
-            let (a, b) = poisson_2param(&y, &z, &off, ridge);
-            kappa_t[t][word] = a;
-            kappa_s[t][word] = b;
+        }
+        KappaEst::Lasso { nlambda, lambda_min_ratio } => {
+            // Joint (G·K)×(2K) design, word-independent: row (g,t) carries a 1 in
+            // the topic-t dummy column and α^(s)_agg in the topic-t slope column.
+            let n = num_groups * k;
+            let p = 2 * k;
+            let mut x = vec![vec![0.0f64; p]; n];
+            let mut base_off = vec![0.0f64; n];
+            for g in 0..num_groups {
+                for t in 0..k {
+                    let r = g * k + t;
+                    x[r][t] = 1.0;
+                    x[r][k + t] = alpha_agg[g][t];
+                    base_off[r] = (phi_sum[g][t].max(1e-12)).ln();
+                }
+            }
+            let mut y = vec![0.0f64; n];
+            let mut off = vec![0.0f64; n];
+            for word in 0..v {
+                for g in 0..num_groups {
+                    for t in 0..k {
+                        let r = g * k + t;
+                        y[r] = phi_by_group[g][word][t];
+                        off[r] = base_off[r] + mv[word];
+                    }
+                }
+                let coef = poisson_lasso(&x, &y, &off, nlambda, lambda_min_ratio);
+                for t in 0..k {
+                    kappa_t[t][word] = coef[t];
+                    kappa_s[t][word] = coef[k + t];
+                }
+            }
         }
     }
     (kappa_t, kappa_s)
@@ -552,7 +710,7 @@ pub fn fit_sts<R: Rng>(
     em_tol: f64,
     prevalence: Option<&[Vec<f64>]>,
     sentiment_seed: Option<&[f64]>,
-    kappa_ridge: f64,
+    kappa_est: KappaEst,
     init_spectral: bool,
     rng: &mut R,
 ) -> StsModel {
@@ -658,7 +816,7 @@ pub fn fit_sts<R: Rng>(
             }
         }
         let alpha_agg = group_means(&alpha, &group, num_groups, k);
-        let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_ridge);
+        let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_est);
         kappa_t = kt;
         kappa_s = ks;
     }
@@ -790,7 +948,7 @@ pub fn fit_sts<R: Rng>(
         // unidentified and κ_t at its β-derived initialization).
         if num_groups >= 2 {
             let alpha_agg = group_means(&alpha, &group, num_groups, k);
-            let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_ridge);
+            let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_est);
             kappa_t = kt;
             kappa_s = ks;
         }
@@ -933,7 +1091,7 @@ mod tests {
     fn em_bound_increases_and_recovers_topics() {
         let (docs, x, truth, v) = planted_corpus();
         let mut rng = StdRng::seed_from_u64(1);
-        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, 1e-3, true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut rng);
 
         // The variational bound increases monotonically (allowing tiny slack).
         for w in m.bound_history.windows(2) {
@@ -964,8 +1122,8 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let mut r1 = StdRng::seed_from_u64(1);
         let mut r2 = StdRng::seed_from_u64(1);
-        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 1e-3, true, &mut r1);
-        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 1e-3, true, &mut r2);
+        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut r1);
+        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut r2);
         for (a, b) in m1.alpha.iter().flatten().zip(m2.alpha.iter().flatten()) {
             assert!((a - b).abs() < 1e-12);
         }
@@ -989,6 +1147,40 @@ mod tests {
     }
 
     #[test]
+    fn poisson_lasso_recovers_sparse_signal() {
+        // Two predictors: one with a real effect, one pure noise. The lasso path
+        // (AIC-selected) should keep the signal and zero the noise.
+        let rng = &mut StdRng::seed_from_u64(0);
+        let n = 60;
+        let (b0_true, b1_true) = (0.8f64, 0.0f64); // second predictor has no effect
+        let mut x = Vec::with_capacity(n);
+        let mut y = Vec::with_capacity(n);
+        let mut off = Vec::with_capacity(n);
+        for _ in 0..n {
+            let x0 = rng.gen_range(-1.5..1.5);
+            let x1 = rng.gen_range(-1.5..1.5); // noise predictor
+            let o = 0.5;
+            let mean = (o + b0_true * x0 + b1_true * x1).exp();
+            // Poisson draw via simple inversion.
+            let mut k = 0;
+            let mut pp = (-mean).exp();
+            let mut f = pp;
+            let u: f64 = rng.gen();
+            while u > f && k < 1000 {
+                k += 1;
+                pp *= mean / k as f64;
+                f += pp;
+            }
+            x.push(vec![x0, x1]);
+            y.push(k as f64);
+            off.push(o);
+        }
+        let coef = poisson_lasso(&x, &y, &off, 100, 0.001);
+        assert!((coef[0] - b0_true).abs() < 0.25, "signal coef {} vs {}", coef[0], b0_true);
+        assert!(coef[1].abs() < 0.1, "noise coef should be ~0, got {}", coef[1]);
+    }
+
+    #[test]
     fn poisson_2param_intercept_only_when_no_spread() {
         // No covariate spread: slope unidentified, intercept still recovered.
         let z = vec![1.0, 1.0, 1.0];
@@ -1007,7 +1199,7 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
         let mut rng = StdRng::seed_from_u64(2);
-        let m = fit_sts(&docs, 2, v, 30, 1e-6, Some(&x), Some(&seed), 1e-3, true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 30, 1e-6, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, &mut rng);
 
         let ks_max = m
             .kappa_s
@@ -1019,5 +1211,30 @@ mod tests {
             *m.bound_history.last().unwrap() >= m.bound_history[0] - 1e-6,
             "bound did not improve overall"
         );
+    }
+
+    #[test]
+    fn lasso_kappa_fits_end_to_end() {
+        // The lasso κ M-step path runs through a full fit and recovers topics.
+        let (docs, x, truth, v) = planted_corpus();
+        let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
+        let mut rng = StdRng::seed_from_u64(3);
+        let est = KappaEst::Lasso { nlambda: 60, lambda_min_ratio: 0.001 };
+        let m = fit_sts(&docs, 2, v, 20, 1e-6, Some(&x), Some(&seed), est, true, &mut rng);
+
+        let tw = m.topic_word();
+        let top0 = (0..v).max_by(|&a, &b| tw[0][a].partial_cmp(&tw[0][b]).unwrap()).unwrap();
+        let topic_for_a = if top0 < 4 { 0 } else { 1 };
+        let theta = m.doc_topics();
+        let correct = theta
+            .iter()
+            .enumerate()
+            .filter(|(d, th)| {
+                let dominant = if th[0] >= th[1] { 0 } else { 1 };
+                let expected = if truth[*d] == 0 { topic_for_a } else { 1 - topic_for_a };
+                dominant == expected
+            })
+            .count();
+        assert!(correct as f64 / theta.len() as f64 > 0.85, "lasso fit only {correct}/60 separated");
     }
 }
