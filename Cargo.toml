@@ -28,6 +28,7 @@ path = "src/bin/show.rs"
 [dependencies]
 rand = "0.8"
 rand_chacha = "0.3"
+rand_pcg = "0.3"
 regex = "1"
 # Serialization for model save/load (pickle via __getstate__/__setstate__).
 serde = { version = "1", features = ["derive"] }

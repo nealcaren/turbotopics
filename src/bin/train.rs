@@ -2,7 +2,7 @@ use topica::{corpus, model, optimize, output, sampler};
 use std::path::Path;
 use std::time::Instant;
 
-use rand_chacha::ChaCha8Rng;
+use rand_pcg::Pcg64Mcg;
 use rand::SeedableRng;
 
 fn print_usage() {
@@ -184,7 +184,7 @@ fn main() {
         );
     }
 
-    let mut rng = ChaCha8Rng::seed_from_u64(args.seed);
+    let mut rng = Pcg64Mcg::seed_from_u64(args.seed);
     m.initialize(&c, &mut rng);
 
     let total_tokens = c.total_tokens();

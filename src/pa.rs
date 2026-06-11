@@ -185,7 +185,7 @@ impl PamModel {
     /// Draw a `(super, sub)` pair for token (d, i)=w from the current state (the
     /// token's counts must already be removed) and add the token back under the
     /// chosen pair.
-    fn assign_token<R: Rng>(&mut self, d: usize, i: usize, w: usize, rng: &mut R) {
+    fn assign_token<R: Rng>(&mut self, d: usize, i: usize, w: usize, probs: &mut [f64], rng: &mut R) {
         let v = self.num_types;
         let s_count = self.num_super;
         let k = self.num_sub;
@@ -194,7 +194,8 @@ impl PamModel {
         // include it for clarity/numeric scaling.
         let super_norm = n_d as f64 + s_count as f64 * self.alpha;
 
-        let mut probs = vec![0.0f64; s_count * k];
+        // `probs` is a reusable scratch buffer (one allocation per sweep, not per
+        // token); the s_count·k entries are all overwritten below.
         for s in 0..s_count {
             let nds = self.nds[d][s] as f64;
             let super_term = (nds + self.alpha) / super_norm;
@@ -208,7 +209,7 @@ impl PamModel {
             }
         }
 
-        let g = sample_index(&probs, rng);
+        let g = sample_index(probs, rng);
         let s = g / k;
         let sub = g % k;
 
@@ -222,6 +223,7 @@ impl PamModel {
 
     /// One full Gibbs sweep over every token.
     fn sweep<R: Rng>(&mut self, docs: &[Vec<u32>], rng: &mut R) {
+        let mut probs = vec![0.0f64; self.num_super * self.num_sub];
         for (d, doc) in docs.iter().enumerate() {
             for (i, &w) in doc.iter().enumerate() {
                 let w = w as usize;
@@ -231,7 +233,7 @@ impl PamModel {
                 self.ndsk[d][s_old][k_old] -= 1;
                 self.nkw[k_old][w] -= 1;
                 self.nk[k_old] -= 1;
-                self.assign_token(d, i, w, rng);
+                self.assign_token(d, i, w, &mut probs, rng);
             }
         }
     }

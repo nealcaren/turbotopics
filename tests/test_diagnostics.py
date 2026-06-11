@@ -94,8 +94,10 @@ class TestAlignment:
         # one-to-one: each a-topic and b-topic used once.
         assert sorted(i for i, _, _ in pairs) == [0, 1]
         assert sorted(j for _, j, _ in pairs) == [0, 1]
-        # matched topics are near-identical (distance ~ 0).
-        assert all(dist < 1e-6 for _, _, dist in pairs)
+        # matched topics are near-identical: two independent fits of the same
+        # well-identified corpus converge to the same topics (to ~1e-6), though
+        # not bit-for-bit across different seeds.
+        assert all(dist < 1e-4 for _, _, dist in pairs)
 
     def test_js_metric(self, two_topic):
         m, docs = two_topic

@@ -36,7 +36,7 @@ class TestInference:
     def test_recovers_planted_blocks(self):
         docs, vocab, n_blocks = _planted_corpus()
         m = HDP(seed=1, alpha=1.0, gamma=1.0)
-        m.fit(docs, iters=120)
+        m.fit(docs, iters=200)
         wps = len(vocab) // n_blocks
         blocks = [
             set(vocab[b * wps : (b + 1) * wps]) for b in range(n_blocks)

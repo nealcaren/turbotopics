@@ -6,6 +6,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Changed
+
+- The collapsed-Gibbs samplers (LDA, DMR, LabeledLDA, SeededLDA, KeyATM, PA, PT,
+  HDP, GSDMM, SAGE) now draw from a fast non-cryptographic PRNG (PCG) instead of
+  ChaCha8. Gibbs sampling needs uniform draws, not cryptographic entropy, and PCG
+  is faster: single-threaded, HDP is ~2x faster, LDA ~10% and keyATM ~9% (#67).
+  Fits remain reproducible from a fixed seed, but **the random stream changed**,
+  so a given seed now yields different (still-deterministic) topics than in
+  0.15.0; pin a topica version if you need to reproduce an earlier fit exactly.
+  The variational models (CTM, STM, STS, DTM, supervised LDA, ETM, ProdLDA,
+  FASTopic) and the embedding-cluster models are unchanged.
+
 ### Fixed
 
 - `HDP` no longer runs away to hundreds of topics on real corpora (#68). The

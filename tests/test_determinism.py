@@ -13,9 +13,9 @@ _SPACE_DOCS = [["planet", "star", "moon", "rocket", "planet"] for _ in range(15)
 _TOY_DOCS = _ANIMAL_DOCS + _SPACE_DOCS
 
 
-def _fit(seed: int, **kwargs) -> np.ndarray:
+def _fit(seed: int, num_topics: int = 2, **kwargs) -> np.ndarray:
     """Return topic_word from a quickly fitted model."""
-    model = LDA(2, seed=seed, optimize_interval=0, **kwargs)
+    model = LDA(num_topics, seed=seed, optimize_interval=0, **kwargs)
     model.fit(
         _TOY_DOCS,
         iters=100,
@@ -52,8 +52,13 @@ class TestSameSeed:
 
 class TestDifferentSeeds:
     def test_different_seeds_different_topic_word(self):
-        tw42 = _fit(seed=42)
-        tw99 = _fit(seed=99)
+        # Over-specify K (5 topics for a 2-cluster corpus): the extra topics
+        # are split seed-dependently, so the seed genuinely affects the fit. On
+        # a fully identified corpus (K = number of clusters) the sampler
+        # converges to the unique solution for any seed, which is correct but
+        # makes "different seeds differ" untestable.
+        tw42 = _fit(seed=42, num_topics=5)
+        tw99 = _fit(seed=99, num_topics=5)
         assert not np.array_equal(tw42, tw99), (
             "Two runs with different seeds produced identical topic_word matrices "
             "(extremely unlikely to be correct)"
