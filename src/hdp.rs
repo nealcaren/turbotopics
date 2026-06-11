@@ -310,11 +310,14 @@ impl HdpModel {
     /// Draw a topic for token (j, i)=w from the current state (counts for this
     /// token must already be removed), instantiating a fresh topic if drawn, and
     /// add the token back under the chosen topic.
-    fn assign_token<R: Rng>(&mut self, j: usize, i: usize, w: usize, rng: &mut R) {
+    fn assign_token<R: Rng>(&mut self, j: usize, i: usize, w: usize, probs: &mut Vec<f64>, rng: &mut R) {
         let v = self.num_types;
         let base = 1.0 / v as f64; // base-measure likelihood for a fresh topic
         let k = self.nk.len();
-        let mut probs = vec![0.0f64; k + 1];
+        // Reusable scratch (one allocation per sweep, not per token); resized to
+        // k+1 each call because K grows as fresh topics are instantiated.
+        probs.clear();
+        probs.resize(k + 1, 0.0);
         for t in 0..k {
             let f =
                 (self.nkw[t][w] as f64 + self.eta) / (self.nk[t] as f64 + v as f64 * self.eta);
@@ -322,7 +325,7 @@ impl HdpModel {
         }
         probs[k] = self.alpha * self.beta_u * base;
 
-        let k_new = sample_index(&probs, rng);
+        let k_new = sample_index(probs, rng);
         if k_new == k {
             // Instantiate a new topic; break a Beta(1, γ) piece off β_u.
             let b = sample_beta_dist(1.0, self.gamma, rng);
@@ -343,6 +346,7 @@ impl HdpModel {
 
     /// One full Gibbs sweep over every token, instantiating new topics as drawn.
     fn sweep<R: Rng>(&mut self, docs: &[Vec<u32>], rng: &mut R) {
+        let mut probs: Vec<f64> = Vec::new();
         for (j, doc) in docs.iter().enumerate() {
             for (i, &w) in doc.iter().enumerate() {
                 let w = w as usize;
@@ -350,7 +354,7 @@ impl HdpModel {
                 self.nkw[k_old][w] -= 1;
                 self.nk[k_old] -= 1;
                 self.njk[j][k_old] -= 1;
-                self.assign_token(j, i, w, rng);
+                self.assign_token(j, i, w, &mut probs, rng);
             }
         }
     }
@@ -392,9 +396,10 @@ pub fn fit_hdp<R: Rng>(
     };
 
     // Sequential CRF init: place each token in turn, growing topics as needed.
+    let mut probs: Vec<f64> = Vec::new();
     for (j, doc) in docs.iter().enumerate() {
         for (i, &w) in doc.iter().enumerate() {
-            model.assign_token(j, i, w as usize, rng);
+            model.assign_token(j, i, w as usize, &mut probs, rng);
         }
     }
     // Establish a proper β from the initial table counts.

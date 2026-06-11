@@ -141,7 +141,7 @@ fn sample_index<R: Rng>(probs: &[f64], rng: &mut R) -> usize {
 impl PtmModel {
     /// Sample a new topic for token (d, i) with word w, given pseudo-doc p.
     /// Removes the token from counts before sampling, then re-adds.
-    fn resample_token<R: Rng>(&mut self, d: usize, i: usize, w: usize, rng: &mut R) {
+    fn resample_token<R: Rng>(&mut self, d: usize, i: usize, w: usize, probs: &mut [f64], rng: &mut R) {
         let p = self.l[d];
         let k_old = self.z[d][i];
         // Remove token from counts.
@@ -152,14 +152,15 @@ impl PtmModel {
 
         let k = self.num_topics;
         let v = self.num_types;
-        let mut probs = vec![0.0f64; k];
+        // `probs` is a reusable scratch buffer (one allocation per sweep, not per
+        // token); the k entries are all overwritten below.
         for kk in 0..k {
             let topic_doc = self.npk[p][kk] as f64 + self.alpha;
             let topic_word =
                 (self.nkw[kk][w] as f64 + self.beta) / (self.nk[kk] as f64 + v as f64 * self.beta);
             probs[kk] = topic_doc * topic_word;
         }
-        let k_new = sample_index(&probs, rng);
+        let k_new = sample_index(probs, rng);
 
         self.nkw[k_new][w] += 1;
         self.nk[k_new] += 1;
@@ -234,9 +235,10 @@ impl PtmModel {
     /// pseudo-doc assignment.
     fn sweep<R: Rng>(&mut self, docs: &[Vec<u32>], rng: &mut R) {
         // --- Token topics ---
+        let mut probs = vec![0.0f64; self.num_topics];
         for (d, doc) in docs.iter().enumerate() {
             for (i, &w) in doc.iter().enumerate() {
-                self.resample_token(d, i, w as usize, rng);
+                self.resample_token(d, i, w as usize, &mut probs, rng);
             }
         }
         // --- Pseudo-doc assignments ---
