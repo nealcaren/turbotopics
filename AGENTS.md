@@ -5,6 +5,12 @@ scientist run topic models with `topica`. It is a working guide, not an API
 reference; the API lives at <https://nealcaren.github.io/topica/>. Read it before
 you write code that fits a model or reports a result.
 
+If instead you are *extending* topica (adding a model, a diagnostic, or a
+binding), this is the wrong file. See [`CONTRIBUTING-MODELS.md`](CONTRIBUTING-MODELS.md)
+and the [estimator contract](https://nealcaren.github.io/topica/contributing/estimator-contract/)
+for the Rust `Estimator` trait, the conformance checks every model is held to,
+and the add-a-model checklist. This guide is about using topica, not building it.
+
 The one idea to carry through everything below: **topica and the agent supply the
 mechanics and the honest diagnostics; the researcher owns the theory.** A topic
 model is a measurement instrument, not a discovery oracle. The decisions that
@@ -39,9 +45,10 @@ If you have internalized the usual computational-text-analysis guidance ("STM is
 R-only", "use BERTopic for the neural approach in Python", "covariates mean you
 have to leave Python"), update it. With topica:
 
-- **STM, CTM, SAGE, DMR, and keyATM all run in Python**, validated against their
-  reference implementations. A covariate-aware topic model no longer forces a
-  switch to R.
+- **STM, CTM, SAGE, STS, DMR, and keyATM all run in Python**, validated against
+  their reference implementations. A covariate-aware topic model, including
+  covariate-driven *sentiment* (`STS`, the sentiment-discourse extension of STM),
+  no longer forces a switch to R.
 - **Classical and neural live side by side.** `BERTopic`, `Top2Vec`, `ETM`, and
   `FASTopic` take embedding vectors you supply (no PyTorch in the wheel) and sit
   next to LDA and STM behind the same diagnostics. You can compare them on one
@@ -70,7 +77,9 @@ different tools:
   not want to fix `K`.
 - **Measurement** ("how much does theme X vary by group/time?") → `STM` or
   `DMR`, with the grouping or time variable as a prevalence covariate, plus
-  `estimate_effect`.
+  `estimate_effect`. If the question is about the *tone* of a theme rather than
+  its prevalence (how positively or negatively a theme is discussed, and how that
+  varies by covariate), `STS` adds a sentiment-discourse latent on top of STM.
 - **Confirmatory** ("do documents express concept X?") → often *not* a topic
   model. A dictionary, `KeyATM` / `SeededLDA` (guided by seed words), or a
   classifier fits a known target better than unsupervised topics do.
@@ -157,6 +166,10 @@ Algorithmic output is not ground truth. Before any topic becomes a finding:
 
 - **Stability.** Refit under different seeds and check the topics persist:
   `bootstrap_stability`. topica's determinism makes this a clean test.
+- **Consensus across runs.** `select_model` fits several seeds and keeps the best
+  by a quality score; `ensemble` goes further and combines independent runs into
+  a consensus set of topics more reliable than any single fit. Reach for these
+  when a topic has to be stable to carry a claim.
 - **Coherence and exclusivity.** `coherence` (`u_mass`, `c_v`, `c_uci`,
   `c_npmi`), `exclusivity`, `topic_diversity`.
 - **Human validation.** `word_intrusion` and `document_intrusion` build the
@@ -239,13 +252,14 @@ with the diagnostics to defend each one.
 ## Quick reference
 
 - **Build:** `Corpus.from_documents`, `tokenize`, `learn_phrases` / `apply_phrases`
-- **Models:** `LDA`, `STM`, `CTM`, `DMR`, `HDP`, `KeyATM`, `SeededLDA`,
-  `BERTopic`, `GSDMM` (short text), and more in the README table
+- **Models:** `LDA`, `STM`, `CTM`, `STS` (sentiment), `DMR`, `HDP`, `KeyATM`,
+  `SeededLDA`, `BERTopic`, `GSDMM` (short text), and more in the README table
 - **Read topics:** `top_words`, `label_topics`, `frex`, `relevance`,
   `find_thoughts`, `topic_table`, `summary`
 - **Choose K:** `search_k`, `quality_frontier`, `topica.viz.search_k`
 - **Validate:** `coherence`, `exclusivity`, `topic_diversity`,
   `bootstrap_stability`, `word_intrusion`, `document_intrusion`, `diagnostics`
+- **Reliability across runs:** `select_model`, `ensemble`
 - **Effects:** `estimate_effect`, `standard_errors`, `posterior_theta_samples`,
   `topica.viz.effect_plot`
 - **Compare corpora:** `fighting_words`
