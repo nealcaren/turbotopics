@@ -17,6 +17,8 @@ use rand::Rng;
 
 use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
+use crate::estimator::{Estimator, ModelFamily};
+use crate::variational::LogisticNormalModel;
 use rayon::prelude::*;
 
 /// Prior on the prevalence coefficients γ in the STM M-step.
@@ -447,6 +449,49 @@ impl CtmModel {
     }
 }
 
+impl Estimator for CtmModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> &[Vec<f64>] {
+        &self.beta
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topics()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::LogisticNormal
+    }
+}
+
+impl LogisticNormalModel for CtmModel {
+    fn eta_dim(&self) -> usize {
+        self.num_topics - 1
+    }
+
+    fn eta_mean(&self) -> &[Vec<f64>] {
+        &self.lambda
+    }
+
+    fn eta_cov(&self) -> &[Vec<f64>] {
+        &self.nu
+    }
+}
 
 /// Infer the topic proportions θ (length K) for a *new* document by the
 /// variational E-step against fixed global parameters: the topic-word matrix
@@ -1172,6 +1217,48 @@ mod tests {
         }
 
         (x, lam, true_coef)
+    }
+
+    #[test]
+    fn ctm_conforms() {
+        use crate::conformance::{check_conformance, check_logistic_normal};
+        use crate::variational::LogisticNormalModel;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let docs: Vec<Vec<u32>> = vec![
+            vec![0, 1, 0, 1, 2],
+            vec![1, 2, 1, 2, 0],
+            vec![2, 0, 2, 0, 1],
+            vec![0, 0, 1, 2, 0],
+            vec![1, 1, 2, 0, 1],
+            vec![2, 2, 0, 1, 2],
+        ];
+        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, &mut rng);
+
+        let base_violations = check_conformance(&model);
+        assert!(
+            base_violations.is_empty(),
+            "check_conformance violations: {:?}",
+            base_violations
+        );
+
+        let ln_violations = check_logistic_normal(&model);
+        assert!(
+            ln_violations.is_empty(),
+            "check_logistic_normal violations: {:?}",
+            ln_violations
+        );
+
+        assert_eq!(
+            model.eta_dim(),
+            model.num_topics - 1,
+            "eta_dim should be num_topics - 1"
+        );
+        assert_eq!(
+            model.eta_mean().len(),
+            model.eta_cov().len(),
+            "eta_mean and eta_cov should have the same number of rows (one per document)"
+        );
     }
 
     #[test]
