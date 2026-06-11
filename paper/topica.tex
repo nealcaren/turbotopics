@@ -329,6 +329,7 @@ Model & What it is for & Reference \\
 \code{CTM}          & Correlated topics (logistic-normal)                  & \citet{blei2007ctm} \\
 \code{ProdLDA}      & Sharper topics via a product-of-experts VAE          & \citet{srivastava2017prodlda} \\
 \code{STM}          & Prevalence \emph{and} content covariates             & \citet{roberts2016model} \\
+\code{STS}          & Covariate-driven topic sentiment-discourse on STM    & \citet{chen2024sts} \\
 \code{SAGE}         & A topic worded differently across groups             & \citet{eisenstein2011sage} \\
 \code{HDP}          & Infers the number of topics                          & \citet{teh2006hdp} \\
 \code{DTM}          & Topics that evolve across time slices                & \citet{blei2006dtm} \\
@@ -350,7 +351,12 @@ Two implementations carry most of the weight for social-science users and are
 worth singling out. The structural topic model is implemented in full, with
 topic prevalence and topic content both allowed to depend on covariates through
 the SAGE mechanism, so the same topic can be worded differently across groups
-while its prevalence is regressed on metadata. The keyword-assisted model is also
+while its prevalence is regressed on metadata. Its recent extension, the
+structural topic and sentiment-discourse model \citep[\code{STS};][]{chen2024sts},
+is also implemented in full: it adds a per-document, per-topic continuous
+sentiment-discourse variable that shifts the wording within a topic, with both
+prevalence and sentiment driven by covariates, fit by the same Laplace
+variational EM. The keyword-assisted model is also
 implemented in full, covering the base, covariate, and dynamic variants, the
 information-theoretic token weighting, and the change-point hidden Markov model
 \citep{chib1998changepoint} of the dynamic specification, whose smoothed time
@@ -411,6 +417,29 @@ Validation is not optional.
 checks that topics persist across seeds, and \code{word\_intrusion} and
 \code{document\_intrusion} build the human-validation tasks of
 \citet{chang2009reading}.
+
+\subsection{Combine runs into a reliable consensus}\label{sec:ensemble}
+
+A single fit is one draw from a stochastic procedure, and the topics it returns
+can move from one random seed to the next---enough that recent work questions
+whether the newer neural models are reproducible at all \citep{hoyle2022broken}.
+The disciplined response is not to fit once and hope, nor to fit many and quietly
+pick the most convenient, but to combine independent runs into a consensus that is
+more reliable than any single fit. \code{topica.select\_model} fits a model from
+many seeds, and \code{topica.ensemble} reduces those runs to one consensus model
+that carries the usual \code{topic\_word}/\code{doc\_topic} contract, so it flows
+into the same diagnostics as any other fit. Each consensus topic reports a
+stability score and a reliability flag, so a topic the individual runs do not in
+fact agree on is marked rather than silently trusted. Three methods are provided:
+\code{cluster} (the default) pools the topics from every run and clusters them,
+following \citet{hoyle2022broken}; \code{align} matches each run to a reference by
+optimal assignment and averages; and \code{stable} reimplements \pkg{gensim}'s
+\code{EnsembleLda} \citep{rehurek2010gensim}, which discovers the number of
+reproducible topics from the data and discards the rest as noise. The
+reimplementation agrees with \pkg{gensim} to floating-point precision on shared
+input (\code{parity/ensemblelda\_gensim\_compare.py}). Because the procedure
+operates on any model's topic-word and document-topic matrices, the same
+reliability tooling applies across the whole family, neural models included.
 
 \subsection{Measure effects with honest uncertainty}
 
@@ -522,6 +551,18 @@ distributions agree at a cosine of $0.999$--$1.000$ (\code{parity/stm\_content\_
 The parameters replicate, and so does the conclusion: on the canonical vignettes
 \pkg{topica} recovers the same prevalence effects the package documents, with
 honest standard errors from the method of composition.
+
+\paragraph{Sentiment-discourse model.} The same yardstick validates \code{STS}.
+Against the published poliblog fit from the \proglang{R} \pkg{sts} package
+\citep{chen2024sts}, on the identical corpus, \pkg{topica}'s topics agree at a
+topic-word cosine in the mid-$0.90$s---the same neighborhood in which its
+\code{STM} agrees with \proglang{R} \pkg{stm}, as one expects since \code{STS}
+extends \code{STM}, and well above the agreement between either and a different
+model (\code{parity/sts\_r\_compare.py}). The check is deliberately benchmarked
+against the \code{STM} baseline rather than an absolute threshold: on a
+well-conditioned corpus the two engines land on the same solution, while on a
+small, unstable corpus they diverge no more for \code{STS} than for the already
+validated \code{STM}.
 
 %% ===========================================================================
 \section{Performance}\label{sec:performance}
