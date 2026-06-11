@@ -77,6 +77,12 @@ def _fit_model(name: str, factory):
         model.fit(_TOY, prevalence, iters=5)
         return model
 
+    # STS: requires a per-document sentiment_seed (the aggregation groups)
+    if name == "STS":
+        sent = [float(i % 3) for i in range(len(_TOY))]
+        model.fit(_TOY, sent, iters=5)
+        return model
+
     # ETM: requires positional word_embeddings and vocabulary
     if name == "ETM":
         import topica

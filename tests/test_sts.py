@@ -103,6 +103,45 @@ class TestAnalysisSurface:
         assert m.sentiment.shape == (len(docs), 2)
 
 
+class TestPersistenceAndTransform:
+    def test_doc_names(self):
+        docs, sent_seed, prev, _ = _planted()
+        m = topica.STS(num_topics=2, seed=1)
+        m.fit(docs, sentiment_seed=sent_seed, prevalence=prev, iters=15)
+        assert m.doc_names == [f"doc_{i}" for i in range(len(docs))]
+
+    def test_transform_shape_and_normalization(self):
+        docs, sent_seed, prev, _ = _planted()
+        m = topica.STS(num_topics=2, seed=1)
+        m.fit(docs, sentiment_seed=sent_seed, prevalence=prev, iters=20)
+        held = [A[:4], B[:4], ["???", "out-of-vocab"]]
+        th = m.transform(held)
+        assert th.shape == (3, 2)
+        np.testing.assert_allclose(th.sum(axis=1), 1.0, atol=1e-9)
+        # an all-OOV document falls back to a uniform prevalence
+        np.testing.assert_allclose(th[2], [0.5, 0.5], atol=1e-9)
+        # a clearly topic-A document leans to the topic that owns the A block
+        a_top = max(range(2), key=lambda t: th[0, t])
+        b_top = max(range(2), key=lambda t: th[1, t])
+        assert a_top != b_top
+
+    def test_save_load_round_trip(self, tmp_path):
+        docs, sent_seed, prev, _ = _planted()
+        m = topica.STS(num_topics=2, seed=1)
+        m.fit(docs, sentiment_seed=sent_seed, prevalence=prev, iters=20)
+        p = str(tmp_path / "model.sts")
+        m.save(p)
+        m2 = topica.STS.load(p)
+        for attr in ("topic_word", "doc_topic", "sentiment", "eta_mean", "eta_cov"):
+            np.testing.assert_array_equal(
+                np.asarray(getattr(m, attr)), np.asarray(getattr(m2, attr))
+            )
+        assert m2.prevalence_effects.shape == m.prevalence_effects.shape
+        # the reloaded model transforms identically
+        held = [A[:4], B[:4]]
+        np.testing.assert_allclose(m2.transform(held), m.transform(held), atol=1e-12)
+
+
 class TestErrors:
     def test_num_topics_too_small(self):
         with pytest.raises(ValueError):

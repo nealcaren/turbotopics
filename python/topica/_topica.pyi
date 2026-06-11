@@ -624,6 +624,24 @@ class STS:
         (num_docs, 2*num_topics-1, 2*num_topics-1)."""
         ...
     @property
+    def doc_names(self) -> list[str]:
+        """Document labels (row order of doc_topic); default index strings."""
+        ...
+    def transform(
+        self, data: Corpus | Sequence[Sequence[str]]
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Infer topic prevalence theta for new documents by the Laplace E-step
+        against the fitted globals (kappa, m, Sigma) with a zero prior mean.
+        Out-of-vocabulary tokens are dropped. Returns (num_docs, num_topics)."""
+        ...
+    def save(self, path: str) -> None:
+        """Save the fitted model to path. Reload with STS.load."""
+        ...
+    @staticmethod
+    def load(path: str) -> STS:
+        """Load a model previously written by save."""
+        ...
+    @property
     def bound(self) -> float: ...
     @property
     def bound_history(self) -> list[float]: ...

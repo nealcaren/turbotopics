@@ -114,16 +114,15 @@ pub struct RegistryEntry {
 ///
 /// `STM`/`CTM` and the `LDA`/`DMR`/`LabeledLDA` group share one backing struct
 /// (`CtmModel`, `TopicModel`) but are listed under their user-facing names to
-/// match the Python registry. `STS` is intentionally absent: it is logistic-
-/// normal at the Rust level (StsModel implements the trait) but is not yet in
-/// the Python `REGISTRY` pending its save/load/transform surface (issue #74
-/// follow-up). The embedding-cluster models (`BERTopic`, `Top2Vec`) carry a
-/// `topic_word`/`doc_topic` from their Rust struct and so participate here.
+/// match the Python registry. The embedding-cluster models (`BERTopic`,
+/// `Top2Vec`) carry a `topic_word`/`doc_topic` from their Rust struct and so
+/// participate here.
 #[allow(dead_code)]
 pub const RUST_ESTIMATORS: &[RegistryEntry] = &[
     // Logistic-normal variational (eta posterior).
     RegistryEntry { name: "STM", family: ModelFamily::LogisticNormal, exempt: &[] },
     RegistryEntry { name: "CTM", family: ModelFamily::LogisticNormal, exempt: &[] },
+    RegistryEntry { name: "STS", family: ModelFamily::LogisticNormal, exempt: &[] },
     // Collapsed-Gibbs / Dirichlet doc-topic posterior.
     RegistryEntry { name: "LDA", family: ModelFamily::Dirichlet, exempt: &[] },
     RegistryEntry { name: "DMR", family: ModelFamily::Dirichlet, exempt: &[] },
@@ -164,7 +163,7 @@ mod registry_tests {
                 assert!(METHODS.contains(&req), "{}: unknown exempt method {req:?}", e.name);
             }
         }
-        // Mirror of the Python REGISTRY size (20 user-facing models; STS pending).
-        assert_eq!(RUST_ESTIMATORS.len(), 20, "registry size drifted from the Python REGISTRY");
+        // Mirror of the Python REGISTRY size (21 user-facing models).
+        assert_eq!(RUST_ESTIMATORS.len(), 21, "registry size drifted from the Python REGISTRY");
     }
 }
