@@ -821,6 +821,61 @@ clustered-by-blog standard errors, is the script that produced this figure
 package documentation.
 
 %% ===========================================================================
+\section{Extending topica}\label{sec:extending}
+%% ===========================================================================
+
+Section~\ref{sec:design} showed the contract from the outside: any object that
+presents the analysis surface is scored and compared like a built-in model. This
+section is about the inside---adding a model that ships with the package---and the
+machinery that keeps doing so cheap and hard to get wrong.
+
+The contract is not only a \proglang{Python} convention; it is a trait in the
+\proglang{Rust} core. Every fitted model implements an \code{Estimator} trait
+that exposes the number of topics, the two distributions $\phi$ and $\theta$, the
+per-iteration convergence trace, and the model's inference family. Two further
+traits carry the family-specific posterior: the collapsed-Gibbs models implement
+\code{DirichletModel} (the document-topic concentration, retained posterior
+draws, and document lengths), and the logistic-normal models implement
+\code{LogisticNormalModel} (the variational mean and covariance of the latent
+$\eta$). Because the traits operate on the fitted state rather than the
+\proglang{Python} objects, they are exercised by the \proglang{Rust} test suite
+with no interpreter in the loop, and they are the single, language-agnostic
+binding point a second frontend would target rather than the per-model
+\pkg{PyO3} bindings.
+
+A new model reuses the shared machinery rather than reimplementing it. The
+logistic-normal family---the correlated and structural topic models and the
+structural topic-and-sentiment extension---fits through one parallel Laplace
+E-step driver that collects its per-document results in corpus order, so a new
+variational model inherits both the determinism guarantee of
+Section~\ref{sec:design} and a tuned implementation of the inner loop rather than
+writing its own. The collapsed-Gibbs models share their sampler and
+hyperparameter optimization in the same way.
+
+The conformance specification of Section~\ref{sec:design} has a counterpart in the
+core, and together they hold a model to its surface in both languages: a
+parametrized \proglang{Python} test checks every registered estimator on each
+continuous-integration run, and a \proglang{Rust} test fits each model and asserts
+that it satisfies its trait. The value of enforcing the contract at the source is
+concrete. When we added the structural topic-and-sentiment model, requiring it to
+implement \code{LogisticNormalModel} forced its variational posterior over the
+sentiment-discourse latent into existence---a quantity the initial port had
+computed internally and then discarded. A model cannot satisfy the trait without
+exposing that posterior, so the omission failed a test rather than shipping as a
+silent gap, and the method-of-composition uncertainty of
+Section~\ref{sec:workflow} became available for the new model for free.
+
+Adding a model is therefore a bounded, well-specified task. The implementer
+writes the algorithm in \proglang{Rust} with planted-data recovery and
+determinism tests, implements \code{Estimator} and the relevant family trait,
+adds a conformance test, and registers the model; the \pkg{PyO3} binding and the
+entire analysis and reporting surface then apply with no further code. An
+implementer's guide that ships with the package documents each step, and the
+machine-readable contract makes a missing piece a failing test rather than a
+latent defect. The result is that the cost of a new model scales with the novelty
+of its algorithm, not with the plumbing around it.
+
+%% ===========================================================================
 \section{Discussion}\label{sec:discussion}
 %% ===========================================================================
 
