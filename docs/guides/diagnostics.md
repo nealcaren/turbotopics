@@ -80,6 +80,53 @@ topica.topic_stability([model_a, model_b], topn=10)       # cross-fit term overl
 topica.check_residuals(model, docs)                       # Taddy dispersion: is K too small?
 ```
 
+## Ensemble: combining runs
+
+A single fit is one draw from a noisy procedure. Change the seed and the topics
+move, sometimes a lot, and neural models are worse than classical ones (Hoyle et
+al. 2022). Rather than fit once and hope, or fit many and pick one with
+`select_model`, we can combine independent runs into a consensus that is more
+reliable than any single run. In Hoyle et al.'s experiments the ensemble beats the
+median run in 97% of settings and never loses to the worst.
+
+`ensemble` takes the runs (a list of fitted models, raw topic-word arrays, or a
+`select_model` result) and returns a consensus that behaves like a fitted model:
+it carries `topic_word`, `doc_topic`, and `vocabulary`, so it flows straight into
+`coherence`, the diagnostics, and the rest. Each consensus topic reports a
+`stability` score and a `reliable` flag, so a topic the runs do not actually agree
+on is marked rather than trusted.
+
+```python
+runs = topica.select_model(docs, K=20, runs=10)   # ten initializations
+cons = topica.ensemble(runs)                       # combine them
+
+cons.topic_word.shape       # (20, V)
+cons.stability              # per-topic agreement across runs, in [0, 1]
+cons.reliable               # per-topic: consistent AND well-supported?
+topica.coherence(cons, docs)
+```
+
+Three methods are available:
+
+- `method="cluster"` (default) reproduces Hoyle et al. (§6): pool the topics from
+  every run, measure a top-weighted rank distance between them that blends the
+  topic-word and document-topic views (`lambda_`), cluster the pool into K groups,
+  and average within each cluster. Clustering tolerates a topic that splits or
+  merges across runs, and flags a cluster that few runs supported.
+- `method="align"` is a lighter, fully deterministic alternative: match every
+  run's topics one-to-one to a reference run (Hungarian on the topic-word
+  distributions) and average the aligned topics.
+- `method="stable"` reimplements gensim's `EnsembleLda` (Brigl 2019). It does not
+  fix K: it finds dense, reproducible "cores" with Checkback DBSCAN and keeps only
+  the clusters with enough cores as stable topics, discarding the rest as noise.
+  Use it to let the data decide how many topics are reproducible. It is validated
+  against gensim to floating-point precision.
+
+```python
+topica.ensemble(runs, method="align")                  # reference matching
+topica.ensemble(runs, method="stable", eps=0.1)        # discover stable topics
+```
+
 ## Convergence
 
 Every iterative model exposes a uniform convergence interface. `model.fit_history`
