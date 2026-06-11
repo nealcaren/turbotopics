@@ -53,31 +53,43 @@ Java MALLET (a different RNG) it recovers the same topics (cosine 1.000). On fit
 time it is roughly at parity with Java MALLET — and adds no JVM startup, unlike
 the JVM samplers or pure-Python gensim.
 
-Against [tomotopy](https://github.com/bab2min/tomotopy), a C++/SIMD library in
-the same performance tier, plain LDA is a wash, and which one wins depends on
-threading. 200 Gibbs iterations, fit time only.
+Against [tomotopy](https://github.com/bab2min/tomotopy), a C++/SIMD library,
+which one is faster turns on the number of topics K, because the two make
+opposite algorithmic bets. tomotopy computes a dense topic distribution for every
+token and vectorizes it with Eigen, which is fastest when K is small; topica
+(like MALLET) uses a sparse sampler that visits only the topics a word actually
+occupies, which wins when K is large. On a 3,500-document, 2,632-word corpus (200
+Gibbs iterations, single core, fit time only) the two cross near K=200:
 
-**Single core** (exact, `num_threads=1` / `workers=1`): tomotopy's tighter inner
-loop is about 20% ahead.
+| K | topica | tomotopy | faster |
+|---:|-------:|---------:|--------|
+| 20 | 12.1s | 5.3s | tomotopy 2.3× |
+| 50 | 13.4s | 7.4s | tomotopy 1.8× |
+| 100 | 15.0s | 11.1s | tomotopy 1.35× |
+| 200 | 18.1s | 19.1s | topica 1.06× |
+| 400 | 23.8s | 35.1s | topica 1.48× |
 
-| docs | vocab | K | topica | tomotopy |
-|------:|------:|---:|-------:|---------:|
-| 2,000 | 1,000 | 20 | 1.84s | 1.59s |
-| 5,000 | 2,000 | 50 | 6.58s | 5.37s |
-| 10,000 | 3,000 | 50 | 14.2s | 11.3s |
+topica's time barely moves as K grows, because the sparse sampler touches only
+the topics each word occupies; tomotopy's rises with K, because it scores all K
+every token. Fine-grained topic models, the large-K regime social scientists
+often want, favor topica's sampler; small-K fits favor tomotopy's. Either way
+topica also retains the MCMC posterior draws its uncertainty tooling needs
+(`composition_theta`, `prevalence_ci`) at no measurable extra cost, which neither
+MALLET nor tomotopy computes at all.
 
-**All cores** (both use approximate parallel Gibbs): topica's document-partitioned
-parallelism scales better at these sizes, so it pulls even or slightly ahead.
+## Memory
 
-| docs | vocab | K | topica | tomotopy |
-|------:|------:|---:|-------:|---------:|
-| 2,000 | 1,000 | 20 | 0.49s | 0.73s |
-| 5,000 | 2,000 | 50 | 1.54s | 1.82s |
-| 10,000 | 3,000 | 50 | 2.83s | 2.73s |
+topica holds the corpus and model state in compact native arrays, so it also fits
+in a fraction of the reference tools' memory. Fitting the structural topic model
+on the poliblog corpus, peak resident memory:
 
-We report this straight: for plain LDA the two are interchangeable on speed.
-topica's advantage is the STM, covariate-effect, and diagnostics stack built
-around the sampler, not raw LDA throughput.
+| docs | topica STM | R `stm` |
+|-----:|-----------:|--------:|
+| 2,000 | 287 MB | 1,463 MB |
+| 3,500 | 375 MB | 1,504 MB |
+| 5,000 | 463 MB | 1,737 MB |
+
+About a quarter of R `stm`'s footprint, and the gap widens with corpus size.
 
 ## keyATM vs R `keyATM`
 
