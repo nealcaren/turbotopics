@@ -615,6 +615,37 @@ pub fn fit_dtm<R: Rng>(
     DtmModel { num_topics: k, num_times: t, num_types: v, alpha, chains, bound }
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for DtmModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    // The Estimator surface reports the final time slice; full trajectories are
+    // available via topic_word_matrix(t).
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word_matrix(self.num_times - 1)
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        // DTM is time-sliced; no static D×K matrix — EXEMPT.
+        Vec::new()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,5 +737,18 @@ mod tests {
         let m2 = fit_dtm(&docs, &times, v, 2, 3, 0.01, 0.005, 0.5, 8, &mut r2);
         assert_eq!(m1.topic_word(0, 0), m2.topic_word(0, 0));
         assert_eq!(m1.topic_word(1, 2), m2.topic_word(1, 2));
+    }
+
+    #[test]
+    fn dtm_conforms() {
+        let v = 12;
+        let docs: Vec<Vec<u32>> = (0..30)
+            .map(|d| (0..6).map(|i| ((i + d) % v) as u32).collect())
+            .collect();
+        let times: Vec<usize> = (0..30).map(|d| d % 3).collect();
+        let mut rng = ChaCha8Rng::seed_from_u64(5);
+        let m = fit_dtm(&docs, &times, v, 2, 3, 0.01, 0.005, 0.5, 8, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

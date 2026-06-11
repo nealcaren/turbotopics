@@ -572,6 +572,38 @@ pub fn fit_fastopic<R: Rng>(
     model
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for FastopicModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic.clone()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.loss_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,5 +776,28 @@ mod tests {
             covered.insert(*blocks.iter().next().unwrap());
         }
         assert_eq!(covered.len(), k, "topics did not cover all {k} blocks");
+    }
+
+    #[test]
+    fn fastopic_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let (k, block, h) = (3usize, 6usize, 3usize);
+        let v = k * block;
+        let docs: Vec<Vec<u32>> = (0..120)
+            .map(|d| {
+                let b = d % k;
+                (0..10).map(|_| (b * block + (rng.gen::<f64>() * block as f64) as usize) as u32).collect()
+            })
+            .collect();
+        let doc_emb: Vec<Vec<f64>> = docs
+            .iter()
+            .map(|doc| {
+                let b = doc[0] as usize / block;
+                (0..h).map(|dim| if dim == b { 3.0 } else { 0.0 } + (rng.gen::<f64>() - 0.5) * 0.3).collect()
+            })
+            .collect();
+        let m = fit_fastopic(&docs, &doc_emb, k, v, 300, 0.05, 3.0, 2.0, 1.0, 1e-6, 50, 1e-4, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

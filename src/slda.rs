@@ -323,6 +323,54 @@ pub fn fit_slda<R: Rng>(
      bound_history, converged)
 }
 
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
+
+impl Estimator for SldaModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        // The bound history is returned separately by fit_slda, not stored — leave empty.
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::Dirichlet
+    }
+}
+
+impl DirichletModel for SldaModel {
+    fn alpha(&self) -> Vec<f64> {
+        vec![self.alpha; self.num_topics]
+    }
+
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        Vec::new()
+    }
+
+    fn doc_lengths(&self) -> Vec<usize> {
+        // doc_lengths reconstructed from γ (sLDA stores no raw token counts):
+        // γ[d] = α + token-topic counts, so N_d ≈ Σγ[d] − α·K.
+        self.gamma.iter().map(|g| {
+            let s: f64 = g.iter().sum();
+            (s - self.alpha * self.num_topics as f64).round().max(0.0) as usize
+        }).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +461,16 @@ mod tests {
             vb += (b[i] - mb).powi(2);
         }
         cov / (va.sqrt() * vb.sqrt())
+    }
+
+    #[test]
+    fn slda_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let (docs, y, v) = supervised_corpus(&mut rng);
+        let (m, _, _) = fit_slda(&docs, &y, v, 2, 0.1, 25, 15, 0.0, 0, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

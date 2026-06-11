@@ -347,6 +347,38 @@ pub fn fit_gsdmm<R: Rng>(
     model
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for GsdmmModel {
+    fn num_topics(&self) -> usize {
+        self.k_max
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        (0..self.k_max).map(|k| self.cluster_word(k)).collect()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.z.iter().map(|&k| {
+            let mut v = vec![0.0f64; self.k_max];
+            v[k] = 1.0;
+            v
+        }).collect()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.trace.iter().map(|&(it, _, ll)| (it, ll)).collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -493,5 +525,26 @@ mod tests {
                 "doc_cluster_dist row {d} sums to {s:.12}, expected 1.0"
             );
         }
+    }
+
+    #[test]
+    fn gsdmm_conforms() {
+        let num_blocks = 3usize;
+        let block_size = 10usize;
+        let v = num_blocks * block_size;
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        for b in 0..num_blocks {
+            let offset = (b * block_size) as u32;
+            for d in 0..100usize {
+                let doc: Vec<u32> = (0..3)
+                    .map(|i| offset + ((i + d) % block_size) as u32)
+                    .collect();
+                docs.push(doc);
+            }
+        }
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let model = fit_gsdmm(&docs, v, 10, 0.1, 0.1, 200, 0, &mut rng);
+        let base = crate::conformance::check_conformance(&model);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

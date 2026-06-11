@@ -409,6 +409,49 @@ pub fn fit_hdp<R: Rng>(
     model
 }
 
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
+
+impl Estimator for HdpModel {
+    fn num_topics(&self) -> usize {
+        // Disambiguate inherent num_topics() inside the trait impl.
+        HdpModel::num_topics(self)
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.trace.iter().map(|&(it, _, ll, _, _)| (it, ll)).collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::Dirichlet
+    }
+}
+
+impl DirichletModel for HdpModel {
+    fn alpha(&self) -> Vec<f64> {
+        vec![self.alpha; HdpModel::num_topics(self)]
+    }
+
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        Vec::new()
+    }
+
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.njk.iter().map(|c| c.iter().map(|&x| x as usize).sum()).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,5 +527,18 @@ mod tests {
         assert_eq!(trace.last().unwrap().1, model.num_topics());
         // The fit improves from the first recorded sweep to the last.
         assert!(trace.last().unwrap().2 > trace.first().unwrap().2);
+    }
+
+    #[test]
+    fn hdp_conforms() {
+        let docs: Vec<Vec<u32>> = (0..40)
+            .map(|d| (0..8).map(|i| ((i + d) % 10) as u32).collect())
+            .collect();
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let m = fit_hdp(&docs, 10, 1.0, 1.0, 0.1, 20, true, 0, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

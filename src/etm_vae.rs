@@ -484,6 +484,38 @@ fn scaled(v: &[f64], s: f64) -> Vec<f64> {
     v.iter().map(|x| x * s).collect()
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for EtmVaeModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.beta.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic.clone()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,5 +656,27 @@ mod tests {
             covered.insert(*blocks.iter().next().unwrap());
         }
         assert_eq!(covered.len(), k);
+    }
+
+    #[test]
+    fn etm_vae_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let (k, block, e) = (3usize, 8usize, 3usize);
+        let v = k * block;
+        let rho: Vec<Vec<f64>> = (0..v)
+            .map(|w| {
+                let b = w / block;
+                (0..e).map(|dim| if dim == b { 3.0 } else { 0.0 } + (rng.gen::<f64>() - 0.5) * 0.2).collect()
+            })
+            .collect();
+        let docs: Vec<Vec<u32>> = (0..150)
+            .map(|d| {
+                let b = d % k;
+                (0..12).map(|_| (b * block + (rng.gen::<f64>() * block as f64) as usize) as u32).collect()
+            })
+            .collect();
+        let m = fit_etm_vae(&docs, k, v, &rho, 32, 200, 64, 0.01, 0.0, 0.0, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }
