@@ -138,10 +138,16 @@ A nonparametric model that **infers** the number of topics rather than taking
 `K` as input. Useful as a sanity check on the `K` you chose elsewhere.
 
 ```python
-hdp = topica.HDP(eta=0.3, seed=1)
+hdp = topica.HDP(gamma=0.5, eta=0.3, seed=1)
 hdp.fit(docs, iters=300)
 print(hdp.num_topics, "topics inferred")
 ```
+
+`gamma` is the main lever on the inferred count: larger values discover more
+topics (the conservative default `0.1` lands near a handful, like the reference
+implementations). By default the concentrations are held fixed, which gives a
+stable, reproducible topic count; `resample_conc=True` lets the model adapt them
+to the data instead, useful for exploration but more liberal about adding topics.
 
 ## Guided topics
 

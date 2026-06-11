@@ -6,13 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
-- `HDP` default concentrations are now `alpha=0.1`, `gamma=0.1` (were `1.0`,
-  `1.0`), matching the reference HDP convention. The `1.0` defaults inferred far
-  too many topics on real corpora. This reduces the inferred topic count but does
-  not fully fix the underlying runaway-topic feedback over long runs, tracked in
-  #68.
+- `HDP` no longer runs away to hundreds of topics on real corpora (#68). The
+  concentration resampler was a positive-feedback loop: the Escobar-West update
+  draws `gamma` from `Gamma(a + K, ...)`, whose mean grows with the topic count
+  `K`, so more topics raised `gamma`, which created more topics, irreversibly
+  (K reached 774 with gamma at 102 over 800 sweeps on a 3,500-document corpus).
+  `resample_conc` now defaults to `False` (fixed concentrations give a stable,
+  reproducible topic count; `gamma` sets the granularity directly), and the
+  opt-in resampling path caps the concentrations so it stays bounded. Default
+  concentrations remain `alpha=0.1`, `gamma=0.1` (the reference convention).
 
 ## [0.15.0] - 2026-06-10
 
