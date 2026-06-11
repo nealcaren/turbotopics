@@ -13,6 +13,7 @@ Every model shares the same shape: construct with hyperparameters and a `seed`,
 | Relate topic prevalence to metadata | [`STM`](../guides/covariates.md), [`DMR`](#dmr) |
 | Let topics correlate | [`CTM`](#ctm), `STM` |
 | Have topics worded differently by group | [`SAGE`](#sage), `STM` (content) |
+| Measure topic sentiment/discourse from covariates | [`STS`](#sts) |
 | Let the data choose the number of topics | [`HDP`](#hdp) |
 | Track topics that drift over time | [`DTM`](#dtm) |
 | Tie topics to known labels | [`LabeledLDA`](#labeledlda) |
@@ -66,6 +67,32 @@ large-`K` reason not to.
 The full Structural Topic Model: CTM core plus **prevalence** and **content**
 covariates. This is the workhorse for social science; it has its own
 [guide](covariates.md).
+
+## STS
+
+The Structural Topic and Sentiment-Discourse model (Chen & Mankad 2024) extends
+STM with a per-document, per-topic **continuous sentiment-discourse** latent that
+shifts the wording within a topic, with both topic prevalence and sentiment driven
+by document covariates. Use it when you want to measure not just *which* topics a
+covariate predicts, but *how* — the tone and slant with which each topic is
+discussed.
+
+```python
+m = topica.STS(num_topics=10, seed=1)
+m.fit(docs, sentiment_seed=rating, prevalence=X, prevalence_names=names)
+
+m.doc_topic          # topic prevalence θ
+m.sentiment          # per-document topic sentiment-discourse α^(s)
+m.prevalence_effects # covariate → prevalence
+m.sentiment_effects  # covariate → sentiment-discourse
+m.topic_word_at(2.0) # how the topic is worded at high sentiment
+```
+
+`sentiment_seed` (one value per document — e.g. a star rating) seeds the sentiment
+and defines the aggregation groups for the topic-word estimation; it should be
+*distinct* from the prevalence design (using the same covariate for both is
+unidentifiable). Validated against the authors' R `sts` implementation in
+`parity/sts_r_compare.py`.
 
 ## CTM
 
