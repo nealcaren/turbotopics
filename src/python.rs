@@ -46,7 +46,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler};
+use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, sts};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -5879,6 +5879,446 @@ fn tokenize(
 }
 
 // ---------------------------------------------------------------------------
+// STS: Structural Topic and Sentiment-Discourse model (Chen & Mankad 2024)
+// ---------------------------------------------------------------------------
+
+/// β_{k,·} at a given sentiment level: softmax over the vocabulary of
+/// `m_v + κ^(t)_{k,v} + κ^(s)_{k,v}·level`.
+fn sts_beta_at(
+    kappa_t: &[Vec<f64>],
+    kappa_s: &[Vec<f64>],
+    mv: &[f64],
+    k: usize,
+    v: usize,
+    level: f64,
+) -> Array2<f64> {
+    let mut b = Array2::<f64>::zeros((k, v));
+    for t in 0..k {
+        let mut mx = f64::NEG_INFINITY;
+        let mut lin = vec![0.0f64; v];
+        for i in 0..v {
+            lin[i] = mv[i] + kappa_t[t][i] + kappa_s[t][i] * level;
+            if lin[i] > mx {
+                mx = lin[i];
+            }
+        }
+        let mut s = 0.0;
+        for x in lin.iter_mut() {
+            *x = (*x - mx).exp();
+            s += *x;
+        }
+        for i in 0..v {
+            b[[t, i]] = lin[i] / s;
+        }
+    }
+    b
+}
+
+/// Structural Topic and Sentiment-Discourse model (Chen & Mankad 2024, *Management
+/// Science*). STS extends STM with a per-document, per-topic **continuous
+/// sentiment-discourse** latent `α^(s)` that modulates the topic-word
+/// distribution, with both topic prevalence and sentiment-discourse driven by
+/// document covariates. Fit by Laplace variational EM (a faithful port of the
+/// authors' R ``sts`` package).
+#[pyclass(module = "topica")]
+pub struct STS {
+    num_topics: usize,
+    seed: u64,
+    init_spectral: bool,
+
+    fitted: bool,
+    topic_names: Vec<String>,
+    beta: Option<Array2<f64>>,      // K×V baseline topic-word (α^(s)=0)
+    theta: Option<Array2<f64>>,     // D×K prevalence
+    sentiment: Option<Array2<f64>>, // D×K topic sentiment-discourse α^(s)
+    gamma: Option<Array2<f64>>,     // F×(2K-1) prevalence+sentiment regression
+    feature_names: Vec<String>,
+    kappa_t: Vec<Vec<f64>>, // K×V
+    kappa_s: Vec<Vec<f64>>, // K×V
+    mv: Vec<f64>,           // V
+    sigma: Vec<f64>,        // (2K-1)²
+    corpus: Option<corpus::Corpus>,
+    bound: f64,
+    bound_history: Vec<f64>,
+    converged: bool,
+}
+
+impl STS {
+    fn require_fitted(&self) -> PyResult<()> {
+        if self.fitted {
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("model is not fitted yet; call fit() first"))
+        }
+    }
+}
+
+#[pymethods]
+impl STS {
+    /// Create an unfitted model. `init` is ``"spectral"`` (default; deterministic
+    /// anchor-word β init) or ``"random"`` (seeded).
+    #[new]
+    #[pyo3(signature = (num_topics, *, seed=42, init="spectral"))]
+    fn new(
+        #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
+        seed: u64,
+        init: &str,
+    ) -> PyResult<Self> {
+        if num_topics < 2 {
+            return Err(PyValueError::new_err("num_topics must be >= 2"));
+        }
+        let init_spectral = match init {
+            "spectral" => true,
+            "random" => false,
+            _ => return Err(PyValueError::new_err("init must be 'spectral' or 'random'")),
+        };
+        Ok(STS {
+            num_topics,
+            seed,
+            init_spectral,
+            fitted: false,
+            topic_names: Vec::new(),
+            beta: None,
+            theta: None,
+            sentiment: None,
+            gamma: None,
+            feature_names: Vec::new(),
+            kappa_t: Vec::new(),
+            kappa_s: Vec::new(),
+            mv: Vec::new(),
+            sigma: Vec::new(),
+            corpus: None,
+            bound: f64::NAN,
+            bound_history: Vec::new(),
+            converged: false,
+        })
+    }
+
+    /// Fit. `data` is a :class:`Corpus` or ``list[list[str]]``. `sentiment_seed`
+    /// (required, one value per document) defines the discrete aggregation groups
+    /// for the κ Poisson M-step and seeds the initial sentiment — typically a
+    /// document attribute the sentiment should track (e.g. a star rating).
+    /// `prevalence` (optional, ``(num_docs, F)`` covariates) makes both topic
+    /// prevalence and sentiment-discourse depend on covariates (`α_d ~ N(X_d Γ,
+    /// Σ)`); an intercept is prepended.
+    ///
+    /// EM runs until the relative change in the variational bound drops below
+    /// `em_tol` or `iters` iterations are reached. `kappa_ridge` is the ridge on
+    /// the per-word Poisson regressions that estimate the topic-word coefficients.
+    #[pyo3(signature = (data, sentiment_seed, prevalence=None, *,
+                        prevalence_names=None, iters=30, em_tol=1e-5, kappa_ridge=1e-3))]
+    #[allow(clippy::too_many_arguments)]
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        sentiment_seed: Vec<f64>,
+        prevalence: Option<&Bound<'_, PyAny>>,
+        prevalence_names: Option<Vec<String>>,
+        iters: usize,
+        em_tol: f64,
+        kappa_ridge: f64,
+    ) -> PyResult<()> {
+        let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
+            c.inner
+        } else {
+            let docs: Vec<Vec<String>> = data.extract().map_err(|_| {
+                PyValueError::new_err("fit() expects a Corpus or a list of token lists")
+            })?;
+            build_corpus_from_docs(docs, None, None, std::collections::HashSet::new(), 1, 1.0, 0, 0)?.0
+        };
+        let num_docs = corpus.num_docs();
+        if num_docs == 0 {
+            return Err(PyValueError::new_err("corpus contains no documents"));
+        }
+        if sentiment_seed.len() != num_docs {
+            return Err(PyValueError::new_err(format!(
+                "sentiment_seed has {} values but corpus has {} documents",
+                sentiment_seed.len(),
+                num_docs
+            )));
+        }
+
+        // Prevalence design (optional): prepend an intercept column.
+        let mut prevalence_x: Option<Vec<Vec<f64>>> = None;
+        let mut feat_names: Vec<String> = Vec::new();
+        if let Some(prev) = prevalence {
+            let raw = parse_features(prev)?;
+            if raw.len() != num_docs {
+                return Err(PyValueError::new_err(format!(
+                    "prevalence has {} rows but corpus has {} documents",
+                    raw.len(),
+                    num_docs
+                )));
+            }
+            let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
+            if raw.iter().any(|r| r.len() != f_in) {
+                return Err(PyValueError::new_err("all prevalence rows must have the same length"));
+            }
+            if let Some(names) = &prevalence_names {
+                if names.len() != f_in {
+                    return Err(PyValueError::new_err(
+                        "prevalence_names length must match the number of covariate columns",
+                    ));
+                }
+            }
+            let x: Vec<Vec<f64>> = raw
+                .iter()
+                .map(|r| {
+                    let mut row = Vec::with_capacity(f_in + 1);
+                    row.push(1.0);
+                    row.extend_from_slice(r);
+                    row
+                })
+                .collect();
+            feat_names.push("(Intercept)".to_string());
+            match &prevalence_names {
+                Some(names) => feat_names.extend(names.iter().cloned()),
+                None => feat_names.extend((0..f_in).map(|i| format!("x{}", i + 1))),
+            }
+            prevalence_x = Some(x);
+        }
+
+        let k = self.num_topics;
+        let num_types = corpus.num_types();
+        let spectral = self.init_spectral;
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
+
+        let (model, corpus) = py.allow_threads(move || {
+            let prev_ref = prevalence_x.as_deref();
+            let m = sts::fit_sts(
+                &corpus.docs, k, num_types, iters, em_tol, prev_ref, Some(&sentiment_seed),
+                kappa_ridge, spectral, &mut rng,
+            );
+            (m, corpus)
+        });
+
+        let n = 2 * k - 1;
+        // Baseline topic-word (α^(s)=0).
+        let beta = sts_beta_at(&model.kappa_t, &model.kappa_s, &model.mv, k, num_types, 0.0);
+        let theta_v = model.doc_topics();
+        let mut theta = Array2::<f64>::zeros((theta_v.len(), k));
+        for (di, row) in theta_v.iter().enumerate() {
+            for (t, &val) in row.iter().enumerate() {
+                theta[[di, t]] = val;
+            }
+        }
+        let sent_v = model.doc_sentiment();
+        let mut sentiment = Array2::<f64>::zeros((sent_v.len(), k));
+        for (di, row) in sent_v.iter().enumerate() {
+            for (t, &val) in row.iter().enumerate() {
+                sentiment[[di, t]] = val;
+            }
+        }
+        self.gamma = model.gamma.as_ref().map(|g| {
+            let nf = g.len();
+            let mut arr = Array2::<f64>::zeros((nf, n));
+            for ff in 0..nf {
+                for t in 0..n {
+                    arr[[ff, t]] = g[ff][t];
+                }
+            }
+            arr
+        });
+
+        self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
+        self.beta = Some(beta);
+        self.theta = Some(theta);
+        self.sentiment = Some(sentiment);
+        self.feature_names = feat_names;
+        self.kappa_t = model.kappa_t;
+        self.kappa_s = model.kappa_s;
+        self.mv = model.mv;
+        self.sigma = model.sigma;
+        self.corpus = Some(corpus);
+        self.bound = model.bound_history.last().copied().unwrap_or(f64::NAN);
+        self.bound_history = model.bound_history;
+        self.converged = model.converged;
+        self.fitted = true;
+        Ok(())
+    }
+
+    /// Baseline topic-word matrix β at neutral sentiment, shape ``(num_topics,
+    /// num_words)``. Use :meth:`topic_word_at` for other sentiment levels.
+    #[getter]
+    fn topic_word<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.beta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Topic-word matrix β at sentiment level `level` (the same value applied to
+    /// every topic), shape ``(num_topics, num_words)``. Inspect the wording at
+    /// positive vs. negative sentiment by passing percentiles of :attr:`sentiment`.
+    #[pyo3(signature = (level))]
+    fn topic_word_at<'py>(&self, py: Python<'py>, level: f64) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let v = self.mv.len();
+        Ok(sts_beta_at(&self.kappa_t, &self.kappa_s, &self.mv, self.num_topics, v, level).to_pyarray_bound(py))
+    }
+
+    /// Document-topic prevalence matrix θ, shape ``(num_docs, num_topics)``.
+    #[getter]
+    fn doc_topic<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.theta.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document topic sentiment-discourse α^(s), shape ``(num_docs,
+    /// num_topics)``. Positive values mean the document discussed that topic with
+    /// wording shifted along the κ^(s) (sentiment-discourse) direction.
+    #[getter]
+    fn sentiment<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.sentiment.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Prevalence regression coefficients Γ^(p), shape ``(num_features,
+    /// num_topics-1)`` — covariate effects on topic prevalence. Requires a
+    /// prevalence design at fit time.
+    #[getter]
+    fn prevalence_effects<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let g = self
+            .gamma
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model was fit without a prevalence design"))?;
+        let km1 = self.num_topics - 1;
+        let nf = g.nrows();
+        let mut out = Array2::<f64>::zeros((nf, km1));
+        for ff in 0..nf {
+            for t in 0..km1 {
+                out[[ff, t]] = g[[ff, t]];
+            }
+        }
+        Ok(out.to_pyarray_bound(py))
+    }
+
+    /// Sentiment-discourse regression coefficients Γ^(s), shape ``(num_features,
+    /// num_topics)`` — covariate effects on topic sentiment-discourse. Requires a
+    /// prevalence design at fit time.
+    #[getter]
+    fn sentiment_effects<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let g = self
+            .gamma
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("model was fit without a prevalence design"))?;
+        let k = self.num_topics;
+        let km1 = k - 1;
+        let nf = g.nrows();
+        let mut out = Array2::<f64>::zeros((nf, k));
+        for ff in 0..nf {
+            for t in 0..k {
+                out[[ff, t]] = g[[ff, km1 + t]];
+            }
+        }
+        Ok(out.to_pyarray_bound(py))
+    }
+
+    /// Final variational bound (approximate ELBO).
+    #[getter]
+    fn bound(&self) -> PyResult<f64> {
+        self.require_fitted()?;
+        Ok(self.bound)
+    }
+
+    /// The variational bound after each EM iteration.
+    #[getter]
+    fn bound_history(&self) -> PyResult<Vec<f64>> {
+        self.require_fitted()?;
+        Ok(self.bound_history.clone())
+    }
+
+    /// ``True`` if EM stopped on the `em_tol` criterion, ``False`` if it hit the
+    /// `iters` cap.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.require_fitted()?;
+        Ok(self.converged)
+    }
+
+    /// Uniform convergence trace: ``(iteration, bound)`` pairs.
+    #[getter]
+    fn fit_history(&self) -> PyResult<Vec<(usize, f64)>> {
+        self.require_fitted()?;
+        Ok(self.bound_history.iter().enumerate().map(|(i, &b)| (i + 1, b)).collect())
+    }
+
+    #[getter]
+    fn feature_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.feature_names.clone())
+    }
+
+    #[getter]
+    fn vocabulary(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
+    }
+
+    #[getter]
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    /// Top `n` words per topic (or one topic) at neutral sentiment, as
+    /// ``(word, probability)`` pairs.
+    #[pyo3(signature = (n=10, *, topic=None))]
+    fn top_words<'py>(&self, py: Python<'py>, n: usize, topic: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        self.require_fitted()?;
+        let beta = self.beta.as_ref().unwrap();
+        let vocab = &self.corpus.as_ref().unwrap().id_to_word;
+        let tops = top_word_ids_phi(beta, self.num_topics, n);
+        let one = |t: usize| -> PyResult<Bound<'py, PyList>> {
+            if t >= self.num_topics {
+                return Err(PyValueError::new_err("topic out of range"));
+            }
+            let items: Vec<Bound<'py, PyTuple>> = tops[t]
+                .iter()
+                .map(|&w| PyTuple::new_bound(py, &[vocab[w].clone().into_py(py), beta[[t, w]].into_py(py)]))
+                .collect();
+            Ok(PyList::new_bound(py, items))
+        };
+        match topic {
+            Some(t) => Ok(one(t)?.into_any()),
+            None => {
+                let all: Vec<Bound<'py, PyList>> = (0..self.num_topics).map(one).collect::<PyResult<_>>()?;
+                Ok(PyList::new_bound(py, all).into_any())
+            }
+        }
+    }
+
+    /// UMass topic coherence per topic, shape ``(num_topics,)``.
+    #[pyo3(signature = (n=10))]
+    fn coherence<'py>(&self, py: Python<'py>, n: usize) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        self.require_fitted()?;
+        let tops = top_word_ids_phi(self.beta.as_ref().unwrap(), self.num_topics, n);
+        let scores = umass_coherence(self.corpus.as_ref().unwrap(), &tops);
+        Ok(Array1::from(scores).to_pyarray_bound(py))
+    }
+
+    /// One label per topic, in topic order. Defaults to ``["topic_0", ...]``.
+    #[getter]
+    fn topic_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.topic_names.clone())
+    }
+
+    #[setter]
+    fn set_topic_names(&mut self, names: Vec<String>) -> PyResult<()> {
+        if names.len() != self.num_topics {
+            return Err(PyValueError::new_err(format!(
+                "expected {} topic names, got {}",
+                self.num_topics,
+                names.len()
+            )));
+        }
+        self.topic_names = names;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module init
 // ---------------------------------------------------------------------------
 
@@ -11456,6 +11896,7 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SAGE>()?;
     m.add_class::<CTM>()?;
     m.add_class::<STM>()?;
+    m.add_class::<STS>()?;
     m.add_class::<HDP>()?;
     m.add_class::<DTM>()?;
     m.add_class::<SupervisedLDA>()?;

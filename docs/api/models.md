@@ -16,6 +16,8 @@ All models share the same shape of API: construct with hyperparameters and a
 
 ::: topica.STM
 
+::: topica.STS
+
 ::: topica.ProdLDA
 
 ::: topica.HDP

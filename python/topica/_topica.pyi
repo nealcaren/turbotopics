@@ -542,6 +542,96 @@ class STM:
     def __repr__(self) -> str: ...
 
 
+class STS:
+    """Structural Topic and Sentiment-Discourse model (Chen & Mankad 2024): STM
+    plus a per-document, per-topic continuous sentiment-discourse latent that
+    modulates the topic-word distribution, with both prevalence and sentiment
+    driven by document covariates. Fit by Laplace variational EM."""
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        seed: int = 42,
+        init: str = "spectral",
+    ) -> None:
+        """init is "spectral" (default; deterministic anchor-word init) or
+        "random" (seeded)."""
+        ...
+
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        sentiment_seed: Sequence[float],
+        prevalence: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+        *,
+        prevalence_names: list[str] | None = None,
+        iters: int = 30,
+        em_tol: float = 1e-5,
+        kappa_ridge: float = 1e-3,
+    ) -> None:
+        """Fit. sentiment_seed (required, one value per document) defines the
+        aggregation groups for the topic-word (kappa) Poisson M-step and seeds the
+        initial sentiment — e.g. a star rating the sentiment should track.
+        prevalence is (num_docs, F) covariates driving both topic prevalence and
+        sentiment-discourse (alpha_d ~ N(X_d Gamma, Sigma); intercept prepended).
+
+        EM stops once the relative change in the variational bound falls below
+        em_tol or after iters iterations. kappa_ridge is the ridge on the per-word
+        Poisson regressions estimating the topic-word coefficients."""
+        ...
+
+    @property
+    def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Baseline topic-word matrix beta at neutral sentiment, (num_topics, V)."""
+        ...
+    def topic_word_at(self, level: float) -> numpy.typing.NDArray[numpy.float64]:
+        """Topic-word matrix beta at sentiment level `level` (applied to every
+        topic), (num_topics, V). Pass percentiles of `sentiment` to inspect the
+        wording at positive vs. negative sentiment."""
+        ...
+    @property
+    def doc_topic(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Document-topic prevalence matrix theta, (num_docs, num_topics)."""
+        ...
+    @property
+    def sentiment(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-document topic sentiment-discourse alpha^(s), (num_docs, num_topics)."""
+        ...
+    @property
+    def prevalence_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Prevalence regression coefficients, (num_features, num_topics-1).
+        Requires a prevalence design at fit time."""
+        ...
+    @property
+    def sentiment_effects(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Sentiment-discourse regression coefficients, (num_features, num_topics).
+        Requires a prevalence design at fit time."""
+        ...
+    @property
+    def bound(self) -> float: ...
+    @property
+    def bound_history(self) -> list[float]: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def fit_history(self) -> list[tuple[int, float]]: ...
+    @property
+    def feature_names(self) -> list[str]: ...
+    @property
+    def vocabulary(self) -> list[str]: ...
+    @property
+    def num_topics(self) -> int: ...
+    def top_words(
+        self, n: int = 10, *, topic: int | None = None
+    ) -> list[list[tuple[str, float]]] | list[tuple[str, float]]:
+        """Top n (word, probability) pairs per topic (or one topic) at neutral
+        sentiment."""
+        ...
+    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
+    topic_names: list[str]
+
+
 class HDP:
     """Hierarchical Dirichlet Process topic model (Teh, Jordan, Beal & Blei
     2006): the nonparametric LDA that *infers* the number of topics rather than
