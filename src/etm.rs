@@ -29,7 +29,7 @@
 //! reference's scaling at some cost in per-document posterior accuracy.
 
 use crate::ctm::{ctm_grad, ctm_hpb, ctm_lhood, doc_sparse, HpbResult};
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse};
 use rand::Rng;
 use rayon::prelude::*;

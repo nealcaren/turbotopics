@@ -18,7 +18,7 @@
 //! (`INIT_VARIANCE_CONST = 1000`, `OBS_NORM_CUTOFF = 2`, chain/obs variance
 //! defaults 0.005 / 0.5), so results track the reference implementation.
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 use crate::optimize::digamma;
 use rand::Rng;
 use rayon::prelude::*;

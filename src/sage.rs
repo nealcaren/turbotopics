@@ -16,7 +16,7 @@
 
 use rand::Rng;
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 
 /// SAGE model state. Counts are dense over (topic, group, word).
 pub struct SageModel {

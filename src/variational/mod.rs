@@ -4,6 +4,9 @@
 //! the model fits are rewired through them; for now this module only declares the
 //! family trait.
 
+pub mod lbfgs;
+pub use lbfgs::lbfgs_minimize;
+
 use crate::estimator::Estimator;
 
 /// Tier-2 contract for the logistic-normal variational family. Implementing this

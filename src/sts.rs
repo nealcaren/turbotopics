@@ -313,7 +313,7 @@ pub fn sts_precision(
 // Fitted model + EM driver (PR1: κ held fixed; the Poisson κ M-step is PR2)
 // ---------------------------------------------------------------------------
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 use rayon::prelude::*;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rand::Rng;

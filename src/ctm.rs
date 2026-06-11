@@ -15,7 +15,7 @@
 
 use rand::Rng;
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
 use rayon::prelude::*;
 
