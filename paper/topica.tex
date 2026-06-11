@@ -591,6 +591,26 @@ pays off, and there \pkg{topica} also matches \pkg{MALLET}. Throughout,
 (Section~\ref{sec:workflow}), which the count-based references do not compute at
 all, at no measurable cost to fit time.
 
+Both collapsed-Gibbs samplers parallelize by partitioning the documents across
+threads and merging the count tables each sweep, the approximate-distributed
+scheme \pkg{MALLET} also uses. Figure~\ref{fig:threads} shows the scaling on the
+5{,}000-document corpus: LDA reaches about $4.6\times$ on ten threads, while the
+keyword-assisted model, whose per-sweep keyword bookkeeping leaves a larger fixed
+cost in the merge, reaches about $2.3\times$. The merge is fixed overhead, so the
+multithreaded gain grows with corpus size as more sampling work amortizes it; the
+\proglang{R} packages have no parallel mode at all.
+
+\begin{figure}[t!]
+\centering
+\includegraphics[width=0.7\textwidth]{fig_thread_scaling}
+\caption{Thread scaling of the collapsed-Gibbs samplers on the 5{,}000-document
+poliblog corpus, single-thread fit time divided by $n$-thread fit time. LDA
+partitions cleanly and scales near-linearly to the physical-core count; the
+keyword-assisted model carries a heavier per-sweep merge and scales more
+modestly. Both are reproduced by \code{benchmarks/bench.py}.}
+\label{fig:threads}
+\end{figure}
+
 %% ===========================================================================
 \section{Worked example: many models, one workflow}\label{sec:example}
 %% ===========================================================================

@@ -29,7 +29,7 @@ find_tex() {
 JSS_CLS="$(find_tex jss.cls)"
 JSS_BST="$(find_tex jss.bst)"
 
-for fig in fig_poliblog_effect.pdf fig_poliblog_report.pdf; do
+for fig in fig_poliblog_effect.pdf fig_poliblog_report.pdf fig_thread_scaling.pdf; do
   [ -f "$HERE/$fig" ] || {
     echo "ERROR: $fig missing. Run: python paper/replication.py --quick"; exit 1; }
 done
@@ -37,7 +37,7 @@ done
 # --- build the .bbl ---------------------------------------------------------
 BUILD="$STAGE/build"; mkdir -p "$BUILD"
 cp "$HERE/topica.tex" "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" \
-   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$BUILD/"
+   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$HERE/fig_thread_scaling.pdf" "$BUILD/"
 ( cd "$BUILD"
   export TEXINPUTS=".:" BSTINPUTS=".:" BIBINPUTS=".:"
   pdflatex -interaction=nonstopmode topica.tex >/dev/null
