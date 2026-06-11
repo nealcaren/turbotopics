@@ -132,6 +132,66 @@ Everything else currently missing (for example `topic_names` on most models,
 on the remaining Dirichlet models, `coherence`/`save`/`load` on the neural and
 cluster models) is a tracked gap in `KNOWN_GAPS`, not an exemption.
 
+## The Rust core trait
+
+The Python contract above has a mirror one layer down, in the Rust core. Every
+fitted model struct (`CtmModel`, `TopicModel`, `StsModel`, `HdpModel`, …)
+implements a small trait hierarchy in `src/estimator.rs`, so the uniform surface
+is testable in `cargo test --lib` with no Python and is the binding point for a
+future R frontend (issue #75). The PyO3 getters become thin forwarders to it.
+
+```rust
+// src/estimator.rs — the Tier-0 floor, on the fitted *struct*, not the pyclass.
+pub trait Estimator {
+    fn num_topics(&self) -> usize;
+    fn topic_word(&self) -> Vec<Vec<f64>>;       // (K, V); topic_word().len() == num_topics()
+    fn doc_topic(&self) -> Vec<Vec<f64>>;        // (D, K)
+    fn fit_history(&self) -> Vec<(usize, f64)>;  // [] when no per-iteration trace
+    fn converged(&self) -> Option<bool>;         // None for non-iterative models
+    fn model_family(&self) -> ModelFamily;       // Dirichlet | LogisticNormal | None_
+}
+
+// Tier-2 family traits — implementing them is what forces the posterior to exist.
+pub trait DirichletModel: Estimator {           // src/estimator.rs
+    fn alpha(&self) -> Vec<f64>;                 // length K
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>>; // (S, D, K); [] if not retained
+    fn doc_lengths(&self) -> Vec<usize>;         // length D
+}
+pub trait LogisticNormalModel: Estimator {      // src/variational/mod.rs
+    fn eta_dim(&self) -> usize;                  // K-1 (STM/CTM), 2K-1 (STS)
+    fn eta_mean(&self) -> &[Vec<f64>];           // (D, eta_dim)
+    fn eta_cov(&self) -> &[Vec<f64>];            // (D, eta_dim²), row-major
+}
+```
+
+`topic_word` and `alpha` return owned values, not slices: the Gibbs family
+computes φ on demand from its count tables and stores a symmetric scalar α, so a
+borrowed-slice contract could not be implemented additively. `eta_mean`/`eta_cov`
+stay borrowed because every logistic-normal model genuinely stores them — which
+is the point of the Tier-2 trait. You cannot implement `LogisticNormalModel`
+without producing a variational posterior over η; that requirement is what
+surfaced the STS eta gap.
+
+**The Rust conformance check** mirrors the Python one. `src/conformance.rs`
+provides `check_conformance(&dyn Estimator)` (Tier-0 shape: `topic_word` row
+count, `doc_topic` rows summing to 1 for the generative families) plus
+`check_dirichlet(&dyn DirichletModel)` and `check_logistic_normal(&dyn
+LogisticNormalModel)` (Tier-2 shapes). Each model's own `#[cfg(test)]` module has
+a `*_conforms` test that fits a small instance and asserts these return no
+violations — so a contract gap fails `cargo test --lib` at the source, before the
+Python layer or a release. `conformance.rs::RUST_ESTIMATORS` is the single-source
+registry (family + structural exemptions) that mirrors
+`python/topica/conformance.py`; keep the two in lockstep.
+
+**Shared variational kernels.** Logistic-normal models do not re-implement the
+E-step. `src/variational/` holds the reusable pieces: `laplace_estep` (the
+parallel, document-order-preserving Laplace E-step driver — CTM, STM, and STS all
+fit through it), `lbfgs_minimize`, `fit_gamma_ridge` (the pooled-ridge Γ M-step),
+and `doc_sparse`. A new logistic-normal model should call `laplace_estep` rather
+than write its own parallel E-step, both to inherit the bit-for-bit determinism
+guarantee (the serial sufficient-statistic reduce stays in document order
+regardless of thread count) and to avoid drift.
+
 ## Checking your model
 
 Run the conformance test in isolation:

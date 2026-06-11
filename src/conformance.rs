@@ -85,3 +85,86 @@ pub fn check_logistic_normal(m: &dyn LogisticNormalModel) -> Vec<String> {
     }
     v
 }
+
+// ---------------------------------------------------------------------------
+// Registry — the Rust-side mirror of python/topica/conformance.py
+// ---------------------------------------------------------------------------
+
+/// One row of the Rust estimator registry: a model's user-facing name (matching
+/// the Python `REGISTRY` in `python/topica/conformance.py`), the inference family
+/// its fitted struct reports from `Estimator::model_family`, and any Tier-0
+/// Estimator method it structurally cannot provide — returned empty by design,
+/// the Rust analog of `conformance.py`'s `EXEMPT`.
+#[allow(dead_code)]
+pub struct RegistryEntry {
+    pub name: &'static str,
+    pub family: ModelFamily,
+    /// Estimator methods this model legitimately returns empty for (structural,
+    /// not a gap): e.g. a time-sliced or tree model has no flat `doc_topic`.
+    pub exempt: &'static [&'static str],
+}
+
+/// Every fitted struct that implements [`Estimator`], with its family. Mirrors
+/// the Python `REGISTRY`/`EXEMPT` so the two stay in lockstep. Enforcement is
+/// per-struct: each model's own `#[cfg(test)]` module has a `*_conforms` test
+/// that fits a small instance and asserts `check_conformance` (and, by family,
+/// `check_dirichlet`/`check_logistic_normal`) returns no violations. This table
+/// is the single place that documents which struct belongs to which family and
+/// which Tier-0 surfaces are structurally exempt.
+///
+/// `STM`/`CTM` and the `LDA`/`DMR`/`LabeledLDA` group share one backing struct
+/// (`CtmModel`, `TopicModel`) but are listed under their user-facing names to
+/// match the Python registry. `STS` is intentionally absent: it is logistic-
+/// normal at the Rust level (StsModel implements the trait) but is not yet in
+/// the Python `REGISTRY` pending its save/load/transform surface (issue #74
+/// follow-up). The embedding-cluster models (`BERTopic`, `Top2Vec`) carry a
+/// `topic_word`/`doc_topic` from their Rust struct and so participate here.
+#[allow(dead_code)]
+pub const RUST_ESTIMATORS: &[RegistryEntry] = &[
+    // Logistic-normal variational (eta posterior).
+    RegistryEntry { name: "STM", family: ModelFamily::LogisticNormal, exempt: &[] },
+    RegistryEntry { name: "CTM", family: ModelFamily::LogisticNormal, exempt: &[] },
+    // Collapsed-Gibbs / Dirichlet doc-topic posterior.
+    RegistryEntry { name: "LDA", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "DMR", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "LabeledLDA", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "SeededLDA", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "KeyATM", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "PA", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "PT", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "SAGE", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "HDP", family: ModelFamily::Dirichlet, exempt: &[] },
+    RegistryEntry { name: "SupervisedLDA", family: ModelFamily::Dirichlet, exempt: &[] },
+    // Neural / embedding / nonparametric — no theta posterior.
+    RegistryEntry { name: "ProdLDA", family: ModelFamily::None_, exempt: &[] },
+    RegistryEntry { name: "ETM", family: ModelFamily::None_, exempt: &[] },
+    RegistryEntry { name: "FASTopic", family: ModelFamily::None_, exempt: &[] },
+    RegistryEntry { name: "GSDMM", family: ModelFamily::None_, exempt: &[] },
+    RegistryEntry { name: "BERTopic", family: ModelFamily::None_, exempt: &[] },
+    RegistryEntry { name: "Top2Vec", family: ModelFamily::None_, exempt: &[] },
+    // Time-sliced and tree-structured — flat doc_topic is structurally undefined.
+    RegistryEntry { name: "DTM", family: ModelFamily::None_, exempt: &["doc_topic", "fit_history"] },
+    RegistryEntry { name: "HLDA", family: ModelFamily::None_, exempt: &["doc_topic"] },
+];
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    /// The registry is well-formed: unique names, and every exempt entry names a
+    /// real Estimator method. Catches a typo or a duplicate when a model is added.
+    #[test]
+    fn registry_is_well_formed() {
+        const METHODS: &[&str] =
+            &["num_topics", "topic_word", "doc_topic", "fit_history", "converged"];
+        let mut seen = std::collections::HashSet::new();
+        for e in RUST_ESTIMATORS {
+            assert!(seen.insert(e.name), "duplicate registry entry: {}", e.name);
+            for &req in e.exempt {
+                assert!(METHODS.contains(&req), "{}: unknown exempt method {req:?}", e.name);
+            }
+        }
+        // Mirror of the Python REGISTRY size (20 user-facing models; STS pending).
+        assert_eq!(RUST_ESTIMATORS.len(), 20, "registry size drifted from the Python REGISTRY");
+    }
+}
