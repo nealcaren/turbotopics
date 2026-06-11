@@ -48,7 +48,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, sts};
+use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -161,6 +161,7 @@ struct LdaState {
     #[serde(default)] topic_names: Vec<String>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
+    #[serde(default)] init_spectral: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DmrState {
@@ -756,6 +757,10 @@ pub struct LDA {
     // MALLET's --use-symmetric-alpha: optimize only the alpha concentration,
     // keeping every alpha[t] equal, instead of learning the per-topic shape.
     use_symmetric_alpha: bool,
+    // Seed the initial token→topic assignment from a spectral anchor-word β
+    // instead of a uniform random draw. Opt-in (default random) so the MALLET
+    // byte-parity guarantee and existing determinism baselines are unchanged.
+    init_spectral: bool,
 
     // Populated after fit().
     fitted: bool,
@@ -895,7 +900,8 @@ impl LDA {
     #[new]
     #[pyo3(signature = (num_topics, *, alpha_sum=None, beta=0.01,
                         optimize_interval=50, burn_in=200, seed=42, num_threads=1,
-                        sampler="sparse", mh_steps=2, use_symmetric_alpha=false))]
+                        sampler="sparse", mh_steps=2, use_symmetric_alpha=false,
+                        init="random"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
@@ -908,6 +914,7 @@ impl LDA {
         sampler: &str,
         mh_steps: usize,
         use_symmetric_alpha: bool,
+        init: &str,
     ) -> PyResult<Self> {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
@@ -934,6 +941,11 @@ impl LDA {
         if light && mh_steps == 0 {
             return Err(PyValueError::new_err("mh_steps must be >= 1 for the lightlda sampler"));
         }
+        let init_spectral = match init {
+            "spectral" => true,
+            "random" => false,
+            _ => return Err(PyValueError::new_err("init must be 'spectral' or 'random'")),
+        };
         Ok(LDA {
             num_topics,
             alpha_sum,
@@ -945,6 +957,7 @@ impl LDA {
             light,
             mh_steps,
             use_symmetric_alpha,
+            init_spectral,
             fitted: false,
             topic_names: Vec::new(),
             phi: None,
@@ -1034,7 +1047,16 @@ impl LDA {
 
         let mut model = TopicModel::new(num_topics, alpha_sum, self.beta, num_types);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
-        model.initialize(&corpus, &mut rng);
+        // Spectral anchor-word init is opt-in; it falls back to the random draw
+        // when the corpus is too small for anchor recovery (spectral_init -> None).
+        if self.init_spectral {
+            match spectral::spectral_init(&corpus.docs, num_topics, num_types) {
+                Some(beta) => model.initialize_spectral(&corpus, &beta, &mut rng),
+                None => model.initialize(&corpus, &mut rng),
+            }
+        } else {
+            model.initialize(&corpus, &mut rng);
+        }
 
         let optimize_interval = self.optimize_interval;
         let burn_in = self.burn_in;
@@ -1615,6 +1637,7 @@ impl LDA {
             light: false,
             mh_steps: 2,
             use_symmetric_alpha: false,
+            init_spectral: false,
             fitted: true,
             topic_names: (0..num_topics).map(|i| format!("topic_{i}")).collect(),
             phi: Some(phi),
@@ -1987,6 +2010,7 @@ impl LDA {
             topic_names: self.topic_names.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
+            init_spectral: self.init_spectral,
         })
     }
 
@@ -2004,6 +2028,7 @@ impl LDA {
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
             num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
+            init_spectral: s.init_spectral,
             topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta), theta_draws: None,
             model: s.model, corpus: s.corpus,

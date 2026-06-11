@@ -132,6 +132,87 @@ impl TopicModel {
         }
     }
 
+    /// Anchor-word / spectral initialization: seed each token's topic by
+    /// sampling from the categorical p(t | w) ∝ β[t][w], where `beta` is the
+    /// K×V topic-word matrix from [`crate::spectral::spectral_init`]. This
+    /// biases the starting state toward the recovered anchor structure while
+    /// keeping the assignment stochastic, so within-document mixing is
+    /// preserved and the sampler is not pinned to a degenerate start. Any word
+    /// whose β column carries no mass falls back to a uniform draw.
+    ///
+    /// Deterministic given `rng`. Equivalent in every other respect to
+    /// [`Self::initialize`] (same count-table sizing and accumulation); only
+    /// the initial topic draw differs.
+    pub fn initialize_spectral<R: Rng>(
+        &mut self,
+        corpus: &Corpus,
+        beta: &[Vec<f64>],
+        rng: &mut R,
+    ) {
+        let k = self.num_topics;
+
+        let mut type_totals = vec![0usize; self.num_types];
+        for doc in &corpus.docs {
+            for &word_id in doc {
+                type_totals[word_id as usize] += 1;
+            }
+        }
+        self.type_topic_counts = type_totals
+            .iter()
+            .map(|&total| vec![0u32; self.num_topics.min(total)])
+            .collect();
+
+        // Per-word cumulative topic weights from the β columns (one length-k
+        // prefix sum per word type). The last entry is the column's total mass;
+        // a (near-)zero total marks a word we sample uniformly instead.
+        let mut col_cum: Vec<Vec<f64>> = Vec::with_capacity(self.num_types);
+        for w in 0..self.num_types {
+            let mut cum = Vec::with_capacity(k);
+            let mut s = 0.0f64;
+            for t in 0..k {
+                s += beta[t][w].max(0.0);
+                cum.push(s);
+            }
+            col_cum.push(cum);
+        }
+
+        self.doc_topics = corpus
+            .docs
+            .iter()
+            .map(|doc| {
+                doc.iter()
+                    .map(|&w| {
+                        let cum = &col_cum[w as usize];
+                        let total = cum[k - 1];
+                        if total <= 0.0 {
+                            return rng.gen_range(0..k) as u32;
+                        }
+                        let u = rng.gen::<f64>() * total;
+                        // First topic whose prefix sum exceeds u.
+                        let mut t = 0usize;
+                        while t + 1 < k && cum[t] <= u {
+                            t += 1;
+                        }
+                        t as u32
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let assignments: Vec<(usize, usize)> = corpus
+            .docs
+            .iter()
+            .zip(self.doc_topics.iter())
+            .flat_map(|(doc, topics)| {
+                doc.iter().map(|&w| w as usize).zip(topics.iter().map(|&t| t as usize))
+            })
+            .collect();
+        for (word_id, topic) in assignments {
+            self.tokens_per_topic[topic] += 1;
+            self.increment_type_topic(word_id, topic);
+        }
+    }
+
     /// Increment the count for (word_id, topic) in type_topic_counts,
     /// maintaining descending sort.
     pub fn increment_type_topic(&mut self, word_id: usize, topic: usize) {

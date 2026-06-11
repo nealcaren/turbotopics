@@ -1236,6 +1236,7 @@ class LDA:
         sampler: str = "sparse",
         mh_steps: int = 2,
         use_symmetric_alpha: bool = False,
+        init: str = "random",
     ) -> None:
         """Create an LDA model. alpha_sum defaults to num_topics if None.
 
@@ -1256,6 +1257,15 @@ class LDA:
         for the very-large-K / long-document regime; "sparse" is faster at the
         topic counts typical of social-science work. mh_steps is the number of
         MH proposals per token (alias sampler only).
+
+        init selects the initial token-topic assignment: "random" (default,
+        MALLET-compatible) draws each token's topic uniformly; "spectral" seeds
+        it from a deterministic anchor-word topic-word matrix (the same spectral
+        recovery STM/CTM use). Spectral init does not speed convergence, but it
+        improves topic coherence at larger K (roughly K >= 50; it is a wash at
+        small K) and falls back to the random draw when the corpus is too small
+        for anchor recovery. The default leaves the MALLET byte-parity and
+        same-seed determinism guarantees unchanged.
         """
         ...
 

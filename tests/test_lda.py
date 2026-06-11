@@ -252,3 +252,82 @@ class TestSaveFiles:
         for line in path.read_text().splitlines()[1:5]:
             parts = line.split("\t")
             assert len(parts) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Spectral (anchor-word) initialization
+# ---------------------------------------------------------------------------
+
+def _planted_blocks(n_blocks=4, words_per_block=5, n_docs=200):
+    """One disjoint vocabulary block per topic; each doc draws from one block."""
+    vocab = [f"w{i}" for i in range(n_blocks * words_per_block)]
+    docs = []
+    for d in range(n_docs):
+        b = d % n_blocks
+        block = vocab[b * words_per_block : (b + 1) * words_per_block]
+        docs.append(block + block)
+    return docs, n_blocks, words_per_block
+
+
+class TestSpectralInit:
+    def test_default_is_random(self):
+        # The default leaves the MALLET-compatible random init in place, so an
+        # explicit init="random" reproduces it bit-for-bit.
+        docs, k, _ = _planted_blocks()
+        m_default = LDA(k, seed=3)
+        m_default.fit(docs, iters=80)
+        m_random = LDA(k, seed=3, init="random")
+        m_random.fit(docs, iters=80)
+        npt.assert_array_equal(m_default.topic_word, m_random.topic_word)
+
+    def test_bad_init_rejected(self):
+        with pytest.raises(ValueError):
+            LDA(2, init="banana")
+
+    def test_spectral_runs_and_is_well_formed(self):
+        docs, k, _ = _planted_blocks()
+        m = LDA(k, seed=1, init="spectral")
+        m.fit(docs, iters=120)
+        assert m.topic_word.shape == (k, len(m.vocabulary))
+        npt.assert_allclose(m.topic_word.sum(axis=1), 1.0, atol=1e-9)
+        npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0, atol=1e-9)
+
+    def test_spectral_is_deterministic_for_seed(self):
+        docs, k, _ = _planted_blocks()
+        a = LDA(k, seed=7, init="spectral")
+        a.fit(docs, iters=80)
+        b = LDA(k, seed=7, init="spectral")
+        b.fit(docs, iters=80)
+        npt.assert_array_equal(a.topic_word, b.topic_word)
+
+    def test_spectral_recovers_planted_blocks(self):
+        docs, k, wpb = _planted_blocks()
+        m = LDA(k, seed=1, init="spectral")
+        m.fit(docs, iters=200)
+        vocab = [f"w{i}" for i in range(k * wpb)]
+        blocks = [set(vocab[b * wpb : (b + 1) * wpb]) for b in range(k)]
+        covered = set()
+        for t in range(k):
+            top = {w for w, _ in m.top_words(wpb, topic=t)}
+            for bi, blk in enumerate(blocks):
+                if blk <= top:
+                    covered.add(bi)
+        assert covered == set(range(k)), f"only recovered {covered}"
+
+    def test_spectral_falls_back_on_tiny_corpus(self):
+        # Fewer word types than topics: spectral_init returns None and the fit
+        # falls back to the random draw rather than erroring.
+        docs = [["a", "b"], ["a", "b"], ["b", "a"]]
+        m = LDA(5, seed=1, init="spectral")
+        m.fit(docs, iters=20)
+        assert m.num_topics == 5
+        assert m.topic_word.shape[1] == len(m.vocabulary)
+
+    def test_spectral_survives_save_load(self, tmp_path):
+        docs, k, _ = _planted_blocks()
+        m = LDA(k, seed=1, init="spectral")
+        m.fit(docs, iters=80)
+        path = str(tmp_path / "lda_spec.bin")
+        m.save(path)
+        reloaded = LDA.load(path)
+        npt.assert_array_equal(reloaded.topic_word, m.topic_word)
