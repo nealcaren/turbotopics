@@ -1,8 +1,10 @@
 pub mod coherence;
+pub mod conformance;
 pub mod corpus;
 pub mod ctm;
 pub mod dmr;
 pub mod sts;
+pub mod estimator;
 pub mod etm;
 pub mod etm_vae;
 pub mod dtm;
@@ -24,6 +26,7 @@ pub mod sampler;
 pub mod seeded;
 pub mod slda;
 pub mod spectral;
+pub mod variational;
 
 // Embedding-native model branch (Top2Vec/BERTopic/...): clustering pipeline over
 // user-supplied embeddings. Behind the `embeddings` feature (implied by `python`).

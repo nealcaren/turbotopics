@@ -313,6 +313,34 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for BertopicModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic.clone()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +413,13 @@ mod tests {
         let dist = m.approximate_distribution(&[doc0], 4, 1);
         let argmax = (0..m.num_topics).max_by(|&a, &b| dist[0][a].total_cmp(&dist[0][b])).unwrap();
         assert_eq!(argmax, block0_topic, "dist: {:?}", dist[0]);
+    }
+
+    #[test]
+    fn bertopic_conforms() {
+        let (docs, emb, vocab) = planted(3, 40, 1);
+        let m = fit_bertopic(&docs, &emb, vocab, 5, false, 15, 15, 2, None, 4, 1, false, false, "hdbscan", None, 1);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

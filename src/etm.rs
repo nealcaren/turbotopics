@@ -28,8 +28,8 @@
 //! SGD) for corpora too large for the per-document E-step; it would reproduce the
 //! reference's scaling at some cost in per-document posterior accuracy.
 
-use crate::ctm::{ctm_grad, ctm_hpb, ctm_lhood, doc_sparse, HpbResult};
-use crate::dmr::lbfgs_minimize;
+use crate::ctm::{ctm_grad, ctm_hpb, ctm_lhood, HpbResult};
+use crate::variational::{lbfgs_minimize, doc_sparse};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse};
 use rand::Rng;
 use rayon::prelude::*;
@@ -340,6 +340,40 @@ pub fn fit_etm<R: Rng>(
     }
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for EtmModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.beta.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topics()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        // ETM does not store the Laplace covariance, so it is not a Tier-2
+        // logistic-normal model; mirrors conformance.py.
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,5 +465,27 @@ mod tests {
         for row in m.doc_topics() {
             assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn etm_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let (k, block, e) = (3usize, 8usize, 3usize);
+        let v = k * block;
+        let rho: Vec<Vec<f64>> = (0..v)
+            .map(|w| {
+                let b = w / block;
+                (0..e).map(|dim| if dim == b { 3.0 } else { 0.0 } + (rng.gen::<f64>() - 0.5) * 0.2).collect()
+            })
+            .collect();
+        let docs: Vec<Vec<u32>> = (0..90)
+            .map(|d| {
+                let b = d % k;
+                (0..10).map(|_| (b * block + (rng.gen::<f64>() * block as f64) as usize) as u32).collect()
+            })
+            .collect();
+        let m = fit_etm(&docs, k, v, &rho, 50, 1e-5, 0.0, 1e6, 25, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

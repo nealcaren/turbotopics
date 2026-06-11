@@ -281,6 +281,47 @@ the binding will read. Add `#[cfg(test)]` unit tests:
 
 Register the module in `src/lib.rs` (`pub mod <model>;`, matching the others).
 
+**Implement the `Estimator` trait on your fitted struct.** The core trait
+hierarchy lives in `src/estimator.rs` (and `src/variational/mod.rs`); it is the
+Rust mirror of the [estimator contract](docs/contributing/estimator-contract.md)
+and the binding point for the R frontend. On your `*Model` struct, add:
+
+```rust
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for MyModel {
+    fn num_topics(&self) -> usize { self.num_topics }
+    fn topic_word(&self) -> Vec<Vec<f64>> { /* stored beta, or compute φ */ }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { /* stored/computed θ, rows sum to 1 */ }
+    fn fit_history(&self) -> Vec<(usize, f64)> { /* (iter, objective) or Vec::new() */ }
+    fn converged(&self) -> Option<bool> { /* Some(flag) or None */ }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet /* or LogisticNormal / None_ */ }
+}
+```
+
+Then the family trait, if applicable: `DirichletModel` (collapsed-Gibbs:
+`alpha`/`theta_draws`/`doc_lengths`) or `LogisticNormalModel`
+(`eta_dim`/`eta_mean`/`eta_cov`, in `src/variational/mod.rs`). A logistic-normal
+model should run its E-step through `crate::variational::laplace_estep` rather
+than write its own parallel loop — that is what keeps the fit bit-for-bit
+deterministic across thread counts. Add a `*_conforms` unit test next to your
+recovery tests:
+
+```rust
+#[test]
+fn mymodel_conforms() {
+    let m = /* fit a tiny instance */;
+    assert!(crate::conformance::check_conformance(&m).is_empty());
+    // and check_dirichlet(&m) / check_logistic_normal(&m) for those families
+}
+```
+
+Add a row to `RUST_ESTIMATORS` in `src/conformance.rs` (name, family, and any
+structural exemptions) so it stays in lockstep with the Python `REGISTRY`. If a
+Tier-0 method is structurally undefined (a time-sliced or tree model has no flat
+`doc_topic`), return an empty value and record the exemption in that row — do not
+fake a value.
+
 ### B2. The PyO3 binding in `src/python.rs`
 
 Add a `#[pyclass(module = "topica")]` struct holding the hyperparameters, a
@@ -476,6 +517,7 @@ the topics on a real corpus.
 ## Definition of done
 
 - [ ] Algorithm in `src/<model>.rs` with `#[cfg(test)]` recovery + determinism tests; `mod` added to `src/lib.rs`.
+- [ ] `Estimator` (and the family trait, where it applies) implemented on the fitted struct, a `*_conforms` test added, and a `RUST_ESTIMATORS` row in `src/conformance.rs`.
 - [ ] `#[pyclass]` binding in `src/python.rs` exposing the four required analysis-surface attributes plus `top_words`, `coherence`, `save`/`load`, `__repr__`.
 - [ ] Keyword-only new params with behavior-preserving defaults; clear `PyValueError`/`RuntimeError` messages; GIL released during fit; RNG seeded from `self.seed`.
 - [ ] Registered in `#[pymodule]`; re-exported in `__init__.py` (+ `__all__`); `.pyi` stub updated to match.

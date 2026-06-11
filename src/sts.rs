@@ -313,9 +313,10 @@ pub fn sts_precision(
 // Fitted model + EM driver (PR1: κ held fixed; the Poisson κ M-step is PR2)
 // ---------------------------------------------------------------------------
 
-use crate::dmr::lbfgs_minimize;
-use rayon::prelude::*;
+use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
+use crate::estimator::{Estimator, ModelFamily};
+use crate::variational::LogisticNormalModel;
 use rand::Rng;
 
 /// A fitted STS model. With the E-step done and `κ` held fixed, this carries the
@@ -331,6 +332,7 @@ pub struct StsModel {
     pub kappa_t: Vec<Vec<f64>>,      // K × V
     pub kappa_s: Vec<Vec<f64>>,      // K × V
     pub mv: Vec<f64>,                // V
+    pub beta: Vec<Vec<f64>>,         // K × V baseline topic-word at α^(s)=0
     pub bound_history: Vec<f64>,
     pub converged: bool,
     pub em_iters_run: usize,
@@ -356,63 +358,25 @@ impl StsModel {
         self.alpha.iter().map(|a| a[k - 1..].to_vec()).collect()
     }
 
-    /// Baseline topic-word distributions `β_{k,·}` at `α^(s)=0` (K × V).
-    pub fn topic_word(&self) -> Vec<Vec<f64>> {
-        (0..self.k)
-            .map(|t| topic_beta(&self.mv, &self.kappa_t[t], &self.kappa_s[t], 0.0))
-            .collect()
-    }
 }
 
-fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
-    let mut idx: Vec<usize> = doc.iter().map(|&w| w as usize).collect();
-    idx.sort_unstable();
-    idx.dedup();
-    let mut counts = vec![0.0f64; idx.len()];
-    let pos: std::collections::HashMap<usize, usize> =
-        idx.iter().enumerate().map(|(i, &w)| (w, i)).collect();
-    for &w in doc {
-        counts[pos[&(w as usize)]] += 1.0;
+impl Estimator for StsModel {
+    fn num_topics(&self) -> usize { self.k }
+    fn topic_word(&self) -> Vec<Vec<f64>> { self.beta.clone() }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { self.doc_topics() }
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history.iter().enumerate().map(|(i, &b)| (i + 1, b)).collect()
     }
-    (idx, counts)
+    fn converged(&self) -> Option<bool> { Some(self.converged) }
+    fn model_family(&self) -> ModelFamily { ModelFamily::LogisticNormal }
 }
 
-/// Pooled ridge regression of the per-document latent `λ` on covariates `x`
-/// (the `opt.mu` "Pooled" mode / [`crate::ctm`]'s `fit_gamma`): returns `Γ` as
-/// `F × n`, with `Γ[i][t]` the coefficient of covariate `i` for latent `t`.
-fn fit_gamma_ridge(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, n: usize, ridge: f64) -> Vec<Vec<f64>> {
-    let mut xtx = vec![0.0f64; f * f];
-    let mut xtl = vec![0.0f64; f * n];
-    for (xd, ld) in x.iter().zip(lambda) {
-        for i in 0..f {
-            for j in 0..f {
-                xtx[i * f + j] += xd[i] * xd[j];
-            }
-            for t in 0..n {
-                xtl[i * n + t] += xd[i] * ld[t];
-            }
-        }
-    }
-    for i in 0..f {
-        xtx[i * f + i] += ridge;
-    }
-    let inv = spd_inverse(&xtx, f).unwrap_or_else(|| {
-        let mut a = xtx.clone();
-        make_diagonally_dominant(&mut a, f);
-        spd_inverse(&a, f).unwrap()
-    });
-    let mut gamma = vec![vec![0.0f64; n]; f];
-    for i in 0..f {
-        for t in 0..n {
-            let mut s = 0.0;
-            for j in 0..f {
-                s += inv[i * f + j] * xtl[j * n + t];
-            }
-            gamma[i][t] = s;
-        }
-    }
-    gamma
+impl LogisticNormalModel for StsModel {
+    fn eta_dim(&self) -> usize { 2 * self.k - 1 }
+    fn eta_mean(&self) -> &[Vec<f64>] { &self.alpha }
+    fn eta_cov(&self) -> &[Vec<f64>] { &self.nu }
 }
+
 
 /// A two-parameter Poisson regression `log E[y_g] = offset_g + a + b·z_g` fit by
 /// Newton's method with a small ridge. Returns `(a, b)` = `(κ^(t), κ^(s))` for one
@@ -862,12 +826,8 @@ pub fn fit_sts<R: Rng>(
         // serial loop, so the fit stays bit-for-bit deterministic regardless of
         // thread count (the guarantee ctm.rs makes for STM/CTM). Each document
         // returns its α̂, ν_d, bound contribution, and sparse responsibilities.
-        type DocOut = (usize, Vec<f64>, Vec<f64>, f64, Vec<(usize, Vec<f64>)>);
-        let doc_results: Vec<DocOut> = sparse
-            .par_iter()
-            .enumerate()
-            .filter(|(_, (words, _))| !words.is_empty())
-            .map(|(di, (words, counts))| {
+        let doc_results: Vec<(usize, (Vec<f64>, Vec<f64>, f64, Vec<(usize, Vec<f64>)>))> =
+            crate::variational::laplace_estep(&sparse, |di, words, counts| {
                 let mu_d = doc_mu(di, &gamma, &mu_shared);
                 let a_hat = lbfgs_minimize(
                     alpha[di].clone(),
@@ -912,14 +872,13 @@ pub fn fit_sts<R: Rng>(
                         (w, row)
                     })
                     .collect();
-                (di, a_hat, nu_d, bound_contrib, phi_contrib)
-            })
-            .collect();
+                (a_hat, nu_d, bound_contrib, phi_contrib)
+            });
 
         // Serial reduction in document order (deterministic).
         let mut phi_by_group = vec![vec![vec![0.0f64; k]; v]; num_groups];
         let mut total_bound = 0.0;
-        for (di, a_hat, nu_d, bound_contrib, phi_contrib) in doc_results {
+        for (di, (a_hat, nu_d, bound_contrib, phi_contrib)) in doc_results {
             let g = group[di];
             for (w, row) in &phi_contrib {
                 for t in 0..k {
@@ -974,6 +933,10 @@ pub fn fit_sts<R: Rng>(
         }
     }
 
+    let beta: Vec<Vec<f64>> = (0..k)
+        .map(|t| topic_beta(&mv, &kappa_t[t], &kappa_s[t], 0.0))
+        .collect();
+
     StsModel {
         k,
         num_types: v,
@@ -984,6 +947,7 @@ pub fn fit_sts<R: Rng>(
         kappa_t,
         kappa_s,
         mv,
+        beta,
         bound_history,
         converged,
         em_iters_run,
@@ -1256,5 +1220,20 @@ mod tests {
             })
             .count();
         assert!(correct as f64 / theta.len() as f64 > 0.85, "lasso fit only {correct}/60 separated");
+    }
+
+    #[test]
+    fn sts_conforms() {
+        use crate::conformance::{check_conformance, check_logistic_normal};
+        let (docs, x, _truth, v) = planted_corpus();
+        let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
+        let mut rng = StdRng::seed_from_u64(7);
+        let m = fit_sts(&docs, 3, v, 5, 0.0, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, &mut rng);
+        let base = check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let ln = check_logistic_normal(&m);
+        assert!(ln.is_empty(), "check_logistic_normal: {:?}", ln);
+        assert_eq!(m.eta_dim(), 2 * m.k - 1);
+        assert_eq!(m.eta_mean().len(), m.eta_cov().len());
     }
 }

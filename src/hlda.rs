@@ -616,6 +616,36 @@ pub fn fit_hlda<R: Rng>(
     model
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for HldaModel {
+    fn num_topics(&self) -> usize {
+        self.num_nodes()
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        // Disambiguate: inherent topic_word(i) takes an index; the trait method takes none.
+        (0..self.num_nodes()).map(|i| HldaModel::topic_word(self, i)).collect()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        // HLDA uses tree paths, not a flat simplex — EXEMPT.
+        Vec::new()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,5 +769,15 @@ mod tests {
             assert_eq!(m1.nodes[i].nw, m2.nodes[i].nw);
             assert_eq!(m1.nodes[i].ndocs, m2.nodes[i].ndocs);
         }
+    }
+
+    #[test]
+    fn hlda_conforms() {
+        let g = 3usize;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let (docs, v, _shared, _blocks) = planted_corpus(&mut rng, g);
+        let model = fit_hlda(&docs, v, 2, 1.0, 0.1, 0.5, 80, &mut rng);
+        let base = crate::conformance::check_conformance(&model);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

@@ -16,7 +16,7 @@
 
 use rand::Rng;
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::lbfgs_minimize;
 
 /// SAGE model state. Counts are dense over (topic, group, word).
 pub struct SageModel {
@@ -275,6 +275,64 @@ pub fn optimize_kappa(model: &mut SageModel, max_iter: usize) {
     model.recompute_beta();
 }
 
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
+
+impl Estimator for SageModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        // Average the cached beta (shape (K*G)×V, indexed k*num_groups+g) over groups.
+        (0..self.num_topics).map(|k| {
+            let mut avg = vec![0.0f64; self.num_types];
+            for g in 0..self.num_groups {
+                let row = &self.beta[k * self.num_groups + g];
+                for v in 0..self.num_types { avg[v] += row[v]; }
+            }
+            for v in 0..self.num_types { avg[v] /= self.num_groups as f64; }
+            avg
+        }).collect()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        // Smoothed proportions from per-token topic ids with per-topic alpha.
+        let alpha_sum: f64 = self.alpha.iter().sum();
+        self.doc_topics.iter().map(|toks| {
+            let mut cnt = vec![0.0f64; self.num_topics];
+            for &t in toks { cnt[t as usize] += 1.0; }
+            let denom = toks.len() as f64 + alpha_sum;
+            (0..self.num_topics).map(|t| (cnt[t] + self.alpha[t]) / denom).collect()
+        }).collect()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::Dirichlet
+    }
+}
+
+impl DirichletModel for SageModel {
+    fn alpha(&self) -> Vec<f64> {
+        self.alpha.clone()
+    }
+
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        Vec::new()
+    }
+
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.doc_topics.iter().map(|d| d.len()).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +374,34 @@ mod tests {
         let g1_cd = model.beta[g1][2] + model.beta[g1][3];
         assert!(g0_ab > 0.8, "group 0 mass on its words = {}", g0_ab);
         assert!(g1_cd > 0.8, "group 1 mass on its words = {}", g1_cd);
+    }
+
+    #[test]
+    fn sage_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let mut docs = Vec::new();
+        let mut groups = Vec::new();
+        for i in 0..120 {
+            if i % 2 == 0 {
+                docs.push(vec![0u32, 1, 0, 1, 0, 1]);
+                groups.push(0usize);
+            } else {
+                docs.push(vec![2u32, 3, 2, 3, 2, 3]);
+                groups.push(1usize);
+            }
+        }
+        let mut model = SageModel::new(1, 2, 4, 0.1, 1.0);
+        model.set_background(&docs);
+        model.initialize(&docs, &groups, &mut rng);
+        for iter in 1..=200 {
+            run_sweep_sage(&mut model, &docs, &groups, &mut rng);
+            if iter > 50 && iter % 25 == 0 {
+                optimize_kappa(&mut model, 20);
+            }
+        }
+        let base = crate::conformance::check_conformance(&model);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&model);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

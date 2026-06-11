@@ -783,6 +783,38 @@ pub fn fit_prodlda<R: Rng>(
     ProdldaModel { doc_topic, ..model }
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for ProdldaModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic.clone()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -916,5 +948,21 @@ mod tests {
             covered.insert(*blocks.iter().next().unwrap());
         }
         assert_eq!(covered.len(), k, "topics did not cover all blocks");
+    }
+
+    #[test]
+    fn prodlda_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let (k, block) = (3usize, 8usize);
+        let v = k * block;
+        let docs: Vec<Vec<u32>> = (0..180)
+            .map(|d| {
+                let b = d % k;
+                (0..15).map(|_| (b * block + (rng.gen::<f64>() * block as f64) as usize) as u32).collect()
+            })
+            .collect();
+        let m = fit_prodlda(&docs, k, v, 32, 1.0, 0.0, 250, 60, 0.01, 0.0, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }

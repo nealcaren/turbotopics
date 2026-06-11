@@ -15,9 +15,10 @@
 
 use rand::Rng;
 
-use crate::dmr::lbfgs_minimize;
+use crate::variational::{lbfgs_minimize, doc_sparse, fit_gamma_ridge};
 use crate::linalg::{cholesky, half_logdet, make_diagonally_dominant, spd_inverse, spd_inverse_from_chol};
-use rayon::prelude::*;
+use crate::estimator::{Estimator, ModelFamily};
+use crate::variational::LogisticNormalModel;
 
 /// Prior on the prevalence coefficients γ in the STM M-step.
 ///
@@ -447,18 +448,48 @@ impl CtmModel {
     }
 }
 
-/// Convert a token sequence to (unique word ids, counts). A BTreeMap keeps the
-/// word order deterministic (sorted), so float summation order — and thus the
-/// fitted model — is fully reproducible for a given seed.
-pub(crate) fn doc_sparse(doc: &[u32]) -> (Vec<usize>, Vec<f64>) {
-    use std::collections::BTreeMap;
-    let mut m: BTreeMap<usize, f64> = BTreeMap::new();
-    for &w in doc {
-        *m.entry(w as usize).or_insert(0.0) += 1.0;
+impl Estimator for CtmModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
     }
-    let words: Vec<usize> = m.keys().copied().collect();
-    let counts: Vec<f64> = words.iter().map(|w| m[w]).collect();
-    (words, counts)
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.beta.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topics()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        self.bound_history
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| (i + 1, b))
+            .collect()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        Some(self.converged)
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::LogisticNormal
+    }
+}
+
+impl LogisticNormalModel for CtmModel {
+    fn eta_dim(&self) -> usize {
+        self.num_topics - 1
+    }
+
+    fn eta_mean(&self) -> &[Vec<f64>] {
+        &self.lambda
+    }
+
+    fn eta_cov(&self) -> &[Vec<f64>] {
+        &self.nu
+    }
 }
 
 /// Infer the topic proportions θ (length K) for a *new* document by the
@@ -505,7 +536,7 @@ pub fn infer_theta(
 /// The intercept (column 0 of `x`, the all-ones column) is never penalised.
 /// All other columns are internally standardised (mean-centred and scaled by their
 /// standard deviation); the coefficients are mapped back to the original scale
-/// before returning so the caller sees the same row/column layout as `fit_gamma`.
+/// before returning so the caller sees the same row/column layout as `fit_gamma_ridge`.
 ///
 /// `alpha` is the elastic-net mixing parameter (glmnet convention): `alpha=1`
 /// is pure lasso, `alpha→0` approaches ridge. The lasso-relevant lambda_max is
@@ -679,46 +710,6 @@ fn fit_gamma_enet(
     g
 }
 
-/// Ridge regression of the variational means Λ (D×(K-1)) on prevalence design
-/// `x` (D×F): `γ = (XᵀX + ridge·I)⁻¹ Xᵀ Λ` (F×(K-1)).
-fn fit_gamma(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, km1: usize, ridge: f64) -> Vec<Vec<f64>> {
-    let mut xtx = vec![0.0f64; f * f];
-    for xd in x {
-        for a in 0..f {
-            for b in 0..f {
-                xtx[a * f + b] += xd[a] * xd[b];
-            }
-        }
-    }
-    for a in 0..f {
-        xtx[a * f + a] += ridge;
-    }
-    let inv = spd_inverse(&xtx, f).unwrap_or_else(|| {
-        let mut m = xtx.clone();
-        make_diagonally_dominant(&mut m, f);
-        spd_inverse(&m, f).unwrap()
-    });
-    // XᵀΛ (F×(K-1))
-    let mut xtl = vec![vec![0.0f64; km1]; f];
-    for (d, xd) in x.iter().enumerate() {
-        for a in 0..f {
-            for t in 0..km1 {
-                xtl[a][t] += xd[a] * lambda[d][t];
-            }
-        }
-    }
-    let mut g = vec![vec![0.0f64; km1]; f];
-    for a in 0..f {
-        for t in 0..km1 {
-            let mut s = 0.0;
-            for b in 0..f {
-                s += inv[a * f + b] * xtl[b][t];
-            }
-            g[a][t] = s;
-        }
-    }
-    g
-}
 
 /// `μ_d = X_d γ` (length K-1).
 fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
@@ -875,11 +866,8 @@ pub fn fit_ctm<R: Rng>(
         // order and then accumulated serially, so the sufficient statistics are
         // summed in the exact same order as the serial loop — the fit stays
         // bit-for-bit deterministic regardless of thread count.
-        let doc_results: Vec<(usize, Vec<f64>, HpbResult)> = sparse
-            .par_iter()
-            .enumerate()
-            .filter(|(_, (words, _))| !words.is_empty())
-            .map(|(di, (words, counts))| {
+        let doc_results: Vec<(usize, (Vec<f64>, HpbResult))> =
+            crate::variational::laplace_estep(&sparse, |di, words, counts| {
                 let mu_d = doc_mu(di, &gamma, &mu_shared);
                 // The E-step β is the document's group β (content) or the shared β.
                 let beta_doc: &[Vec<f64>] = match groups {
@@ -899,17 +887,16 @@ pub fn fit_ctm<R: Rng>(
                     1e-5,
                 );
                 let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
-                (di, opt, res)
-            })
-            .collect();
+                (opt, res)
+            });
 
         // Corpus bound for this E-step (sum of the per-document evidence bounds),
         // computed with the parameters from the previous M-step — the quantity
         // whose relative change drives convergence.
-        let total_bound: f64 = doc_results.iter().map(|(_, _, res)| res.bound).sum();
+        let total_bound: f64 = doc_results.iter().map(|(_, (_, res))| res.bound).sum();
         bound_history.push(total_bound);
 
-        for (di, opt, res) in &doc_results {
+        for (di, (opt, res)) in &doc_results {
             let di = *di;
             let words = &sparse[di].0;
             lambda[di] = opt.clone();
@@ -955,7 +942,7 @@ pub fn fit_ctm<R: Rng>(
         // M-step: prevalence regression (γ) or shared mean (μ).
         if let Some(x) = prevalence {
             gamma = Some(match gamma_prior {
-                GammaPrior::Pooled => fit_gamma(x, &lambda, nf.unwrap(), km1, 1e-6),
+                GammaPrior::Pooled => fit_gamma_ridge(x, &lambda, nf.unwrap(), km1, 1e-6),
                 GammaPrior::L1 { alpha } => fit_gamma_enet(x, &lambda, nf.unwrap(), km1, alpha),
             });
         } else {
@@ -1228,6 +1215,48 @@ mod tests {
     }
 
     #[test]
+    fn ctm_conforms() {
+        use crate::conformance::{check_conformance, check_logistic_normal};
+        use crate::variational::LogisticNormalModel;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let docs: Vec<Vec<u32>> = vec![
+            vec![0, 1, 0, 1, 2],
+            vec![1, 2, 1, 2, 0],
+            vec![2, 0, 2, 0, 1],
+            vec![0, 0, 1, 2, 0],
+            vec![1, 1, 2, 0, 1],
+            vec![2, 2, 0, 1, 2],
+        ];
+        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, &mut rng);
+
+        let base_violations = check_conformance(&model);
+        assert!(
+            base_violations.is_empty(),
+            "check_conformance violations: {:?}",
+            base_violations
+        );
+
+        let ln_violations = check_logistic_normal(&model);
+        assert!(
+            ln_violations.is_empty(),
+            "check_logistic_normal violations: {:?}",
+            ln_violations
+        );
+
+        assert_eq!(
+            model.eta_dim(),
+            model.num_topics - 1,
+            "eta_dim should be num_topics - 1"
+        );
+        assert_eq!(
+            model.eta_mean().len(),
+            model.eta_cov().len(),
+            "eta_mean and eta_cov should have the same number of rows (one per document)"
+        );
+    }
+
+    #[test]
     fn enet_sparser_than_ridge_on_sparse_signal() {
         // Design: 200 obs, 30 predictors, only 3 are truly active (large signal).
         // Elastic-net (lasso, alpha=1) should zero most inactive predictors;
@@ -1237,7 +1266,7 @@ mod tests {
         let km1 = 1;
 
         let g_enet = fit_gamma_enet(&x, &lam, f, km1, 1.0);
-        let g_ridge = fit_gamma(&x, &lam, f, km1, 1e-6);
+        let g_ridge = fit_gamma_ridge(&x, &lam, f, km1, 1e-6);
 
         // Count zeros (|coef| < 1e-6) among the 30 penalised predictors.
         let enet_zeros = g_enet[1..].iter().filter(|r| r[0].abs() < 1e-6).count();

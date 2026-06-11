@@ -38,6 +38,7 @@ use crate::etm_vae;
 use crate::fastopic;
 use crate::labeled;
 use crate::sage;
+use crate::variational::LogisticNormalModel;
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -4591,7 +4592,7 @@ fn infer_theta_batch(
     let rows: Vec<Vec<f64>> = py.allow_threads(|| {
         docs.par_iter()
             .map(|doc| {
-                let (words, counts) = ctm::doc_sparse(doc);
+                let (words, counts) = crate::variational::doc_sparse(doc);
                 ctm::infer_theta(beta, mu, &siginv, &words, &counts)
             })
             .collect()
@@ -4634,7 +4635,7 @@ fn infer_theta_batch_per_doc(
         docs.par_iter()
             .zip(mus.par_iter())
             .map(|(doc, mu_d)| {
-                let (words, counts) = ctm::doc_sparse(doc);
+                let (words, counts) = crate::variational::doc_sparse(doc);
                 ctm::infer_theta(beta, mu_d, &siginv, &words, &counts)
             })
             .collect()
@@ -4648,16 +4649,22 @@ fn infer_theta_batch_per_doc(
     out
 }
 
-fn eta_posterior(model: &ctm::CtmModel) -> (Array2<f64>, Array3<f64>) {
-    let d = model.lambda.len();
-    let km1 = model.num_topics.saturating_sub(1);
-    let mut mean = Array2::<f64>::zeros((d, km1));
-    let mut cov = Array3::<f64>::zeros((d, km1, km1));
+/// Build the (eta_mean, eta_cov) numpy arrays for any logistic-normal model from
+/// its `LogisticNormalModel` posterior: mean is (D, eta_dim), cov is
+/// (D, eta_dim, eta_dim) un-flattening each row of `eta_cov()`. Generic over the
+/// fitted struct — CtmModel (K-1) and StsModel (2K-1) share this path.
+fn eta_posterior(m: &dyn LogisticNormalModel) -> (Array2<f64>, Array3<f64>) {
+    let mean_rows = m.eta_mean();
+    let cov_rows = m.eta_cov();
+    let d = mean_rows.len();
+    let dim = m.eta_dim();
+    let mut mean = Array2::<f64>::zeros((d, dim));
+    let mut cov = Array3::<f64>::zeros((d, dim, dim));
     for di in 0..d {
-        for i in 0..km1 {
-            mean[[di, i]] = model.lambda[di][i];
-            for j in 0..km1 {
-                cov[[di, i, j]] = model.nu[di][i * km1 + j];
+        for i in 0..dim {
+            mean[[di, i]] = mean_rows[di][i];
+            for j in 0..dim {
+                cov[[di, i, j]] = cov_rows[di][i * dim + j];
             }
         }
     }
@@ -5937,6 +5944,8 @@ pub struct STS {
     kappa_s: Vec<Vec<f64>>, // K×V
     mv: Vec<f64>,           // V
     sigma: Vec<f64>,        // (2K-1)²
+    eta_mean: Option<Array2<f64>>,  // D×(2K-1)
+    eta_cov: Option<Array3<f64>>,   // D×(2K-1)×(2K-1)
     corpus: Option<corpus::Corpus>,
     bound: f64,
     bound_history: Vec<f64>,
@@ -5987,6 +5996,8 @@ impl STS {
             kappa_s: Vec::new(),
             mv: Vec::new(),
             sigma: Vec::new(),
+            eta_mean: None,
+            eta_cov: None,
             corpus: None,
             bound: f64::NAN,
             bound_history: Vec::new(),
@@ -6137,6 +6148,9 @@ impl STS {
             arr
         });
 
+        let (em, ec) = eta_posterior(&model);
+        self.eta_mean = Some(em);
+        self.eta_cov = Some(ec);
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
@@ -6229,6 +6243,24 @@ impl STS {
             }
         }
         Ok(out.to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior means λ of the logistic-normal latent η
+    /// = [α^(p)_{1..K-1}, α^(s)_{1..K}], shape ``(num_docs, 2*num_topics-1)``.
+    /// Pairs with :attr:`eta_cov` as the joint prevalence/sentiment posterior for
+    /// method-of-composition uncertainty.
+    #[getter]
+    fn eta_mean<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_mean.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior covariances ν of η, shape
+    /// ``(num_docs, 2*num_topics-1, 2*num_topics-1)``.
+    #[getter]
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
     /// Final variational bound (approximate ELBO).

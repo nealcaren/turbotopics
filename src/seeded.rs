@@ -26,6 +26,7 @@
 
 use rand::Rng;
 use std::collections::HashSet;
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 
 // ---------------------------------------------------------------------------
 // Model struct
@@ -184,6 +185,27 @@ impl SeededModel {
                     .collect()
             })
             .collect()
+    }
+}
+
+impl Estimator for SeededModel {
+    fn num_topics(&self) -> usize { self.num_topics }
+    fn topic_word(&self) -> Vec<Vec<f64>> { self.topic_word_all() }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { self.doc_topic() }
+    fn fit_history(&self) -> Vec<(usize, f64)> { Vec::new() }
+    fn converged(&self) -> Option<bool> { None }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
+}
+
+impl DirichletModel for SeededModel {
+    fn alpha(&self) -> Vec<f64> { vec![self.alpha; self.num_topics] }
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        self.theta_draws.iter().map(|d| {
+            d.iter().map(|r| r.iter().map(|&x| x as f64).collect()).collect()
+        }).collect()
+    }
+    fn doc_lengths(&self) -> Vec<usize> {
+        self.ndk.iter().map(|r| r.iter().map(|&c| c as usize).sum()).collect()
     }
 }
 
@@ -657,5 +679,24 @@ mod tests {
             m2.doc_topic(),
             "doc_topic() differs between two identical-seed runs"
         );
+    }
+
+    #[test]
+    fn seeded_conforms() {
+        let v = 30usize;
+        let k = 3usize;
+        let docs: Vec<Vec<u32>> = (0..60usize)
+            .map(|d| (0..5).map(|i| ((i + d * 3) % v) as u32).collect())
+            .collect();
+        let seeds: Vec<Vec<usize>> = vec![vec![]; k];
+        let mut rng = ChaCha8Rng::seed_from_u64(99);
+        let (m, _, _) = fit_seeded_lda(
+            &docs, v, k, &seeds, 0.1, 0.1, 0.0, None, 20,
+            crate::keyatm::ThetaDrawOpts::new(false, 0, 0), 0.0, 0, &mut rng,
+        );
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

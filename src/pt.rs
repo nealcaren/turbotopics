@@ -19,6 +19,7 @@
 //!     i.e. the real doc inherits its pseudo-doc's topic distribution.
 
 use rand::Rng;
+use crate::estimator::{Estimator, ModelFamily, DirichletModel};
 
 // ---------------------------------------------------------------------------
 // Log-Gamma helper (Stirling series shifted to z ≥ 10, matching dmr.rs)
@@ -99,6 +100,25 @@ impl PtmModel {
             })
             .collect()
     }
+}
+
+impl Estimator for PtmModel {
+    fn num_topics(&self) -> usize { self.num_topics }
+    fn topic_word(&self) -> Vec<Vec<f64>> { PtmModel::topic_word(self) }
+    fn doc_topic(&self) -> Vec<Vec<f64>> { PtmModel::doc_topic(self) }
+    fn fit_history(&self) -> Vec<(usize, f64)> { Vec::new() }
+    fn converged(&self) -> Option<bool> { None }
+    fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
+}
+
+impl DirichletModel for PtmModel {
+    fn alpha(&self) -> Vec<f64> { vec![self.alpha; self.num_topics] }
+    fn theta_draws(&self) -> Vec<Vec<Vec<f64>>> {
+        self.theta_draws.iter().map(|d| {
+            d.iter().map(|r| r.iter().map(|&x| x as f64).collect()).collect()
+        }).collect()
+    }
+    fn doc_lengths(&self) -> Vec<usize> { self.z.iter().map(|d| d.len()).collect() }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,5 +533,19 @@ mod tests {
             m2.topic_word(),
             "topic_word differs between two identical-seed runs"
         );
+    }
+
+    #[test]
+    fn ptm_conforms() {
+        let v = 15usize;
+        let docs: Vec<Vec<u32>> = (0..60usize)
+            .map(|d| (0..3).map(|i| ((i + d) % v) as u32).collect())
+            .collect();
+        let mut rng = ChaCha8Rng::seed_from_u64(55);
+        let m = fit_ptm(&docs, v, 3, 5, 0.1, 0.01, 20, &mut rng);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
+        let dir = crate::conformance::check_dirichlet(&m);
+        assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
     }
 }

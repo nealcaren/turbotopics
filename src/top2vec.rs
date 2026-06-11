@@ -265,6 +265,34 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
+use crate::estimator::{Estimator, ModelFamily};
+
+impl Estimator for Top2VecModel {
+    fn num_topics(&self) -> usize {
+        self.num_topics
+    }
+
+    fn topic_word(&self) -> Vec<Vec<f64>> {
+        self.topic_word.clone()
+    }
+
+    fn doc_topic(&self) -> Vec<Vec<f64>> {
+        self.doc_topic.clone()
+    }
+
+    fn fit_history(&self) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
+    fn converged(&self) -> Option<bool> {
+        None
+    }
+
+    fn model_family(&self) -> ModelFamily {
+        ModelFamily::None_
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +363,39 @@ mod tests {
         let m = fit_top2vec(&docs, &doc_emb, &word_emb, 1, 2, false, 15, 5, 2, "hdbscan", None, 1);
         assert_eq!(m.num_topics, 0);
         assert!(m.topic_vectors.is_empty());
+    }
+
+    #[test]
+    fn top2vec_conforms() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let dim = 8;
+        let mut center_a = vec![0.0; dim];
+        let mut center_b = vec![0.0; dim];
+        center_a[0] = 5.0;
+        center_b[4] = 5.0;
+
+        let jitter = |rng: &mut ChaCha8Rng, c: &[f64]| -> Vec<f64> {
+            c.iter().map(|&v| v + rng.gen::<f64>() * 0.4).collect()
+        };
+
+        let mut docs = Vec::new();
+        let mut doc_emb = Vec::new();
+        for d in 0..40 {
+            if d % 2 == 0 {
+                docs.push(vec![0u32, 1, 2, 3, 4].into_iter().collect::<Vec<_>>());
+                doc_emb.push(jitter(&mut rng, &center_a));
+            } else {
+                docs.push((5u32..10).collect::<Vec<_>>());
+                doc_emb.push(jitter(&mut rng, &center_b));
+            }
+        }
+        let mut word_emb = Vec::new();
+        for w in 0..10 {
+            let c = if w < 5 { &center_a } else { &center_b };
+            word_emb.push(jitter(&mut rng, c));
+        }
+        let m = fit_top2vec(&docs, &doc_emb, &word_emb, 10, 5, false, 15, 5, 2, "hdbscan", None, 1);
+        let base = crate::conformance::check_conformance(&m);
+        assert!(base.is_empty(), "check_conformance: {:?}", base);
     }
 }
