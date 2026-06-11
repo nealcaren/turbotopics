@@ -413,11 +413,137 @@ fn fit_gamma_ridge(x: &[Vec<f64>], lambda: &[Vec<f64>], f: usize, n: usize, ridg
     gamma
 }
 
-/// Fit the STS model with the topic-word coefficients `κ` held fixed at their
-/// initialization (PR1). The E-step is the Laplace variational inference of
-/// [`sts_lhood`]/[`sts_grad`]/[`sts_precision`]; the M-step updates `Γ` and `Σ`
-/// exactly as in CTM/STM. `kappa_s_scale` sets the fixed sentiment loading
-/// magnitude (`κ^(s)_{k,v} = scale·κ^(t)_{k,v}`).
+/// A two-parameter Poisson regression `log E[y_g] = offset_g + a + b·z_g` fit by
+/// Newton's method with a small ridge. Returns `(a, b)` = `(κ^(t), κ^(s))` for one
+/// (word, topic). When the covariate `z` has no spread (or fewer than two groups)
+/// the slope is unidentified, so only the intercept is fit and `b = 0`.
+fn poisson_2param(y: &[f64], z: &[f64], offset: &[f64], ridge: f64) -> (f64, f64) {
+    let g = y.len();
+    let zmin = z.iter().cloned().fold(f64::INFINITY, f64::min);
+    let zmax = z.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let fit_slope = g >= 2 && (zmax - zmin).abs() > 1e-9;
+
+    let (mut a, mut b) = (0.0f64, 0.0f64);
+    for _ in 0..100 {
+        let (mut g0, mut g1) = (0.0f64, 0.0f64);
+        let (mut h00, mut h01, mut h11) = (0.0f64, 0.0f64, 0.0f64);
+        for i in 0..g {
+            let eta = (offset[i] + a + b * z[i]).clamp(-30.0, 30.0);
+            let mu = eta.exp();
+            let r = y[i] - mu;
+            g0 += r;
+            h00 += mu;
+            if fit_slope {
+                g1 += r * z[i];
+                h01 += mu * z[i];
+                h11 += mu * z[i] * z[i];
+            }
+        }
+        g0 -= ridge * a;
+        h00 += ridge;
+        if !fit_slope {
+            let step = g0 / h00.max(1e-12);
+            a += step;
+            if step.abs() < 1e-10 {
+                break;
+            }
+            continue;
+        }
+        g1 -= ridge * b;
+        h11 += ridge;
+        let det = h00 * h11 - h01 * h01;
+        if det.abs() < 1e-12 {
+            break;
+        }
+        let da = (h11 * g0 - h01 * g1) / det;
+        let db = (h00 * g1 - h01 * g0) / det;
+        a += da;
+        b += db;
+        if da.abs() + db.abs() < 1e-10 {
+            break;
+        }
+    }
+    (a, b)
+}
+
+/// M-step for the topic-word coefficients `κ` (Chen & Mankad §4.2; `opt.kappa.R`).
+///
+/// Estimating `κ` is a multinomial logistic regression, recast via the
+/// multinomial–Poisson equivalence (Taddy 2015) into independent Poisson
+/// regressions per vocabulary word, with a document-fixed-effect offset. The
+/// design is block-diagonal across topics, so each (word, topic) is a small
+/// 2-parameter Poisson fit over the aggregation groups: intercept `κ^(t)_{k,v}`
+/// and slope `κ^(s)_{k,v}` on the group-mean sentiment.
+///
+/// `phi_by_group[g][v][k] = Σ_{d∈g} φ_{d,v,k}` are the aggregated expected
+/// word-topic counts; `alpha_agg[g][k]` the group-mean `α^(s)`.
+#[allow(clippy::too_many_arguments)]
+fn opt_kappa(
+    phi_by_group: &[Vec<Vec<f64>>],
+    alpha_agg: &[Vec<f64>],
+    mv: &[f64],
+    k: usize,
+    v: usize,
+    num_groups: usize,
+    ridge: f64,
+) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    // Group-topic totals φ_{g,k} = Σ_v φ_{g,v,k} → the offset log φ_{g,k} + m_v.
+    let mut phi_sum = vec![vec![0.0f64; k]; num_groups];
+    for g in 0..num_groups {
+        for t in 0..k {
+            phi_sum[g][t] = phi_by_group[g].iter().map(|row| row[t]).sum();
+        }
+    }
+    let mut kappa_t = vec![vec![0.0f64; v]; k];
+    let mut kappa_s = vec![vec![0.0f64; v]; k];
+    let mut z = vec![0.0f64; num_groups];
+    let mut off = vec![0.0f64; num_groups];
+    let mut y = vec![0.0f64; num_groups];
+    for t in 0..k {
+        for g in 0..num_groups {
+            z[g] = alpha_agg[g][t];
+        }
+        for word in 0..v {
+            for g in 0..num_groups {
+                off[g] = (phi_sum[g][t].max(1e-12)).ln() + mv[word];
+                y[g] = phi_by_group[g][word][t];
+            }
+            let (a, b) = poisson_2param(&y, &z, &off, ridge);
+            kappa_t[t][word] = a;
+            kappa_s[t][word] = b;
+        }
+    }
+    (kappa_t, kappa_s)
+}
+
+/// Per-group means of the sentiment block `α^(s)` (the continuous covariate the
+/// `κ` Poisson regression aggregates over). Returns `num_groups × K`.
+fn group_means(alpha: &[Vec<f64>], group: &[usize], num_groups: usize, k: usize) -> Vec<Vec<f64>> {
+    let mut sums = vec![vec![0.0f64; k]; num_groups];
+    let mut counts = vec![0usize; num_groups];
+    for (di, a) in alpha.iter().enumerate() {
+        let g = group[di];
+        counts[g] += 1;
+        for t in 0..k {
+            sums[g][t] += a[k - 1 + t];
+        }
+    }
+    for g in 0..num_groups {
+        if counts[g] > 0 {
+            for t in 0..k {
+                sums[g][t] /= counts[g] as f64;
+            }
+        }
+    }
+    sums
+}
+
+/// Fit the STS model (Chen & Mankad 2024). The E-step is the Laplace variational
+/// inference of [`sts_lhood`]/[`sts_grad`]/[`sts_precision`]; the M-step updates
+/// `Γ` (pooled ridge), `Σ` (as in CTM/STM), and `κ` (the Poisson regression of
+/// [`opt_kappa`]). Aggregation groups for the `κ` step are the distinct levels of
+/// `sentiment_seed`, which also seeds the initial `α^(s)`.
+#[allow(clippy::too_many_arguments)]
 pub fn fit_sts<R: Rng>(
     docs: &[Vec<u32>],
     num_topics: usize,
@@ -426,7 +552,7 @@ pub fn fit_sts<R: Rng>(
     em_tol: f64,
     prevalence: Option<&[Vec<f64>]>,
     sentiment_seed: Option<&[f64]>,
-    kappa_s_scale: f64,
+    kappa_ridge: f64,
     init_spectral: bool,
     rng: &mut R,
 ) -> StsModel {
@@ -480,15 +606,32 @@ pub fn fit_sts<R: Rng>(
         }
         b
     };
+    // Aggregation groups for the κ M-step: the distinct levels of the sentiment
+    // seed. Without a seed, a single group leaves κ_s unidentified and the model
+    // reduces toward CTM on the prevalence side.
+    let (group, num_groups) = match sentiment_seed {
+        Some(seed) => {
+            let mut levels: Vec<f64> = seed.to_vec();
+            levels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            levels.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+            let g: Vec<usize> = seed
+                .iter()
+                .map(|s| levels.iter().position(|l| (l - s).abs() < 1e-12).unwrap())
+                .collect();
+            (g, levels.len())
+        }
+        None => (vec![0usize; d], 1),
+    };
+
+    // κ_t starts at ln β − m (topics begin at the spectral β when α^(s)=0); κ_s
+    // starts at 0 and is set by the initial κ estimation below.
     let mut kappa_t = vec![vec![0.0f64; v]; k];
     let mut kappa_s = vec![vec![0.0f64; v]; k];
     for t in 0..k {
         for i in 0..v {
             kappa_t[t][i] = beta[t][i].max(1e-12).ln() - mv[i];
-            kappa_s[t][i] = kappa_s_scale * kappa_t[t][i];
         }
     }
-    let kappa = Kappa { kappa_t: kappa_t.clone(), kappa_s: kappa_s.clone() };
 
     // Latent init: prevalence at 0, sentiment at the centered seed (or 0).
     let mut alpha = vec![vec![0.0f64; n]; d];
@@ -499,6 +642,25 @@ pub fn fit_sts<R: Rng>(
                 alpha[di][k - 1 + t] = seed[di] - mean;
             }
         }
+    }
+
+    // Initial κ (Chen & Mankad §4.3): aggregate the spectral-β responsibilities
+    // (uniform θ) by group and run the Poisson M-step against the seeded α^(s), so
+    // κ_s enters the first E-step non-zero.
+    {
+        let mut phi_by_group = vec![vec![vec![0.0f64; k]; v]; num_groups];
+        for (di, (words, counts)) in sparse.iter().enumerate() {
+            for (wi, &w) in words.iter().enumerate() {
+                let denom: f64 = (0..k).map(|t| beta[t][w]).sum::<f64>().max(1e-12);
+                for t in 0..k {
+                    phi_by_group[group[di]][w][t] += counts[wi] * beta[t][w] / denom;
+                }
+            }
+        }
+        let alpha_agg = group_means(&alpha, &group, num_groups, k);
+        let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_ridge);
+        kappa_t = kt;
+        kappa_s = ks;
     }
 
     let mut gamma: Option<Vec<Vec<f64>>> = nf.map(|f| vec![vec![0.0f64; n]; f]);
@@ -524,6 +686,7 @@ pub fn fit_sts<R: Rng>(
 
     for em in 0..em_iters {
         em_iters_run = em + 1;
+        let kappa = Kappa { kappa_t: kappa_t.clone(), kappa_s: kappa_s.clone() };
         let siginv = spd_inverse(&sigma, n).unwrap_or_else(|| {
             let mut s = sigma.clone();
             make_diagonally_dominant(&mut s, n);
@@ -533,6 +696,9 @@ pub fn fit_sts<R: Rng>(
             Some(l) => half_logdet(&l, n),
             None => 0.0,
         };
+
+        // Aggregated expected word-topic counts φ_{g,v,k} for the κ M-step.
+        let mut phi_by_group = vec![vec![vec![0.0f64; k]; v]; num_groups];
 
         let mut total_bound = 0.0;
         for (di, (words, counts)) in sparse.iter().enumerate() {
@@ -571,6 +737,20 @@ pub fn fit_sts<R: Rng>(
             // ll − 0.5 quad collapses to sts_lhood at the optimum).
             let f_at = sts_lhood(&a_hat, &kappa, &mv, words, counts, &mu_d, &siginv, k);
             total_bound += f_at - half_ld - entropy;
+
+            // Accumulate responsibilities φ_{d,v,k} = c_{d,v}·θ_k β_{k,v}/Σ θ β
+            // into the document's aggregation group.
+            let db = doc_beta(&a_hat, &kappa, &mv, k);
+            let g = group[di];
+            for (wi, &w) in words.iter().enumerate() {
+                let mut denom = 0.0;
+                for t in 0..k {
+                    denom += db.expeta[t] * db.beta[t][w];
+                }
+                for t in 0..k {
+                    phi_by_group[g][w][t] += counts[wi] * db.expeta[t] * db.beta[t][w] / denom;
+                }
+            }
         }
         bound_history.push(total_bound);
 
@@ -603,6 +783,16 @@ pub fn fit_sts<R: Rng>(
                 let nu_sum: f64 = nu_store.iter().map(|nu| nu[i * n + j]).sum();
                 sigma[i * n + j] = (nu_sum + cross) / d as f64;
             }
+        }
+
+        // κ M-step: Poisson regression of the aggregated counts on the group-mean
+        // sentiment (skipped when there is only one group, which leaves κ_s
+        // unidentified and κ_t at its β-derived initialization).
+        if num_groups >= 2 {
+            let alpha_agg = group_means(&alpha, &group, num_groups, k);
+            let (kt, ks) = opt_kappa(&phi_by_group, &alpha_agg, &mv, k, v, num_groups, kappa_ridge);
+            kappa_t = kt;
+            kappa_s = ks;
         }
     }
 
@@ -743,7 +933,7 @@ mod tests {
     fn em_bound_increases_and_recovers_topics() {
         let (docs, x, truth, v) = planted_corpus();
         let mut rng = StdRng::seed_from_u64(1);
-        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, 0.1, true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, 1e-3, true, &mut rng);
 
         // The variational bound increases monotonically (allowing tiny slack).
         for w in m.bound_history.windows(2) {
@@ -774,11 +964,60 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let mut r1 = StdRng::seed_from_u64(1);
         let mut r2 = StdRng::seed_from_u64(1);
-        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 0.1, true, &mut r1);
-        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 0.1, true, &mut r2);
+        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 1e-3, true, &mut r1);
+        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, 1e-3, true, &mut r2);
         for (a, b) in m1.alpha.iter().flatten().zip(m2.alpha.iter().flatten()) {
             assert!((a - b).abs() < 1e-12);
         }
         assert_eq!(m1.bound_history.len(), m2.bound_history.len());
+    }
+
+    #[test]
+    fn poisson_2param_recovers_coefficients() {
+        // Counts generated from a known (a, b): y_g = exp(offset_g + a + b·z_g).
+        let (a_true, b_true) = (0.7f64, -1.3f64);
+        let z: Vec<f64> = vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
+        let offset: Vec<f64> = vec![0.2, -0.1, 0.0, 0.15, -0.2, 0.05];
+        let y: Vec<f64> = z
+            .iter()
+            .zip(&offset)
+            .map(|(zi, oi)| (oi + a_true + b_true * zi).exp())
+            .collect();
+        let (a, b) = poisson_2param(&y, &z, &offset, 0.0);
+        assert!((a - a_true).abs() < 1e-4, "a {a} vs {a_true}");
+        assert!((b - b_true).abs() < 1e-4, "b {b} vs {b_true}");
+    }
+
+    #[test]
+    fn poisson_2param_intercept_only_when_no_spread() {
+        // No covariate spread: slope unidentified, intercept still recovered.
+        let z = vec![1.0, 1.0, 1.0];
+        let offset = vec![0.0, 0.0, 0.0];
+        let y = vec![2.0f64.exp(); 3];
+        let (a, b) = poisson_2param(&y, &z, &offset, 0.0);
+        assert!((a - 2.0).abs() < 1e-4);
+        assert_eq!(b, 0.0);
+    }
+
+    #[test]
+    fn learns_sentiment_with_groups() {
+        // The block indicator doubles as the sentiment seed (two groups), so the
+        // κ M-step is exercised: it should learn a non-zero κ_s while still
+        // recovering the topics and increasing the bound overall.
+        let (docs, x, _truth, v) = planted_corpus();
+        let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
+        let mut rng = StdRng::seed_from_u64(2);
+        let m = fit_sts(&docs, 2, v, 30, 1e-6, Some(&x), Some(&seed), 1e-3, true, &mut rng);
+
+        let ks_max = m
+            .kappa_s
+            .iter()
+            .flatten()
+            .fold(0.0f64, |acc, &x| acc.max(x.abs()));
+        assert!(ks_max > 1e-3, "kappa_s never moved off zero: {ks_max}");
+        assert!(
+            *m.bound_history.last().unwrap() >= m.bound_history[0] - 1e-6,
+            "bound did not improve overall"
+        );
     }
 }
