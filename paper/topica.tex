@@ -561,23 +561,35 @@ The structural topic model is the comparison that matters most for social
 scientists, since \proglang{R} \pkg{stm} is the field standard and its fits can
 take minutes. Table~\ref{tab:stm} shows \pkg{topica} fitting the same model three
 to six times faster on a single core and ten to twenty-two times faster across
-cores. The keyword-assisted model matches \proglang{R} \pkg{keyATM}'s
+cores. It also fits in roughly a quarter of \proglang{R} \pkg{stm}'s memory
+(about 460MB against 1.7GB at 5{,}000 documents), since it holds the corpus and
+the variational state in compact native arrays rather than \proglang{R} objects.
+The keyword-assisted model matches \proglang{R} \pkg{keyATM}'s
 \proglang{C++} sampler single-threaded (25.9s versus 24.5s on a
 2{,}000-document, 10-topic fit of 1{,}000 sweeps) and runs about twice as fast on
 four cores (12.1s), through a document-partitioned parallel sweep that the
 \proglang{R} package has no equivalent of.
 
-We report the LDA comparison straight, because it does not favor us. Against
-\pkg{MALLET}, the original \proglang{Java} sampler, fit time is close: the two are
-roughly at parity single-threaded, \pkg{topica}'s document-partitioned parallelism
-pulls ahead on four cores (about $2\times$), and \pkg{topica} adds no JVM startup. Against
-\pkg{tomotopy} \citep{tomotopy}, a
-\proglang{C++} library in the same performance tier, plain LDA is a wash:
-\pkg{tomotopy}'s tighter inner loop is about twenty percent ahead single-threaded,
-and \pkg{topica}'s document-partitioned parallelism pulls even or slightly ahead
-across cores. For plain LDA the two are interchangeable on speed; \pkg{topica}'s
-advantage is the structural-topic-model, effect-estimation, and diagnostics stack
-built around the sampler, not raw LDA throughput.
+We report the LDA comparison straight, because it does not uniformly favor us.
+Against \pkg{MALLET}, the original \proglang{Java} sampler, the two are at parity
+single-threaded and stay close at matched thread counts, with \pkg{topica}'s
+document-partitioned parallelism pulling ahead on the larger corpora (a
+5{,}000-document fit on ten threads runs in 12.8s against \pkg{MALLET}'s 16.5s),
+and \pkg{topica} adds no JVM startup. Against \pkg{tomotopy} \citep{tomotopy}, a
+\proglang{C++} library, the comparison turns on the number of topics, because the
+two make opposite algorithmic bets. \pkg{tomotopy} computes a dense topic
+distribution for every token and vectorizes it with \pkg{Eigen}, which is fastest
+when $K$ is small; \pkg{topica}, like \pkg{MALLET}, uses a sparse sampler that
+visits only the topics a word actually occupies, which wins when $K$ is large. On
+a 2{,}600-word, 3{,}500-document corpus the two cross near $K=200$: \pkg{tomotopy}
+is about $2\times$ faster at $K=20$, the gap closes through $K=100$, and
+\pkg{topica} is faster beyond, by about $1.5\times$ at $K=400$, where its time has
+barely grown while \pkg{tomotopy}'s has risen with $K$. The fine-grained models
+common in social science sit in the large-$K$ regime where the sparse sampler
+pays off, and there \pkg{topica} also matches \pkg{MALLET}. Throughout,
+\pkg{topica} retains the thinned posterior draws its uncertainty tooling needs
+(Section~\ref{sec:workflow}), which the count-based references do not compute at
+all, at no measurable cost to fit time.
 
 %% ===========================================================================
 \section{Worked example: many models, one workflow}\label{sec:example}
