@@ -221,6 +221,19 @@ struct StmState {
     #[serde(default)] topic_names: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
+struct StsState {
+    num_topics: usize, seed: u64, init_spectral: bool, fitted: bool,
+    beta: Option<Arr2>, theta: Option<Arr2>, sentiment: Option<Arr2>,
+    gamma: Option<Arr2>, eta_mean: Option<Arr2>, eta_cov: Option<Arr3>,
+    feature_names: Vec<String>,
+    kappa_t: Vec<Vec<f64>>, kappa_s: Vec<Vec<f64>>, mv: Vec<f64>, sigma: Vec<f64>,
+    corpus: Option<corpus::Corpus>,
+    #[serde(default = "nan")] bound: f64,
+    #[serde(default)] bound_history: Vec<f64>,
+    #[serde(default)] converged: bool,
+    #[serde(default)] topic_names: Vec<String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
 struct HdpState {
     alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool, fitted: bool,
     num_topics: usize, learned_alpha: f64, learned_gamma: f64,
@@ -6304,9 +6317,75 @@ impl STS {
         Ok(self.corpus.as_ref().unwrap().id_to_word.clone())
     }
 
+    /// Document labels (row order of :attr:`doc_topic`), default the document
+    /// indices as strings.
+    #[getter]
+    fn doc_names(&self) -> PyResult<Vec<String>> {
+        self.require_fitted()?;
+        Ok(self.corpus.as_ref().unwrap().doc_names.clone())
+    }
+
     #[getter]
     fn num_topics(&self) -> usize {
         self.num_topics
+    }
+
+    /// Infer topic prevalence θ for *new* documents by the Laplace E-step against
+    /// the fitted globals (κ, m, Σ) with a zero prior mean (held-out documents
+    /// carry no covariates). `data` is a :class:`Corpus` or `list[list[str]]`;
+    /// tokens outside the training vocabulary are dropped. Returns a
+    /// ``(num_docs, num_topics)`` array of prevalence proportions.
+    fn transform<'py>(
+        &self,
+        py: Python<'py>,
+        data: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        let docs = docs_to_ids(data, &self.corpus.as_ref().unwrap().id_to_word)?;
+        let theta = py.allow_threads(|| {
+            sts::sts_infer(&docs, &self.kappa_t, &self.kappa_s, &self.mv, &self.sigma, self.num_topics)
+        });
+        Ok(vecs_to_arr2(&theta).to_pyarray_bound(py))
+    }
+
+    /// Save the fitted model to `path`. Reload with :meth:`STS.load`.
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.require_fitted()?;
+        write_state(path, &StsState {
+            num_topics: self.num_topics, seed: self.seed, init_spectral: self.init_spectral,
+            fitted: self.fitted,
+            beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta),
+            sentiment: arr2_opt(&self.sentiment), gamma: arr2_opt(&self.gamma),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            feature_names: self.feature_names.clone(),
+            kappa_t: self.kappa_t.clone(), kappa_s: self.kappa_s.clone(),
+            mv: self.mv.clone(), sigma: self.sigma.clone(),
+            corpus: self.corpus.clone(),
+            bound: self.bound, bound_history: self.bound_history.clone(),
+            converged: self.converged, topic_names: self.topic_names.clone(),
+        })
+    }
+
+    /// Load a model previously written by :meth:`save`.
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let s: StsState = read_state(path)?;
+        let topic_names = if s.topic_names.is_empty() {
+            (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
+        } else {
+            s.topic_names
+        };
+        Ok(STS {
+            num_topics: s.num_topics, seed: s.seed, init_spectral: s.init_spectral,
+            fitted: s.fitted, topic_names,
+            beta: arr2_back(s.beta), theta: arr2_back(s.theta),
+            sentiment: arr2_back(s.sentiment), gamma: arr2_back(s.gamma),
+            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            feature_names: s.feature_names,
+            kappa_t: s.kappa_t, kappa_s: s.kappa_s, mv: s.mv, sigma: s.sigma,
+            corpus: s.corpus, bound: s.bound, bound_history: s.bound_history,
+            converged: s.converged,
+        })
     }
 
     /// Top `n` words per topic (or one topic) at neutral sentiment, as

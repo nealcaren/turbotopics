@@ -68,6 +68,7 @@ REGISTRY: list[tuple[str, object, str]] = [
     # logistic-normal (variational eta posterior)
     ("STM",          lambda: _topica.STM(2),                                     "logistic_normal"),
     ("CTM",          lambda: _topica.CTM(2),                                     "logistic_normal"),
+    ("STS",          lambda: _topica.STS(2),                                     "logistic_normal"),
     # neural / embedding-based — no theta posterior
     ("ETM",          lambda: _topica.ETM(2),                                     "none"),
     ("ProdLDA",      lambda: _topica.ProdLDA(2),                                 "none"),

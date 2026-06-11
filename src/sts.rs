@@ -378,6 +378,59 @@ impl LogisticNormalModel for StsModel {
 }
 
 
+/// Infer per-document prevalence θ (D×K) for *new* documents against fixed
+/// global parameters (κ_t, κ_s, m, Σ) by the same Laplace E-step used in fitting,
+/// with a zero prior mean (held-out documents carry no covariates). For each
+/// document the 2K-1 latent α = [α^(p), α^(s)] is found by the L-BFGS optimum of
+/// the per-document objective, then θ_d = softmax([α^(p)_d, 0]); the sentiment
+/// latent is inferred jointly but not returned. Empty documents (all tokens out
+/// of vocabulary) get a uniform θ. Document order is preserved, and the parallel
+/// inference is order-deterministic (one independent optimum per document).
+pub fn sts_infer(
+    docs: &[Vec<u32>],
+    kappa_t: &[Vec<f64>],
+    kappa_s: &[Vec<f64>],
+    mv: &[f64],
+    sigma: &[f64],
+    k: usize,
+) -> Vec<Vec<f64>> {
+    let n = 2 * k - 1;
+    let kappa = Kappa { kappa_t: kappa_t.to_vec(), kappa_s: kappa_s.to_vec() };
+    let siginv = spd_inverse(sigma, n).unwrap_or_else(|| {
+        let mut s = sigma.to_vec();
+        make_diagonally_dominant(&mut s, n);
+        spd_inverse(&s, n).unwrap()
+    });
+    let mu = vec![0.0f64; n];
+    let sparse: Vec<(Vec<usize>, Vec<f64>)> = docs.iter().map(|d| doc_sparse(d)).collect();
+    let inferred = crate::variational::laplace_estep(&sparse, |_di, words, counts| {
+        let a_hat = lbfgs_minimize(
+            vec![0.0f64; n],
+            |a| {
+                (
+                    -sts_lhood(a, &kappa, mv, words, counts, &mu, &siginv, k),
+                    sts_grad(a, &kappa, mv, words, counts, &mu, &siginv, k)
+                        .iter()
+                        .map(|g| -g)
+                        .collect(),
+                )
+            },
+            100,
+            7,
+            1e-5,
+        );
+        let e = expeta(&a_hat[..k - 1]);
+        let s: f64 = e.iter().sum();
+        e.iter().map(|x| x / s).collect::<Vec<f64>>()
+    });
+    // Reassemble in document order; empty docs (skipped by the driver) get uniform θ.
+    let mut out = vec![vec![1.0 / k as f64; k]; docs.len()];
+    for (di, theta) in inferred {
+        out[di] = theta;
+    }
+    out
+}
+
 /// A two-parameter Poisson regression `log E[y_g] = offset_g + a + b·z_g` fit by
 /// Newton's method with a small ridge. Returns `(a, b)` = `(κ^(t), κ^(s))` for one
 /// (word, topic). When the covariate `z` has no spread (or fewer than two groups)
