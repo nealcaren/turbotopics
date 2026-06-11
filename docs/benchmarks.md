@@ -114,6 +114,33 @@ reproducible in one command:
 python benchmarks/speed_vs_r.py
 ```
 
+## Across the family vs tomotopy
+
+tomotopy implements much of the same count-based family in C++, so we can compare
+topica model-for-model. The table below is single-threaded, K=20, 500 Gibbs
+iterations (variational EM for CTM), on the 3,500-document poliblog corpus; ratio
+is reference time over topica time, so above 1 means topica is faster. K=20 sits
+in tomotopy's small-K sweet spot (see the LDA crossover above), so this is the
+regime least favorable to topica's sparse samplers.
+
+| model | topica | tomotopy | ratio |
+|-------|-------:|---------:|------:|
+| CTM | 40.6s | 116.3s | **2.86×** |
+| DMR | 22.2s | 15.8s | 0.71× |
+| LDA | 21.6s | 12.4s | 0.58× |
+| LabeledLDA | 7.3s | 3.5s | 0.47× |
+| PA | 259s | 99s | 0.38× |
+| PT | 90s | 15s | 0.17× |
+
+topica wins decisively on CTM (its structural-topic-model core uses a Laplace
+E-step, faster than tomotopy's mean-field CTM), is within ~2× on the SparseLDA
+models at this small K (and ahead at large K, per the crossover above), and lags
+on PA and PT, which still recompute a dense per-token distribution rather than a
+sparse one — tracked as optimization headroom. HDP and supervised LDA are omitted:
+topica's HDP and tomotopy's infer different topic counts, and topica's supervised
+LDA is variational where tomotopy's is Gibbs, so neither is a like-for-like speed
+comparison.
+
 ## Large-K sampling: SparseLDA vs LightLDA
 
 [LightLDA](guides/models.md#sampler-choice-sparselda-vs-lightlda)'s
