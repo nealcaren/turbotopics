@@ -5937,6 +5937,8 @@ pub struct STS {
     kappa_s: Vec<Vec<f64>>, // K×V
     mv: Vec<f64>,           // V
     sigma: Vec<f64>,        // (2K-1)²
+    eta_mean: Option<Array2<f64>>,  // D×(2K-1)
+    eta_cov: Option<Array3<f64>>,   // D×(2K-1)×(2K-1)
     corpus: Option<corpus::Corpus>,
     bound: f64,
     bound_history: Vec<f64>,
@@ -5987,6 +5989,8 @@ impl STS {
             kappa_s: Vec::new(),
             mv: Vec::new(),
             sigma: Vec::new(),
+            eta_mean: None,
+            eta_cov: None,
             corpus: None,
             bound: f64::NAN,
             bound_history: Vec::new(),
@@ -6146,6 +6150,18 @@ impl STS {
         self.kappa_s = model.kappa_s;
         self.mv = model.mv;
         self.sigma = model.sigma;
+        let mut em = Array2::<f64>::zeros((model.alpha.len(), n));
+        let mut ec = Array3::<f64>::zeros((model.alpha.len(), n, n));
+        for di in 0..model.alpha.len() {
+            for i in 0..n {
+                em[[di, i]] = model.alpha[di][i];
+                for j in 0..n {
+                    ec[[di, i, j]] = model.nu[di][i * n + j];
+                }
+            }
+        }
+        self.eta_mean = Some(em);
+        self.eta_cov = Some(ec);
         self.corpus = Some(corpus);
         self.bound = model.bound_history.last().copied().unwrap_or(f64::NAN);
         self.bound_history = model.bound_history;
@@ -6229,6 +6245,24 @@ impl STS {
             }
         }
         Ok(out.to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior means λ of the logistic-normal latent η
+    /// = [α^(p)_{1..K-1}, α^(s)_{1..K}], shape ``(num_docs, 2*num_topics-1)``.
+    /// Pairs with :attr:`eta_cov` as the joint prevalence/sentiment posterior for
+    /// method-of-composition uncertainty.
+    #[getter]
+    fn eta_mean<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_mean.as_ref().unwrap().to_pyarray_bound(py))
+    }
+
+    /// Per-document variational posterior covariances ν of η, shape
+    /// ``(num_docs, 2*num_topics-1, 2*num_topics-1)``.
+    #[getter]
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+        self.require_fitted()?;
+        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
 
     /// Final variational bound (approximate ELBO).

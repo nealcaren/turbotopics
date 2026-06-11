@@ -613,6 +613,17 @@ class STS:
         Requires a prevalence design at fit time."""
         ...
     @property
+    def eta_mean(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-document variational posterior means of the logistic-normal latent
+        eta = [alpha^(p)_{1..K-1}, alpha^(s)_{1..K}], (num_docs, 2*num_topics-1).
+        With eta_cov, the joint prevalence/sentiment posterior."""
+        ...
+    @property
+    def eta_cov(self) -> numpy.typing.NDArray[numpy.float64]:
+        """Per-document variational posterior covariances of eta,
+        (num_docs, 2*num_topics-1, 2*num_topics-1)."""
+        ...
+    @property
     def bound(self) -> float: ...
     @property
     def bound_history(self) -> list[float]: ...
