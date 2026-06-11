@@ -6,13 +6,13 @@ time and peak resident set size (RSS) for each engine.  Optionally runs a
 BERTopic clustering-stage comparison if bertopic and umap are importable.
 
 Also supports a same-model matrix (--matrix flag) that pits topica against
-tomotopy model-by-model at a fixed corpus size, and a gensim LDA head-to-head.
+tomotopy model-by-model at a fixed corpus size.
 
 Usage
 -----
     python benchmarks/bench.py            # full default sweep
     python benchmarks/bench.py --render   # render outputs from a previous run
-    python benchmarks/bench.py --matrix   # run topica-vs-tomotopy matrix + gensim
+    python benchmarks/bench.py --matrix   # run topica-vs-tomotopy matrix
 
 Env knobs
 ---------
@@ -1331,106 +1331,19 @@ def bench_tomotopy_matrix(
     return results
 
 
-# ---------------------------------------------------------------------------
-# gensim LDA leg
-# ---------------------------------------------------------------------------
-
-def bench_gensim_lda(docs: list[list[str]]) -> dict | None:
-    """Time topica LDA vs gensim LdaModel at MATRIX_SIZE/K/ITERS, single-threaded.
-
-    Timing is end-to-end from the tokenized documents: gensim's Dictionary +
-    doc2bow build is inside the timed region (matching topica's fit(), which
-    builds its corpus internally), then the LdaModel training, matching K and
-    total sweeps (passes=1, iterations=ITERS). Returns a result dict or None if
-    gensim is unavailable.
-    """
-    try:
-        import gensim  # noqa: F401 — availability check
-    except ImportError:
-        print("  [matrix] gensim LDA: skipped — gensim not importable", flush=True)
-        return None
-
-    K = MATRIX_K
-    ITERS = MATRIX_ITERS
-    PYTHON_PATH = str(ROOT / "python")
-
-    print("  [matrix] gensim LDA ...", flush=True)
-
-    with tempfile.TemporaryDirectory() as d:
-        docs_pkl = os.path.join(d, "docs.json")
-        json.dump({"docs": docs}, open(docs_pkl, "w"))
-
-        # topica LDA (same as matrix LDA leg, single-threaded).
-        py_topica = (
-            "import json, sys, time\n"
-            f"sys.path.insert(0, {PYTHON_PATH!r})\n"
-            "import topica\n"
-            f"data = json.load(open({docs_pkl!r}))\n"
-            "docs = data['docs']\n"
-            f"t0 = time.perf_counter()\n"
-            f"topica.LDA(num_topics={K}, seed=1, optimize_interval=0,"
-            f" num_threads=1).fit(docs, iters={ITERS})\n"
-            "print('FIT_TIME', time.perf_counter() - t0)\n"
-        )
-        # gensim LDA: build Dictionary + bow outside the timed region; time
-        # only the LdaModel constructor call.  passes=1, iterations=ITERS
-        # (one pass over documents, ITERS E-step iterations per document).
-        # chunksize=len(corpus) gives a single chunk (one online-update step).
-        # gensim LDA is single-process by default; there is no workers kwarg.
-        py_gensim = (
-            "import json, time\n"
-            "from gensim.corpora import Dictionary\n"
-            "from gensim.models import LdaModel\n"
-            f"data = json.load(open({docs_pkl!r}))\n"
-            "docs = data['docs']\n"
-            # End-to-end: Dictionary + doc2bow are inside the timed region, to
-            # match topica's fit(docs) which builds its corpus internally.
-            f"t0 = time.perf_counter()\n"
-            "dct = Dictionary(docs)\n"
-            "bow = [dct.doc2bow(d) for d in docs]\n"
-            f"LdaModel(\n"
-            f"    bow,\n"
-            f"    num_topics={K},\n"
-            f"    id2word=dct,\n"
-            f"    passes=1,\n"
-            f"    iterations={ITERS},\n"
-            f"    update_every=1,\n"
-            f"    chunksize=len(bow),\n"  # single chunk = no online update splits
-            f"    random_state=1,\n"
-            f"    eval_every=None,\n"
-            f"    alpha='symmetric',\n"
-            f"    eta=0.01,\n"
-            f")\n"
-            "print('FIT_TIME', time.perf_counter() - t0)\n"
-        )
-
-        try:
-            tt, tt_rss = _run_subprocess_fit(py_topica)
-            tg, tg_rss = _run_subprocess_fit(py_gensim)
-            print(f"    topica {tt:.2f}s  gensim {tg:.2f}s", flush=True)
-            return {
-                "topica_time": tt, "gensim_time": tg,
-                "topica_rss_mb": tt_rss, "gensim_rss_mb": tg_rss,
-            }
-        except Exception as exc:
-            print(f"    SKIP gensim LDA — error: {exc}", flush=True)
-            return None
-
 
 # ---------------------------------------------------------------------------
 # Matrix renderer
 # ---------------------------------------------------------------------------
 
-def render_model_matrix(matrix_records: list[dict] | None = None,
-                        gensim_record: dict | None = None) -> None:
+def render_model_matrix(matrix_records: list[dict] | None = None) -> None:
     """Write benchmarks/model_matrix.md from matrix_results.json."""
-    if matrix_records is None or gensim_record is None:
+    if matrix_records is None:
         if not MATRIX_RESULTS_JSON.exists():
             print(f"No matrix results at {MATRIX_RESULTS_JSON}; run --matrix first.")
             return
         blob = json.load(open(MATRIX_RESULTS_JSON))
         matrix_records = blob.get("matrix", [])
-        gensim_record = blob.get("gensim_lda")
 
     import io
     buf = io.StringIO()
@@ -1462,25 +1375,6 @@ def render_model_matrix(matrix_records: list[dict] | None = None,
             f"| {tt_rss:.0f} | {tm_rss:.0f} | {note} |\n"
         )
 
-    buf.write("\n### gensim LDA comparison\n\n")
-    if gensim_record:
-        gt = gensim_record.get("topica_time", float("nan"))
-        gg = gensim_record.get("gensim_time", float("nan"))
-        ratio_g = f"{gg / gt:.2f}x" if gt and gg else "n/a"
-        gt_rss = gensim_record.get("topica_rss_mb", float("nan"))
-        gg_rss = gensim_record.get("gensim_rss_mb", float("nan"))
-        buf.write(
-            "| model | topica (s) | gensim (s) | topica/gensim ratio "
-            "| topica RSS (MB) | gensim RSS (MB) |\n"
-        )
-        buf.write("|---|---|---|---|---|---|\n")
-        buf.write(
-            f"| LDA (vs gensim) | {gt:.2f} | {gg:.2f} | {ratio_g} "
-            f"| {gt_rss:.0f} | {gg_rss:.0f} |\n"
-        )
-    else:
-        buf.write("_gensim LDA leg was skipped (gensim not available)._\n")
-
     buf.write(
         "\n_Note: HDP infers the number of topics; K is not fixed. "
         "CTM implementations differ (topica: Laplace/STM E-step, "
@@ -1500,7 +1394,7 @@ def render_model_matrix(matrix_records: list[dict] | None = None,
 # ---------------------------------------------------------------------------
 
 def run_matrix() -> None:
-    """Load corpus, run the tomotopy matrix + gensim leg, write outputs."""
+    """Load corpus, run the tomotopy matrix, write outputs."""
     _ensure_csv()
     toks, rating_full, day_full = _load_full()
     print(
@@ -1515,13 +1409,12 @@ def run_matrix() -> None:
     print(f"Subsampled: {nd} docs, {nv} vocab\n", flush=True)
 
     matrix_records = bench_tomotopy_matrix(docs, rating, day, None, vocab)
-    gensim_record = bench_gensim_lda(docs)
 
-    blob = {"matrix": matrix_records, "gensim_lda": gensim_record}
+    blob = {"matrix": matrix_records}
     json.dump(blob, open(MATRIX_RESULTS_JSON, "w"), indent=2)
     print(f"\nMatrix results written to {MATRIX_RESULTS_JSON}", flush=True)
 
-    render_model_matrix(matrix_records, gensim_record)
+    render_model_matrix(matrix_records)
 
 
 # ---------------------------------------------------------------------------
@@ -1541,7 +1434,7 @@ def main() -> None:
         "--matrix",
         action="store_true",
         help=(
-            "Run topica-vs-tomotopy same-model matrix + gensim LDA leg at "
+            "Run topica-vs-tomotopy same-model matrix at "
             "MATRIX_SIZE, write matrix_results.json, and render model_matrix.md"
         ),
     )
