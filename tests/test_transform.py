@@ -155,3 +155,44 @@ def test_transform_deterministic():
     m = topica.LDA(num_topics=2, seed=1)
     m.fit(docs, iters=200)
     np.testing.assert_array_equal(m.transform(NEW, seed=7), m.transform(NEW, seed=7))
+
+
+# ---------------------------------------------------------------------------
+# #104: iters= is canonical; iterations= is a deprecated alias
+# ---------------------------------------------------------------------------
+
+class TestTransformIterationsAlias:
+    """transform(iters=N) and transform(iterations=N) give identical results;
+    the deprecated form emits a DeprecationWarning."""
+
+    def setup_method(self):
+        docs, _ = _two_topic_corpus()
+        self.m = topica.LDA(num_topics=2, seed=1)
+        self.m.fit(docs, iters=200)
+
+    def test_lda_iters_works(self):
+        theta = self.m.transform(NEW, iters=20, seed=0)
+        assert theta.shape == (len(NEW), 2)
+        np.testing.assert_allclose(theta.sum(axis=1), 1.0, atol=1e-6)
+
+    def test_lda_iterations_deprecated_warns(self):
+        with pytest.warns(DeprecationWarning, match="iterations="):
+            theta = self.m.transform(NEW, iterations=20, seed=0)
+        assert theta.shape == (len(NEW), 2)
+
+    def test_lda_iters_and_iterations_same_result(self):
+        """Both aliases must produce numerically identical output for the same seed."""
+        theta_new = self.m.transform(NEW, iters=20, seed=0)
+        with pytest.warns(DeprecationWarning):
+            theta_old = self.m.transform(NEW, iterations=20, seed=0)
+        np.testing.assert_array_equal(theta_new, theta_old)
+
+    def test_dmr_iterations_deprecated_warns(self):
+        """Check a second Gibbs model (DMR) also emits the warning."""
+        docs, is_a = _two_topic_corpus()
+        x = is_a.astype(float).reshape(-1, 1)
+        m = topica.DMR(num_topics=2, seed=1)
+        m.fit(docs, x)
+        with pytest.warns(DeprecationWarning, match="iterations="):
+            theta = m.transform(NEW, iterations=20, seed=0)
+        assert theta.shape == (len(NEW), 2)

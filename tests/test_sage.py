@@ -152,7 +152,7 @@ class TestSAGEUnfittedGuards:
     def test_top_words_raises_before_fit(self):
         model = SAGE(2)
         with pytest.raises(RuntimeError, match="not fitted"):
-            model.top_words(0)
+            model.top_words(5)
 
     def test_word_contrast_raises_before_fit(self):
         model = SAGE(2)
@@ -189,19 +189,19 @@ class TestSAGEFitValidation:
         model = SAGE(2, seed=1)
         model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
-            model.top_words(99)
+            model.top_words(5, topic=99)
 
     def test_top_words_unknown_group_name_raises(self):
         model = SAGE(2, seed=1)
         model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
-            model.top_words(0, group="z")
+            model.top_words(5, topic=0, group="z")
 
     def test_top_words_group_index_out_of_range_raises(self):
         model = SAGE(2, seed=1)
         model.fit(self.docs, self.groups, iters=50, num_samples=1, sample_interval=5)
         with pytest.raises(ValueError):
-            model.top_words(0, group=99)
+            model.top_words(5, topic=0, group=99)
 
     def test_word_contrast_topic_out_of_range_raises(self):
         model = SAGE(2, seed=1)
@@ -277,7 +277,7 @@ class TestSAGEGroupSpecificWording:
         """Top words for each topic in the 'en' group are English words."""
         m = bilingual_model
         for t in range(2):
-            top = {w for w, _ in m.top_words(t, group="en", n=7)}
+            top = {w for w, _ in m.top_words(7, topic=t, group="en")}
             assert top <= _EN_VOCAB, (
                 f"Topic {t} en top-words contain non-English words: "
                 f"{top - _EN_VOCAB}"
@@ -287,7 +287,7 @@ class TestSAGEGroupSpecificWording:
         """Top words for each topic in the 'de' group are German words."""
         m = bilingual_model
         for t in range(2):
-            top = {w for w, _ in m.top_words(t, group="de", n=7)}
+            top = {w for w, _ in m.top_words(7, topic=t, group="de")}
             # German vocab + shared word "wind"
             assert top <= _DE_VOCAB, (
                 f"Topic {t} de top-words contain non-German words: "
@@ -298,8 +298,8 @@ class TestSAGEGroupSpecificWording:
         """The top-word sets for 'en' and 'de' should share at most 1 word."""
         m = bilingual_model
         for t in range(2):
-            en_words = {w for w, _ in m.top_words(t, group="en", n=7)}
-            de_words = {w for w, _ in m.top_words(t, group="de", n=7)}
+            en_words = {w for w, _ in m.top_words(7, topic=t, group="en")}
+            de_words = {w for w, _ in m.top_words(7, topic=t, group="de")}
             shared = en_words & de_words
             assert len(shared) <= 1, (
                 f"Topic {t}: en and de top-word sets share too many words: "
@@ -362,21 +362,21 @@ class TestSAGETopWordsByNameVsIndex:
         en_idx = m.groups.index("en")
 
         for t in range(2):
-            tw_de_name = m.top_words(t, group="de", n=5)
-            tw_de_idx  = m.top_words(t, group=de_idx, n=5)
+            tw_de_name = m.top_words(5, topic=t, group="de")
+            tw_de_idx  = m.top_words(5, topic=t, group=de_idx)
             assert tw_de_name == tw_de_idx, (
                 f"top_words(topic={t}, group='de') != top_words(topic={t}, group={de_idx})"
             )
 
-            tw_en_name = m.top_words(t, group="en", n=5)
-            tw_en_idx  = m.top_words(t, group=en_idx, n=5)
+            tw_en_name = m.top_words(5, topic=t, group="en")
+            tw_en_idx  = m.top_words(5, topic=t, group=en_idx)
             assert tw_en_name == tw_en_idx
 
     def test_group_none_returns_marginal(self, bilingual_model):
         """top_words with group=None should return the group-averaged distribution."""
         m = bilingual_model
         for t in range(2):
-            tw_none = m.top_words(t, group=None, n=5)
+            tw_none = m.top_words(5, topic=t, group=None)
             assert isinstance(tw_none, list)
             assert len(tw_none) == 5
             for w, p in tw_none:
@@ -443,8 +443,8 @@ class TestSAGEGroupNames:
         m_de0.fit(docs, groups, group_names=["de", "en"],
                   iters=50, num_samples=1, sample_interval=5)
         # group_names ordering should change which slice is index 0
-        tw_en0_g0 = m_en0.top_words(0, group=0, n=3)
-        tw_en0_gname = m_en0.top_words(0, group="en", n=3)
+        tw_en0_g0 = m_en0.top_words(3, topic=0, group=0)
+        tw_en0_gname = m_en0.top_words(3, topic=0, group="en")
         assert tw_en0_g0 == tw_en0_gname
 
 
@@ -488,7 +488,7 @@ class TestSAGECoherence:
 
 class TestSAGETopWordsStructure:
     def test_top_words_returns_word_prob_tuples(self, bilingual_model):
-        result = bilingual_model.top_words(0, group="en", n=5)
+        result = bilingual_model.top_words(5, topic=0, group="en")
         assert isinstance(result, list)
         assert len(result) == 5
         for w, p in result:
@@ -499,12 +499,12 @@ class TestSAGETopWordsStructure:
     def test_top_words_probabilities_descending(self, bilingual_model):
         for t in range(2):
             for g in ["en", "de"]:
-                probs = [p for _, p in bilingual_model.top_words(t, group=g, n=7)]
+                probs = [p for _, p in bilingual_model.top_words(7, topic=t, group=g)]
                 assert probs == sorted(probs, reverse=True)
 
     def test_top_words_marginal_probabilities_descending(self, bilingual_model):
         for t in range(2):
-            probs = [p for _, p in bilingual_model.top_words(t, n=5)]
+            probs = [p for _, p in bilingual_model.top_words(5, topic=t)]
             assert probs == sorted(probs, reverse=True)
 
     def test_word_contrast_returns_word_log_ratio_tuples(self, bilingual_model):
@@ -523,3 +523,66 @@ class TestSAGETopWordsStructure:
             assert all(lr > 0 for lr in top_lr), (
                 f"Topic {t}: expected positive log-ratios, got {top_lr}"
             )
+
+
+# ---------------------------------------------------------------------------
+# #105: canonical top_words(n=10, *, topic=None, group=None) shape contract
+# ---------------------------------------------------------------------------
+
+class TestSAGETopWordsCanonicalSignature:
+    """Verify that SAGE.top_words now matches the canonical model shape:
+    - top_words(5) returns 5 words per topic (all topics, list of lists)
+    - top_words(5, topic=0) returns just topic 0's 5 words (flat list)
+    - group= still filters by group as before
+    """
+
+    def test_top_words_n_only_returns_all_topics(self, bilingual_model):
+        """top_words(5) returns a list[list] with one entry per topic."""
+        result = bilingual_model.top_words(5)
+        assert isinstance(result, list)
+        assert len(result) == bilingual_model.num_topics
+        for topic_words in result:
+            assert isinstance(topic_words, list)
+            assert len(topic_words) == 5
+            for w, p in topic_words:
+                assert isinstance(w, str)
+                assert isinstance(p, float)
+
+    def test_top_words_5_returns_5_words_per_topic(self, bilingual_model):
+        """Explicit check: top_words(5) gives exactly 5 words for each topic."""
+        result = bilingual_model.top_words(5)
+        for topic_words in result:
+            assert len(topic_words) == 5
+
+    def test_top_words_topic_kwarg_returns_single_list(self, bilingual_model):
+        """top_words(5, topic=0) returns a flat list (not a list of lists)."""
+        result = bilingual_model.top_words(5, topic=0)
+        assert isinstance(result, list)
+        assert len(result) == 5
+        # Each element is a (word, prob) tuple, not a nested list.
+        for item in result:
+            assert isinstance(item, tuple)
+            w, p = item
+            assert isinstance(w, str)
+            assert isinstance(p, float)
+
+    def test_top_words_topic_1_returns_single_list(self, bilingual_model):
+        result = bilingual_model.top_words(5, topic=1)
+        assert isinstance(result, list)
+        assert len(result) == 5
+
+    def test_top_words_with_group_all_topics(self, bilingual_model):
+        """top_words(5, group='en') returns 5 words per topic using en distribution."""
+        result = bilingual_model.top_words(5, group="en")
+        assert len(result) == bilingual_model.num_topics
+        for topic_words in result:
+            assert len(topic_words) == 5
+
+    def test_top_words_with_group_single_topic(self, bilingual_model):
+        """top_words(5, topic=0, group='de') returns the de words for topic 0."""
+        result = bilingual_model.top_words(5, topic=0, group="de")
+        assert isinstance(result, list)
+        assert len(result) == 5
+        words = {w for w, _ in result}
+        # Must be German words (fully disjoint vocabulary)
+        assert words <= _DE_VOCAB
