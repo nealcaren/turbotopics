@@ -108,13 +108,21 @@ struct Arr2 {
     cols: usize,
     data: Vec<f64>,
 }
-/// Serializable form of an ndarray `Array3`.
+/// Serializable form of an ndarray `Array3` (f64).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Arr3 {
     d0: usize,
     d1: usize,
     d2: usize,
     data: Vec<f64>,
+}
+/// Serializable form of an ndarray `Array3<f32>` (used for theta_draws).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Arr3f32 {
+    d0: usize,
+    d1: usize,
+    d2: usize,
+    data: Vec<f32>,
 }
 
 fn arr2_opt(a: &Option<Array2<f64>>) -> Option<Arr2> {
@@ -132,6 +140,15 @@ fn arr3_opt(a: &Option<Array3<f64>>) -> Option<Arr3> {
 fn arr3_back(s: Option<Arr3>) -> Option<Array3<f64>> {
     s.map(|a| Array3::from_shape_vec((a.d0, a.d1, a.d2), a.data).unwrap())
 }
+fn arr3f32_opt(a: &Option<Array3<f32>>) -> Option<Arr3f32> {
+    a.as_ref().map(|m| {
+        let d = m.dim();
+        Arr3f32 { d0: d.0, d1: d.1, d2: d.2, data: m.iter().copied().collect() }
+    })
+}
+fn arr3f32_back(s: Option<Arr3f32>) -> Option<Array3<f32>> {
+    s.map(|a| Array3::from_shape_vec((a.d0, a.d1, a.d2), a.data).unwrap())
+}
 fn arr1_opt(a: &Option<Array1<f64>>) -> Option<Vec<f64>> {
     a.as_ref().map(|m| m.to_vec())
 }
@@ -139,15 +156,80 @@ fn arr1_back(s: Option<Vec<f64>>) -> Option<Array1<f64>> {
     s.map(Array1::from)
 }
 
-fn write_state<S: serde::Serialize>(path: &str, state: &S) -> PyResult<()> {
-    let bytes = bincode::serialize(state)
-        .map_err(|e| PyValueError::new_err(format!("serialization failed: {e}")))?;
-    std::fs::write(path, bytes).map_err(io_err)
+// ---------------------------------------------------------------------------
+// Save-file header: magic + format version + model tag
+//
+// Layout (8 bytes prepended before the bincode payload):
+//   bytes 0..6  : b"TOPICA"   (magic, 6 bytes)
+//   byte  6     : format version u8 = 1
+//   byte  7     : model tag u8 (see MODEL_TAG_* constants below)
+//   bytes 8..   : bincode payload
+//
+// Header encode/decode logic lives in src/saveformat.rs (always compiled, so
+// it can have Rust unit tests without the `python` feature gate or libpython).
+// Old (headerless) files produce a clear "not a topica model file" error
+// rather than a bincode panic.
+// ---------------------------------------------------------------------------
+
+// One tag per concrete model type that calls write_state / read_state.
+const MODEL_TAG_LDA:       u8 = 1;
+const MODEL_TAG_DMR:       u8 = 2;
+const MODEL_TAG_LABELED:   u8 = 3;
+const MODEL_TAG_SAGE:      u8 = 4;
+const MODEL_TAG_CTM:       u8 = 5;
+const MODEL_TAG_STM:       u8 = 6;
+const MODEL_TAG_STS:       u8 = 7;
+const MODEL_TAG_HDP:       u8 = 8;
+const MODEL_TAG_DTM:       u8 = 9;
+const MODEL_TAG_SLDA:      u8 = 10;
+const MODEL_TAG_PT:        u8 = 11;
+const MODEL_TAG_GSDMM:     u8 = 12;
+const MODEL_TAG_SEEDED:    u8 = 13;
+const MODEL_TAG_TOP2VEC:   u8 = 14;
+const MODEL_TAG_BERTOPIC:  u8 = 15;
+const MODEL_TAG_ETM:       u8 = 16;
+const MODEL_TAG_PRODLDA:   u8 = 17;
+const MODEL_TAG_FASTOPIC:  u8 = 18;
+const MODEL_TAG_KEYATM:    u8 = 19;
+const MODEL_TAG_PA:        u8 = 20;
+const MODEL_TAG_HLDA:      u8 = 21;
+
+fn model_tag_name(tag: u8) -> &'static str {
+    match tag {
+        MODEL_TAG_LDA      => "LDA",
+        MODEL_TAG_DMR      => "DMR",
+        MODEL_TAG_LABELED  => "LabeledLDA",
+        MODEL_TAG_SAGE     => "SAGE",
+        MODEL_TAG_CTM      => "CTM",
+        MODEL_TAG_STM      => "STM",
+        MODEL_TAG_STS      => "STS",
+        MODEL_TAG_HDP      => "HDP",
+        MODEL_TAG_DTM      => "DTM",
+        MODEL_TAG_SLDA     => "SupervisedLDA",
+        MODEL_TAG_PT       => "ProdLDA (PT)",
+        MODEL_TAG_GSDMM    => "GSDMM",
+        MODEL_TAG_SEEDED   => "SeededLDA",
+        MODEL_TAG_TOP2VEC  => "Top2Vec",
+        MODEL_TAG_BERTOPIC => "BERTopic",
+        MODEL_TAG_ETM      => "ETM",
+        MODEL_TAG_PRODLDA  => "ProdLDA",
+        MODEL_TAG_FASTOPIC => "FASTopic",
+        MODEL_TAG_KEYATM   => "KeyATM",
+        MODEL_TAG_PA       => "PA",
+        MODEL_TAG_HLDA     => "HLDA",
+        _                  => "unknown",
+    }
 }
-fn read_state<S: serde::de::DeserializeOwned>(path: &str) -> PyResult<S> {
+
+fn write_state<S: serde::Serialize>(path: &str, model_tag: u8, state: &S) -> PyResult<()> {
+    let buf = crate::saveformat::encode_state(model_tag, state)
+        .map_err(PyValueError::new_err)?;
+    std::fs::write(path, buf).map_err(io_err)
+}
+fn read_state<S: serde::de::DeserializeOwned>(path: &str, expected_tag: u8) -> PyResult<S> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    bincode::deserialize(&bytes)
-        .map_err(|e| PyValueError::new_err(format!("not a valid topica model file: {e}")))
+    crate::saveformat::decode_state(&bytes, expected_tag, model_tag_name)
+        .map_err(PyValueError::new_err)
 }
 
 // Per-model serializable snapshots (ndarray fields stored as Arr2/Arr3/Vec).
@@ -162,6 +244,12 @@ struct LdaState {
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
     #[serde(default)] init_spectral: bool,
+    // Sampler backend flags (persisted so a reloaded model is behaviorally identical).
+    #[serde(default)] light: bool,
+    #[serde(default)] warp: bool,
+    #[serde(default)] cvb0: bool,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DmrState {
@@ -282,6 +370,17 @@ struct SeededState {
     corpus: Option<corpus::Corpus>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
+    // Seed metadata: persisted so load() restores the model faithfully.
+    // seed_names / seed_words allow re-fit without re-supplying the keyword dict;
+    // residual is the count of unseeded fallback topics.
+    #[serde(default)] seed_names: Vec<String>,
+    #[serde(default)] seed_words: Vec<Vec<String>>,
+    #[serde(default)] residual: usize,
+    // Sampler backend flags.
+    #[serde(default)] warp: bool,
+    #[serde(default)] cvb0: bool,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyAtmState {
@@ -2019,7 +2118,7 @@ impl LDA {
     /// Save the fitted model to `path` (compact binary). Reload with `LDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &LdaState {
+        write_state(path, MODEL_TAG_LDA, &LdaState {
             num_topics: self.num_topics, alpha_sum: self.alpha_sum, beta: self.beta,
             optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
             num_threads: self.num_threads, fitted: self.fitted,
@@ -2030,13 +2129,15 @@ impl LDA {
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
             init_spectral: self.init_spectral,
+            light: self.light, warp: self.warp, cvb0: self.cvb0,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
 
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: LdaState = read_state(path)?;
+        let s: LdaState = read_state(path, MODEL_TAG_LDA)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -2045,11 +2146,13 @@ impl LDA {
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
-            num_threads: s.num_threads, light: false, warp: false, cvb0: false, mh_steps: 2, fitted: s.fitted,
+            num_threads: s.num_threads, light: s.light, warp: s.warp, cvb0: s.cvb0,
+            mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
             init_spectral: s.init_spectral,
             topic_names,
-            phi: arr2_back(s.phi), theta: arr2_back(s.theta), theta_draws: None,
+            phi: arr2_back(s.phi), theta: arr2_back(s.theta),
+            theta_draws: arr3f32_back(s.theta_draws),
             model: s.model, corpus: s.corpus,
             log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
@@ -3677,7 +3780,7 @@ impl DMR {
     /// Save the fitted model to `path` (compact binary). Reload with `DMR.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &DmrState {
+        write_state(path, MODEL_TAG_DMR, &DmrState {
             num_topics: self.num_topics, beta: self.beta,
             optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
             prior_variance: self.prior_variance, lbfgs_iters: self.lbfgs_iters, fitted: self.fitted,
@@ -3693,7 +3796,7 @@ impl DMR {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: DmrState = read_state(path)?;
+        let s: DmrState = read_state(path, MODEL_TAG_DMR)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -4221,7 +4324,7 @@ impl LabeledLDA {
     /// Save the fitted model to `path`. Reload with `LabeledLDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &LabeledState {
+        write_state(path, MODEL_TAG_LABELED, &LabeledState {
             alpha: self.alpha, beta: self.beta, seed: self.seed, fitted: self.fitted,
             num_topics: self.num_topics, phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
             label_vocab: self.label_vocab.clone(), corpus: self.corpus.clone(),
@@ -4234,7 +4337,7 @@ impl LabeledLDA {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: LabeledState = read_state(path)?;
+        let s: LabeledState = read_state(path, MODEL_TAG_LABELED)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -4771,7 +4874,7 @@ impl SAGE {
     /// Save the fitted model to `path`. Reload with `SAGE.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &SageState {
+        write_state(path, MODEL_TAG_SAGE, &SageState {
             num_topics: self.num_topics, alpha: self.alpha, prior_variance: self.prior_variance,
             optimize_interval: self.optimize_interval, burn_in: self.burn_in, seed: self.seed,
             lbfgs_iters: self.lbfgs_iters, fitted: self.fitted, num_groups: self.num_groups,
@@ -4786,7 +4889,7 @@ impl SAGE {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: SageState = read_state(path)?;
+        let s: SageState = read_state(path, MODEL_TAG_SAGE)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -5386,7 +5489,7 @@ impl CTM {
     /// Save the fitted model to `path`. Reload with `CTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &CtmState {
+        write_state(path, MODEL_TAG_CTM, &CtmState {
             num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
             init_spectral: self.init_spectral, fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
@@ -5402,7 +5505,7 @@ impl CTM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: CtmState = read_state(path)?;
+        let s: CtmState = read_state(path, MODEL_TAG_CTM)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -6059,7 +6162,7 @@ impl STM {
     /// Save the fitted model to `path`. Reload with `STM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &StmState {
+        write_state(path, MODEL_TAG_STM, &StmState {
             num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
             init_spectral: self.init_spectral, fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
@@ -6078,7 +6181,7 @@ impl STM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: StmState = read_state(path)?;
+        let s: StmState = read_state(path, MODEL_TAG_STM)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -6701,7 +6804,7 @@ impl STS {
     /// Save the fitted model to `path`. Reload with :meth:`STS.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &StsState {
+        write_state(path, MODEL_TAG_STS, &StsState {
             num_topics: self.num_topics, seed: self.seed, init_spectral: self.init_spectral,
             fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta),
@@ -6719,7 +6822,7 @@ impl STS {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: StsState = read_state(path)?;
+        let s: StsState = read_state(path, MODEL_TAG_STS)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -7182,7 +7285,7 @@ impl HDP {
     /// Save the fitted model to `path`. Reload with `HDP.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &HdpState {
+        write_state(path, MODEL_TAG_HDP, &HdpState {
             alpha: self.alpha, gamma: self.gamma, eta: self.eta, seed: self.seed,
             resample_conc: self.resample_conc, fitted: self.fitted, num_topics: self.num_topics,
             learned_alpha: self.learned_alpha, learned_gamma: self.learned_gamma,
@@ -7195,7 +7298,7 @@ impl HDP {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: HdpState = read_state(path)?;
+        let s: HdpState = read_state(path, MODEL_TAG_HDP)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -7545,7 +7648,7 @@ impl DTM {
     /// Save the fitted model to `path`. Reload with `DTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &DtmState {
+        write_state(path, MODEL_TAG_DTM, &DtmState {
             num_topics: self.num_topics, alpha: self.alpha, chain_variance: self.chain_variance,
             obs_variance: self.obs_variance, seed: self.seed, fitted: self.fitted,
             num_times: self.num_times, bound: self.bound,
@@ -7557,7 +7660,7 @@ impl DTM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: DtmState = read_state(path)?;
+        let s: DtmState = read_state(path, MODEL_TAG_DTM)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -7976,7 +8079,7 @@ impl SupervisedLDA {
     /// Save the fitted model to `path`. Reload with `SupervisedLDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &SldaState {
+        write_state(path, MODEL_TAG_SLDA, &SldaState {
             num_topics: self.num_topics, alpha: self.alpha, seed: self.seed, fitted: self.fitted,
             sigma2: self.sigma2, eta: arr1_opt(&self.eta), beta: arr2_opt(&self.beta),
             theta: arr2_opt(&self.theta), log_beta: self.log_beta.clone(),
@@ -7990,7 +8093,7 @@ impl SupervisedLDA {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: SldaState = read_state(path)?;
+        let s: SldaState = read_state(path, MODEL_TAG_SLDA)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -8217,7 +8320,7 @@ impl PT {
     /// Save the fitted model to `path`. Reload with `PT.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &PtState {
+        write_state(path, MODEL_TAG_PT, &PtState {
             num_topics: self.num_topics, num_pseudo: self.num_pseudo, alpha: self.alpha,
             beta: self.beta, seed: self.seed, fitted: self.fitted,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
@@ -8229,7 +8332,7 @@ impl PT {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: PtState = read_state(path)?;
+        let s: PtState = read_state(path, MODEL_TAG_PT)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_topics).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -8508,7 +8611,7 @@ impl GSDMM {
     /// Save the fitted model to `path`. Reload with `GSDMM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &GsdmmState {
+        write_state(path, MODEL_TAG_GSDMM, &GsdmmState {
             k_max: self.k_max, alpha: self.alpha, beta: self.beta, seed: self.seed,
             fitted: self.fitted, num_used: self.num_used,
             phi: arr2_opt(&self.phi), theta: arr2_opt(&self.theta),
@@ -8519,7 +8622,7 @@ impl GSDMM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: GsdmmState = read_state(path)?;
+        let s: GsdmmState = read_state(path, MODEL_TAG_GSDMM)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_used).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -8938,25 +9041,34 @@ impl SeededLDA {
     /// Save the fitted model to `path`. Reload with `SeededLDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &SeededState {
+        write_state(path, MODEL_TAG_SEEDED, &SeededState {
             num_topics: self.num_topics_val(), alpha: self.alpha, beta: self.beta,
             weight: self.weight, seed: self.seed, fitted: self.fitted,
             topic_names: self.topic_names.clone(), phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
+            seed_names: self.seed_names.clone(),
+            seed_words: self.seed_words.clone(),
+            residual: self.residual,
+            warp: self.warp, cvb0: self.cvb0,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: SeededState = read_state(path)?;
+        let s: SeededState = read_state(path, MODEL_TAG_SEEDED)?;
+        // num_topics is the total topic count (seeded + residual); use it directly.
         Ok(SeededLDA {
-            seed_names: Vec::new(), seed_words: Vec::new(),
-            residual: s.num_topics.saturating_sub(s.topic_names.iter().filter(|n| !n.starts_with("residual_")).count()),
-            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, warp: false, cvb0: false, fitted: s.fitted,
+            seed_names: s.seed_names,
+            seed_words: s.seed_words,
+            residual: s.residual,
+            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed,
+            warp: s.warp, cvb0: s.cvb0, fitted: s.fitted,
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
-            theta_draws: None, corpus: s.corpus,
+            theta_draws: arr3f32_back(s.theta_draws),
+            corpus: s.corpus,
             log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
         })
@@ -9489,7 +9601,7 @@ impl Top2Vec {
     /// `reducer="umap"` discovery).
     fn save(&self, path: &str) -> PyResult<()> {
         self.fitted_model()?;
-        write_state(path, &Top2VecState {
+        write_state(path, MODEL_TAG_TOP2VEC, &Top2VecState {
             n_components: self.n_components,
             use_umap: self.use_umap,
             n_neighbors: self.n_neighbors,
@@ -9510,7 +9622,7 @@ impl Top2Vec {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: Top2VecState = read_state(path)?;
+        let s: Top2VecState = read_state(path, MODEL_TAG_TOP2VEC)?;
         let num_topics = s.model.as_ref().map_or(0, |m| m.num_topics);
         let topic_names = if s.topic_names.is_empty() {
             (0..num_topics).map(|i| format!("topic_{i}")).collect()
@@ -9904,7 +10016,7 @@ impl BERTopic {
     /// `reducer="umap"` discovery).
     fn save(&self, path: &str) -> PyResult<()> {
         self.fitted_model()?;
-        write_state(path, &BertopicState {
+        write_state(path, MODEL_TAG_BERTOPIC, &BertopicState {
             n_components: self.n_components,
             use_umap: self.use_umap,
             n_neighbors: self.n_neighbors,
@@ -9929,7 +10041,7 @@ impl BERTopic {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: BertopicState = read_state(path)?;
+        let s: BertopicState = read_state(path, MODEL_TAG_BERTOPIC)?;
         let num_topics = s.model.as_ref().map_or(0, |m| m.num_topics);
         let topic_names = if s.topic_names.is_empty() {
             (0..num_topics).map(|i| format!("topic_{i}")).collect()
@@ -10407,7 +10519,7 @@ impl ETM {
                 (None, None, None, None, None, None, None,
                  None, None, None, None, None, None, None, None)
             };
-        write_state(path, &EtmState {
+        write_state(path, MODEL_TAG_ETM, &EtmState {
             num_topics: self.num_topics,
             inference: self.inference.clone(),
             em_tol: self.em_tol,
@@ -10433,7 +10545,7 @@ impl ETM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: EtmState = read_state(path)?;
+        let s: EtmState = read_state(path, MODEL_TAG_ETM)?;
         let model = if s.inference == "em" {
             s.beta_em.map(|beta| etm::EtmModel {
                 num_topics: s.num_topics,
@@ -10808,7 +10920,7 @@ impl ProdLDA {
     /// Save the fitted model to `path` (topica's binary format).
     fn save(&self, path: &str) -> PyResult<()> {
         let m = self.fitted_model()?;
-        write_state(path, &ProdldaState {
+        write_state(path, MODEL_TAG_PRODLDA, &ProdldaState {
             num_topics: self.num_topics,
             hidden_size: self.hidden_size,
             alpha: self.alpha,
@@ -10845,7 +10957,7 @@ impl ProdLDA {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: ProdldaState = read_state(path)?;
+        let s: ProdldaState = read_state(path, MODEL_TAG_PRODLDA)?;
         let model = if s.fitted && s.w_v.is_some() {
             let v = s.w_v.unwrap();
             let hidden = s.w_hidden.unwrap();
@@ -11185,7 +11297,7 @@ impl FASTopic {
     /// Save the fitted model to `path` (topica's binary format).
     fn save(&self, path: &str) -> PyResult<()> {
         let m = self.fitted_model()?;
-        write_state(path, &FastopicState {
+        write_state(path, MODEL_TAG_FASTOPIC, &FastopicState {
             num_topics: self.num_topics,
             lr: self.lr,
             dt_alpha: self.dt_alpha,
@@ -11213,7 +11325,7 @@ impl FASTopic {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: FastopicState = read_state(path)?;
+        let s: FastopicState = read_state(path, MODEL_TAG_FASTOPIC)?;
         let model = if s.fitted && s.topic_word.is_some() {
             Some(fastopic::FastopicModel {
                 num_topics: s.num_topics,
@@ -11919,7 +12031,7 @@ impl KeyATM {
     /// Save the fitted model to `path`. Reload with `KeyATM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &KeyAtmState {
+        write_state(path, MODEL_TAG_KEYATM, &KeyAtmState {
             num_topics: self.num_topics, alpha: self.alpha, beta: self.beta,
             beta_keyword: self.beta_keyword, gamma1: self.gamma1, gamma2: self.gamma2,
             seed: self.seed, fitted: self.fitted, topic_names: self.topic_names.clone(),
@@ -11935,7 +12047,7 @@ impl KeyATM {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: KeyAtmState = read_state(path)?;
+        let s: KeyAtmState = read_state(path, MODEL_TAG_KEYATM)?;
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics: s.num_topics,
             alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
@@ -12211,7 +12323,7 @@ impl PA {
     /// Save the fitted model to `path`. Reload with `PA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &PaState {
+        write_state(path, MODEL_TAG_PA, &PaState {
             num_super: self.num_super, num_sub: self.num_sub, alpha: self.alpha, beta: self.beta,
             seed: self.seed, fitted: self.fitted, phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), super_sub: arr2_opt(&self.super_sub),
@@ -12223,7 +12335,7 @@ impl PA {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: PaState = read_state(path)?;
+        let s: PaState = read_state(path, MODEL_TAG_PA)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_sub).map(|i| format!("topic_{i}")).collect()
         } else {
@@ -12465,7 +12577,7 @@ impl HLDA {
     /// Save the fitted model to `path`. Reload with `HLDA.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
-        write_state(path, &HldaState {
+        write_state(path, MODEL_TAG_HLDA, &HldaState {
             depth: self.depth, gamma: self.gamma, eta: self.eta, alpha: self.alpha,
             seed: self.seed, fitted: self.fitted, num_nodes: self.num_nodes,
             node_topic_word: arr2_opt(&self.node_topic_word), node_levels: self.node_levels.clone(),
@@ -12476,7 +12588,7 @@ impl HLDA {
     /// Load a model previously written by :meth:`save`.
     #[staticmethod]
     fn load(path: &str) -> PyResult<Self> {
-        let s: HldaState = read_state(path)?;
+        let s: HldaState = read_state(path, MODEL_TAG_HLDA)?;
         let topic_names = if s.topic_names.is_empty() {
             (0..s.num_nodes).map(|i| format!("topic_{i}")).collect()
         } else {
