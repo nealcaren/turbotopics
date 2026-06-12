@@ -332,10 +332,22 @@ class CTM:
         *,
         iters: int = 500,
         em_tol: float = 1e-5,
+        inference: str = "batch",
+        batch_size: int = 256,
+        tau: float = 64.0,
+        kappa: float = 0.7,
     ) -> None:
         """EM stops once the relative change in the variational bound falls below
         em_tol or after iters iterations, whichever comes first. Pass em_tol=0
-        to always run iters steps. Check converged and bound afterward."""
+        to always run iters steps. Check converged and bound afterward.
+
+        inference selects the backend: "batch" (default, full variational EM) or
+        "svi" (stochastic/online VB, Hoffman et al. 2013) for very large corpora.
+        Under "svi", iters is the number of epochs (passes over the data), and the
+        global parameters update from minibatches of batch_size docs with a Robbins-
+        Monro step rho_t = (tau + t)^(-kappa). tau (>= 0) and kappa in (0.5, 1] set
+        the learning-rate schedule; em_tol is ignored. SVI does not retain a
+        per-iteration bound trace."""
         ...
 
     @property

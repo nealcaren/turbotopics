@@ -459,3 +459,60 @@ class TestSpectralInit:
     def test_bad_init_raises(self):
         with pytest.raises(ValueError):
             CTM(3, init="bogus")
+
+
+# ---------------------------------------------------------------------------
+# SVI / online VB backend (inference="svi"): for very large corpora
+# ---------------------------------------------------------------------------
+
+import numpy.testing as _npt
+
+
+def _block_corpus(nb=3, wpb=6, n=600):
+    docs = []
+    for d in range(n):
+        b = d % nb
+        block = [f"w{b * wpb + i}" for i in range(wpb)]
+        docs.append(block + block)
+    return docs, nb, wpb
+
+
+def _recovered(m, nb, wpb):
+    cov = set()
+    for t in range(m.num_topics):
+        top = {w for w, _ in m.top_words(wpb, topic=t)}
+        for b in range(nb):
+            if set(f"w{b * wpb + i}" for i in range(wpb)) <= top:
+                cov.add(b)
+    return cov
+
+
+def test_svi_recovers_blocks_and_valid():
+    docs, nb, wpb = _block_corpus()
+    m = CTM(num_topics=nb, seed=1)
+    m.fit(docs, iters=30, inference="svi")
+    assert _recovered(m, nb, wpb) == set(range(nb))
+    _npt.assert_allclose(m.topic_word.sum(axis=1), 1.0)
+    _npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0)
+
+
+def test_svi_deterministic():
+    docs, nb, _ = _block_corpus(n=300)
+    a = CTM(num_topics=nb, seed=5)
+    a.fit(docs, iters=15, inference="svi", batch_size=64)
+    b = CTM(num_topics=nb, seed=5)
+    b.fit(docs, iters=15, inference="svi", batch_size=64)
+    _npt.assert_array_equal(a.topic_word, b.topic_word)
+
+
+def test_svi_batch_size_and_schedule_accepted():
+    docs, nb, _ = _block_corpus(n=200)
+    m = CTM(num_topics=nb, seed=1)
+    m.fit(docs, iters=10, inference="svi", batch_size=32, tau=32.0, kappa=0.6)
+    assert m.topic_word.shape[0] == nb
+
+
+def test_bad_inference_rejected():
+    docs, nb, _ = _block_corpus(n=60)
+    with pytest.raises(ValueError):
+        CTM(num_topics=nb, seed=1).fit(docs, iters=5, inference="banana")

@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `CTM(...).fit(..., inference="svi")` adds a stochastic variational inference
+  backend (online VB, Hoffman et al. 2013) for the logistic-normal core, for
+  corpora too large to sweep in full each EM step. The global topics, mean, and
+  covariance update from minibatches (`batch_size`, default 256) with a Robbins-
+  Monro step `rho_t = (tau + t)^(-kappa)` (`tau` default 64, `kappa` default
+  0.7); `iters` becomes the number of epochs. Each minibatch still runs STM's
+  Laplace E-step per document, so the variational quality per token matches
+  `"batch"`; the win is that one epoch touches every document with only
+  minibatch-sized global state. It is deterministic for a seed. The full-batch
+  variational EM remains the default (`inference="batch"`); SVI does not retain a
+  per-iteration `bound`/`fit_history` trace and ignores `em_tol`.
+
 - `KeyATM(..., sampler="cvb0")` adds a CVB0 backend for the base keyATM model:
   deterministic collapsed-variational inference over the (topic, keyword-switch)
   states, with a soft responsibility per (document, word) cell that mirrors the

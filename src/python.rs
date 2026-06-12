@@ -5088,13 +5088,25 @@ impl CTM {
     /// `em_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
     /// whichever comes first. Pass ``em_tol=0`` to always run `iters` steps.
     /// Check :attr:`converged` and :attr:`bound` afterward.
-    #[pyo3(signature = (data, *, iters=500, em_tol=1e-5))]
+    /// `inference="svi"` switches from full-batch variational EM to stochastic
+    /// variational inference (online VB): documents are processed in minibatches
+    /// of `batch_size`, taking a stochastic step on the global parameters with a
+    /// decaying learning rate `(tau + t)^(-kappa)`, for `iters` epochs. SVI is
+    /// for very large corpora; on moderate corpora the default `"batch"` EM is
+    /// preferable. SVI uses the base logistic-normal model only.
+    #[pyo3(signature = (data, *, iters=500, em_tol=1e-5, inference="batch",
+                        batch_size=256, tau=64.0, kappa=0.7))]
+    #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         iters: usize,
         em_tol: f64,
+        inference: &str,
+        batch_size: usize,
+        tau: f64,
+        kappa: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -5107,6 +5119,15 @@ impl CTM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        let svi = match inference {
+            "batch" => false,
+            "svi" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown inference {other:?}; expected \"batch\" or \"svi\""
+                )))
+            }
+        };
 
         let k = self.num_topics;
         let num_types = corpus.num_types();
@@ -5115,10 +5136,17 @@ impl CTM {
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         let (model, corpus) = py.allow_threads(move || {
-            let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, iters, em_tol, shrink, None, None, spectral,
-                ctm::GammaPrior::Pooled, &mut rng,
-            );
+            let m = if svi {
+                ctm::fit_ctm_svi(
+                    &corpus.docs, k, num_types, iters, batch_size, tau, kappa, shrink, spectral,
+                    &mut rng,
+                )
+            } else {
+                ctm::fit_ctm(
+                    &corpus.docs, k, num_types, iters, em_tol, shrink, None, None, spectral,
+                    ctm::GammaPrior::Pooled, &mut rng,
+                )
+            };
             (m, corpus)
         });
 
