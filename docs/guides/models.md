@@ -124,6 +124,22 @@ The Correlated Topic Model (logistic-normal): topics can co-occur, unlike LDA's
 Dirichlet. This is the engine STM builds on; `topic_correlation` reports the
 learned structure. Fit by parallel variational EM.
 
+For corpora too large to sweep in full each EM step, `fit(..., inference="svi")`
+switches to stochastic variational inference (online VB, Hoffman et al. 2013):
+`iters` becomes the number of epochs, and the global topics, mean, and
+covariance update from minibatches of `batch_size` documents (default 256) with
+a Robbins-Monro step `ρ_t = (τ + t)^(-κ)` (`tau` default 64, `kappa` default
+0.7). Each minibatch still runs STM's Laplace E-step per document, so the
+per-token variational quality matches the default `inference="batch"`; the gain
+is that one epoch touches every document while the global state stays
+minibatch-sized. It is deterministic for a seed but keeps no per-iteration
+`bound` trace.
+
+```python
+model = topica.CTM(num_topics=50, seed=1)
+model.fit(big_corpus, iters=20, inference="svi", batch_size=512)
+```
+
 ## DMR
 
 Dirichlet-Multinomial Regression: each document's topic prior depends on its

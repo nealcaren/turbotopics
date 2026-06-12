@@ -1029,6 +1029,209 @@ pub fn fit_ctm<R: Rng>(
     }
 }
 
+/// Stochastic variational inference (SVI / online VB) for the **base** CTM/STM
+/// logistic-normal topic model (Hoffman, Blei, Wang & Paisley, *JMLR* 2013).
+///
+/// Documents are processed in minibatches. Each minibatch runs the same
+/// per-document Laplace E-step as [`fit_ctm`], then takes a *stochastic* step on
+/// the global parameters (β, μ, Σ) toward the minibatch's full-corpus estimate
+/// with a decaying learning rate `ρ_t = (τ + t)^(-κ)` (`κ ∈ (0.5, 1]`). For very
+/// large corpora this reaches a good fit in a fraction of an epoch, where
+/// full-batch EM must touch every document each iteration; on moderate corpora
+/// the full-batch [`fit_ctm`] is preferable. Base model only — no prevalence or
+/// content covariates.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_ctm_svi<R: Rng>(
+    docs: &[Vec<u32>],
+    num_topics: usize,
+    num_types: usize,
+    epochs: usize,
+    batch_size: usize,
+    tau: f64,
+    kappa: f64,
+    sigma_shrink: f64,
+    init_spectral: bool,
+    rng: &mut R,
+) -> CtmModel {
+    let k = num_topics;
+    let km1 = k - 1;
+    let d = docs.len();
+    let sparse: Vec<(Vec<usize>, Vec<f64>)> = docs.iter().map(|doc| doc_sparse(doc)).collect();
+
+    let random_beta = |rng: &mut R| -> Vec<Vec<f64>> {
+        let mut b = vec![vec![0.0f64; num_types]; k];
+        for row in b.iter_mut() {
+            let mut s = 0.0;
+            for x in row.iter_mut() {
+                *x = 1.0 + rng.gen::<f64>();
+                s += *x;
+            }
+            for x in row.iter_mut() {
+                *x /= s;
+            }
+        }
+        b
+    };
+    let mut beta = if init_spectral {
+        crate::spectral::spectral_init(docs, k, num_types).unwrap_or_else(|| random_beta(rng))
+    } else {
+        random_beta(rng)
+    };
+
+    let mut mu_shared = vec![0.0f64; km1];
+    let mut sigma = vec![0.0f64; km1 * km1];
+    for i in 0..km1 {
+        sigma[i * km1 + i] = 1.0;
+    }
+    let mut lambda = vec![vec![0.0f64; km1]; d];
+    let mut nu_store = vec![vec![0.0f64; km1 * km1]; d];
+
+    let batch = batch_size.clamp(1, d.max(1));
+    let mut t_step: usize = 0;
+
+    for _epoch in 0..epochs {
+        // Deterministic shuffle (Fisher-Yates with the supplied rng).
+        let mut order: Vec<usize> = (0..d).collect();
+        for i in (1..d).rev() {
+            let j = ((rng.gen::<f64>() * (i as f64 + 1.0)) as usize).min(i);
+            order.swap(i, j);
+        }
+
+        for chunk in order.chunks(batch) {
+            t_step += 1;
+            let rho = (tau + t_step as f64).powf(-kappa);
+
+            let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
+                let mut s = sigma.clone();
+                make_diagonally_dominant(&mut s, km1);
+                spd_inverse(&s, km1).unwrap()
+            });
+            let entropy = match cholesky(&sigma, km1) {
+                Some(l) => half_logdet(&l, km1),
+                None => 0.0,
+            };
+
+            let mut beta_ss = vec![vec![1e-8f64; num_types]; k];
+            let mut sigma_ss = vec![0.0f64; km1 * km1];
+            let mut lambda_sum = vec![0.0f64; km1];
+            let mut etas: Vec<Vec<f64>> = Vec::with_capacity(chunk.len());
+
+            for &di in chunk {
+                let words = &sparse[di].0;
+                let counts = &sparse[di].1;
+                let opt = lbfgs_minimize(
+                    lambda[di].clone(),
+                    |eta| {
+                        (
+                            ctm_lhood(eta, &beta, words, counts, &mu_shared, &siginv),
+                            ctm_grad(eta, &beta, words, counts, &mu_shared, &siginv),
+                        )
+                    },
+                    40,
+                    7,
+                    1e-5,
+                );
+                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+                for (wi, &w) in words.iter().enumerate() {
+                    for tt in 0..k {
+                        beta_ss[tt][w] += res.phi[tt][wi];
+                    }
+                }
+                for i in 0..km1 {
+                    lambda_sum[i] += opt[i];
+                    for j in 0..km1 {
+                        sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
+                    }
+                }
+                lambda[di] = opt.clone();
+                nu_store[di] = res.nu.clone();
+                etas.push(opt);
+            }
+            let bsz = chunk.len() as f64;
+
+            // β: scale the minibatch soft counts to the full corpus, normalize to
+            // a distribution, and blend toward it (a convex step, so β stays a
+            // valid distribution).
+            for tt in 0..k {
+                let s: f64 = beta_ss[tt].iter().sum::<f64>() * (d as f64 / bsz);
+                for v in 0..num_types {
+                    let bhat = (d as f64 / bsz) * beta_ss[tt][v] / s;
+                    beta[tt][v] = (1.0 - rho) * beta[tt][v] + rho * bhat;
+                }
+            }
+            // μ: blend toward the minibatch mean η.
+            for i in 0..km1 {
+                mu_shared[i] = (1.0 - rho) * mu_shared[i] + rho * (lambda_sum[i] / bsz);
+            }
+            // Σ: blend toward the minibatch covariance estimate.
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    let mut cross = 0.0;
+                    for eta in &etas {
+                        cross += (eta[i] - mu_shared[i]) * (eta[j] - mu_shared[j]);
+                    }
+                    let shat = (sigma_ss[i * km1 + j] + cross) / bsz;
+                    let mut newv = (1.0 - rho) * sigma[i * km1 + j] + rho * shat;
+                    if sigma_shrink > 0.0 && i != j {
+                        newv *= 1.0 - sigma_shrink;
+                    }
+                    sigma[i * km1 + j] = newv;
+                }
+            }
+        }
+    }
+
+    // Final full E-step with the converged globals to give every document a
+    // λ/ν (the θ posterior) and the corpus bound.
+    let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
+        let mut s = sigma.clone();
+        make_diagonally_dominant(&mut s, km1);
+        spd_inverse(&s, km1).unwrap()
+    });
+    let entropy = match cholesky(&sigma, km1) {
+        Some(l) => half_logdet(&l, km1),
+        None => 0.0,
+    };
+    let mut total_bound = 0.0f64;
+    for di in 0..d {
+        let words = &sparse[di].0;
+        let counts = &sparse[di].1;
+        let opt = lbfgs_minimize(
+            lambda[di].clone(),
+            |eta| {
+                (
+                    ctm_lhood(eta, &beta, words, counts, &mu_shared, &siginv),
+                    ctm_grad(eta, &beta, words, counts, &mu_shared, &siginv),
+                )
+            },
+            40,
+            7,
+            1e-5,
+        );
+        let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+        lambda[di] = opt;
+        nu_store[di] = res.nu;
+        total_bound += res.bound;
+    }
+
+    CtmModel {
+        num_topics: k,
+        num_types,
+        beta,
+        mu: mu_shared,
+        sigma,
+        lambda,
+        nu: nu_store,
+        gamma: None,
+        content_beta: None,
+        num_groups: 1,
+        bound: total_bound,
+        bound_history: vec![total_bound],
+        converged: true,
+        em_iters_run: epochs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1064,6 +1267,57 @@ mod tests {
                 - ctm_lhood(&em, &beta, &words, &counts, &mu, &siginv))
                 / (2.0 * eps);
             assert!((num - g[i]).abs() < 1e-4, "grad[{}]: {} vs {}", i, g[i], num);
+        }
+    }
+
+    #[test]
+    fn svi_recovers_planted_blocks() {
+        // Three disjoint vocabulary blocks; each doc draws from one. SVI's β rows
+        // should each concentrate on a single block.
+        let nb = 3usize;
+        let wpb = 5usize;
+        let v = nb * wpb;
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let docs: Vec<Vec<u32>> = (0..300)
+            .map(|d| {
+                let b = d % nb;
+                let block: Vec<u32> = (b * wpb..(b + 1) * wpb).map(|w| w as u32).collect();
+                let mut doc = block.clone();
+                doc.extend(block);
+                doc
+            })
+            .collect();
+        let m = fit_ctm_svi(&docs, nb, v, 20, 32, 16.0, 0.7, 0.0, false, &mut rng);
+        // Each planted block is the top of some topic.
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..nb {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| m.beta[t][b].partial_cmp(&m.beta[t][a]).unwrap());
+            let top: std::collections::HashSet<usize> = idx[..wpb].iter().copied().collect();
+            for b in 0..nb {
+                let block: std::collections::HashSet<usize> = (b * wpb..(b + 1) * wpb).collect();
+                if block.is_subset(&top) {
+                    covered.insert(b);
+                }
+            }
+        }
+        assert_eq!(covered.len(), nb, "SVI only recovered {covered:?}");
+    }
+
+    #[test]
+    fn svi_deterministic_for_seed() {
+        let docs: Vec<Vec<u32>> = (0..120)
+            .map(|d| (0..6).map(|i| ((i + d) % 9) as u32).collect())
+            .collect();
+        let run = || {
+            let mut rng = ChaCha8Rng::seed_from_u64(7);
+            fit_ctm_svi(&docs, 3, 9, 10, 16, 16.0, 0.7, 0.0, false, &mut rng).beta
+        };
+        let (a, b) = (run(), run());
+        for (ra, rb) in a.iter().zip(b.iter()) {
+            for (x, y) in ra.iter().zip(rb.iter()) {
+                assert!((x - y).abs() < 1e-12);
+            }
         }
     }
 
