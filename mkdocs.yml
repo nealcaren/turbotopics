@@ -115,6 +115,7 @@ nav:
       - Dynamic keyATM (Supreme Court): replications/keyatm-dynamic.md
   - API reference:
       - Models: api/models.md
+      - Embedding models: api/embedding.md
       - Diagnostics: api/diagnostics.md
       - Visualization: api/viz.md
       - STM toolkit: api/stm.md

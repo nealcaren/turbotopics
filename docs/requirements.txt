@@ -1,3 +1,6 @@
 # Documentation site (mkdocs build / serve)
-mkdocs-material
+# Pinned below the MkDocs 2.0 boundary: Material warns that 2.0 will break all
+# current plugins/themes, so an unpinned CI/deploy can break the public site the
+# day it ships.
+mkdocs-material<2
 mkdocstrings[python]
