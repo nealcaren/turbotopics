@@ -172,7 +172,7 @@ topica's HDP and tomotopy's infer different topic counts, and topica's supervise
 LDA is variational where tomotopy's is Gibbs, so neither is a like-for-like speed
 comparison.
 
-## Large-K sampling: SparseLDA, WarpLDA, and LightLDA
+## Inference backends: SparseLDA, WarpLDA, LightLDA, and CVB0
 
 For most work, SparseLDA (the default `sampler="sparse"`) is the right choice:
 its sparse buckets keep it fastest and highest-coherence up to roughly K = 200.
@@ -197,6 +197,20 @@ large-K range — several times faster and markedly higher coherence, because
 LightLDA mixes poorly at these topic counts. So: keep `"sparse"` for K up to a
 couple hundred, switch to `"warp"` for fine-grained, large-K models
 (K ≳ 500); `"lightlda"` is retained for compatibility but `"warp"` supersedes it.
+
+CVB0 (`sampler="cvb0"`) sits on the other axis. It is collapsed variational
+Bayes, zeroth-order ([Asuncion et al. 2009](https://arxiv.org/abs/1205.2662)): a
+deterministic, non-sampling backend that keeps a soft topic responsibility per
+(document, word-type) cell. It tends to give **higher topic coherence**,
+increasingly so with K (on the same corpus, mean `c_v` −68.5 against −79.1 for
+`"sparse"` at K = 100), but it costs `O(K)` per token, so it is **slower, not
+faster** (≈47s vs ≈10s at K = 100) and produces no MCMC `theta_draws`. Use it
+when you want the cleanest topics and fit time is not the constraint.
+
+These backends are not LDA-only: `DMR` and `SeededLDA` also take `sampler="warp"`
+and `sampler="cvb0"` (with the per-document prior or seed weighting folded into
+the same machinery), so the speed and quality choices carry across the
+count-based topic models.
 
 ## Coherence
 
