@@ -848,6 +848,10 @@ fn parallel_sweep_keyatm(
         start: usize,
         ndk: Vec<Vec<f64>>,
         asgn: Vec<Vec<(usize, u8)>>,
+        // Distinct word ids in this worker's document partition — the only `nkw`
+        // columns it can have modified (`resample_token_inner` writes nkw[*][w]
+        // for the token's own word w only). The merge folds just these columns.
+        touched: Vec<u32>,
     }
 
     let outs: Vec<WorkerOut> = ranges
@@ -878,7 +882,11 @@ fn parallel_sweep_keyatm(
                     asgn[li][pos] = (new_z, new_s);
                 }
             }
-            WorkerOut { nkw, nk0, nkx, nk1, start, ndk, asgn }
+            // Distinct words in this partition: the columns this worker touched.
+            let mut touched: Vec<u32> = docs[start..end].iter().flatten().copied().collect();
+            touched.sort_unstable();
+            touched.dedup();
+            WorkerOut { nkw, nk0, nkx, nk1, start, ndk, asgn, touched }
         })
         .collect();
 
@@ -890,15 +898,46 @@ fn parallel_sweep_keyatm(
         }
     }
 
-    // Reconcile the global tables: final = Σ_w worker_w − (W−1)·original,
-    // clamping tiny negative floating-point residues to zero.
     let wm1 = (outs.len() as f64) - 1.0;
     let k = p.num_topics;
+
+    // Reconcile the topic-word table `nkw` (the K×V cost center) as a sparse
+    // delta merge, parallel over topic rows (which are contiguous in the
+    // topic-major layout). Each row starts from the original and adds, in fixed
+    // worker order, each worker's net change on the columns that worker touched:
+    //     nkw[k][w] = orig[k][w] + Σ_w (worker_w[k][w] − orig[k][w]).
+    // Untouched columns stay exactly `orig` (the old dense `Σ_w − (W−1)·orig`
+    // left ULP residue on every cell; this is algebraically equal and cleaner —
+    // closer to the exact sequential path). Fixed worker order keeps the result
+    // deterministic for a given (seed, thread count). Touched cells are clamped
+    // to ≥0 after summing, matching the AD-LDA non-negativity guarantee.
+    model.nkw = (0..k)
+        .into_par_iter()
+        .map(|kk| {
+            let mut row = orig_nkw[kk].clone();
+            for out in &outs {
+                let wk = &out.nkw[kk];
+                let ok = &orig_nkw[kk];
+                for &w in &out.touched {
+                    let w = w as usize;
+                    row[w] += wk[w] - ok[w];
+                }
+            }
+            for out in &outs {
+                for &w in &out.touched {
+                    let w = w as usize;
+                    if row[w] < 0.0 {
+                        row[w] = 0.0;
+                    }
+                }
+            }
+            row
+        })
+        .collect();
+
+    // nk0, nk1, nkx are per-topic / per-keyword (length K and K×keywords), not
+    // K×V, so the dense reconcile over them is cheap; keep it unchanged.
     for kk in 0..k {
-        for w in 0..p.num_types {
-            let sum: f64 = outs.iter().map(|o| o.nkw[kk][w]).sum();
-            model.nkw[kk][w] = (sum - wm1 * orig_nkw[kk][w]).max(0.0);
-        }
         let sum0: f64 = outs.iter().map(|o| o.nk0[kk]).sum();
         model.nk0[kk] = (sum0 - wm1 * orig_nk0[kk]).max(0.0);
         let sum1: f64 = outs.iter().map(|o| o.nk1[kk]).sum();

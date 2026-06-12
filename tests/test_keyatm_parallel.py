@@ -59,6 +59,24 @@ def test_parallel_counts_stay_nonnegative():
     assert np.allclose(phi.sum(axis=1), 1.0)
 
 
+def test_parallel_merge_higher_k_deterministic_and_valid():
+    # The sparse topic-word reconcile is parallel over topic rows, so exercise it
+    # with K well above the worker count to cover the multi-row merge path. It
+    # must stay deterministic for a fixed (num_threads, seed) and produce a valid
+    # (non-negative, row-normalized) topic-word matrix.
+    docs = _corpus(seed=3, n=800)
+    for nt in (4, 8):
+        a = topica.KeyATM(SEEDS, num_topics=24, seed=11)
+        a.fit(docs, iters=120, num_threads=nt)
+        b = topica.KeyATM(SEEDS, num_topics=24, seed=11)
+        b.fit(docs, iters=120, num_threads=nt)
+        assert np.array_equal(a.topic_word, b.topic_word), (
+            f"non-deterministic topic_word at num_threads={nt}"
+        )
+        assert (a.topic_word >= 0).all()
+        assert np.allclose(a.topic_word.sum(axis=1), 1.0)
+
+
 def test_parallel_dynamic_recovers_change_point():
     # Threading composes with the dynamic model.
     rng = np.random.default_rng(0)
