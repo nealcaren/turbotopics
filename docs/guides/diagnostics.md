@@ -154,9 +154,32 @@ model.fit(docs, iters=1000, convergence_tol=1e-4, check_every=10)
 # interval drops below 1e-4, rather than running all 1000 sweeps.
 ```
 
+keyATM takes `convergence_tol` the same way, but its check cadence is the
+`report_interval` it already uses for the `model_fit` trace (not a separate
+`check_every`).
+
+### Defaults, and why
+
+The defaults follow each family's reference implementation rather than a tuned
+guess:
+
+- **Variational EM (STM, CTM, STS)** stop automatically when the relative change
+  in the variational bound falls below `em_tol`, default `1e-5` — the same
+  criterion and value as R `stm`'s `emtol` ([Roberts, Stewart & Tingley
+  2019](https://doi.org/10.18637/jss.v091.i02)).
+- **Collapsed-Gibbs samplers (LDA, keyATM, DMR, SeededLDA, …)** default to
+  `convergence_tol=0.0` (no early stop): a fixed number of sweeps is the field
+  convention, following MALLET and Griffiths & Steyvers (2004), and keeps the
+  retained θ-draw thinning (`thin = iters / num_theta_draws`) well defined.
+  Setting `convergence_tol > 0` opts into log-likelihood-plateau early stopping
+  without changing the default fit.
+
 The cluster models (BERTopic, Top2Vec) and structurally non-iterative models
 (DTM, HLDA) return an empty `fit_history` and `converged` of `False` or `None`;
-they satisfy the contract without early-stop support.
+they satisfy the contract without early-stop support. HDP and GSDMM record a
+`fit_history` but never early-stop (`converged` stays `False`): they *discover*
+their topic and cluster counts, so a log-likelihood plateau is not a convergence
+signal.
 
 ## Visualization
 

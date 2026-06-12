@@ -192,6 +192,12 @@ pub struct KeyAtmModel {
     /// keyword-free model or when tracing is disabled.
     #[serde(default)]
     pub pi_history: Vec<(usize, Vec<f64>)>,
+    /// Whether the Gibbs run stopped early because the relative change in the
+    /// recorded `model_fit` log-likelihood fell below `convergence_tol` (opt-in;
+    /// `false` when the full `iters` sweeps ran, the default). Mirrors the LDA
+    /// family's `converged` flag.
+    #[serde(default)]
+    pub converged: bool,
     /// Thinned MCMC θ snapshots (issue #31): the last `num_theta_draws` per-doc
     /// topic distributions taken every `thin` sweeps of the fit loop, stored as
     /// f32 to halve the (S × D × K) footprint. Real cross-sweep posterior draws
@@ -495,7 +501,7 @@ impl Estimator for KeyAtmModel {
     fn fit_history(&self) -> Vec<(usize, f64)> {
         self.log_likelihood_history.iter().map(|&(i, ll, _)| (i, ll)).collect()
     }
-    fn converged(&self) -> Option<bool> { None }
+    fn converged(&self) -> Option<bool> { Some(self.converged) }
     fn model_family(&self) -> ModelFamily { ModelFamily::Dirichlet }
 }
 
@@ -961,6 +967,7 @@ pub fn fit_keyatm<R: Rng>(
     weights: WeightScheme,
     num_threads: usize,
     draws: ThetaDrawOpts,
+    convergence_tol: f64,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(
@@ -1019,6 +1026,11 @@ pub fn fit_keyatm<R: Rng>(
             }
             if num_keyword_topics > 0 {
                 model.pi_history.push((it + 1, model.keyword_rate()));
+            }
+            if ll_converged(&model.log_likelihood_history, convergence_tol) {
+                model.converged = true;
+                model.alpha_vec = Some(alpha_vec.clone());
+                break;
             }
         }
     }
@@ -1124,6 +1136,7 @@ fn init_state<R: Rng>(
         log_likelihood_history: Vec::new(),
         alpha_history: Vec::new(),
         pi_history: Vec::new(),
+        converged: false,
         theta_draws: Vec::new(),
     };
     (model, assignments, ki)
@@ -1307,6 +1320,21 @@ fn record_ll(iter: usize, interval: usize, iters: usize) -> bool {
     interval > 0 && (iter % interval == 0 || iter == iters)
 }
 
+/// Opt-in early-stop test on keyATM's recorded `model_fit` trace: `true` once the
+/// last two recorded log-likelihoods differ by less than `tol` in relative terms.
+/// `tol <= 0` disables it (the default), so the full `iters` sweeps run. Mirrors
+/// the relative-bound criterion the LDA family and R `stm` use; the trace cadence
+/// (`ll_interval`) sets the comparison window.
+#[inline]
+fn ll_converged(history: &[(usize, f64, f64)], tol: f64) -> bool {
+    if tol <= 0.0 || history.len() < 2 {
+        return false;
+    }
+    let cur = history[history.len() - 1].1;
+    let prev = history[history.len() - 2].1;
+    (cur - prev).abs() / (prev.abs() + 1e-12) < tol
+}
+
 /// Thinned θ-draw retention schedule (issue #31): snapshot every `thin` sweeps
 /// and keep the last `cap` on a ring buffer, so the kept draws are the converged
 /// tail of the chain. `cap == 0` disables collection.
@@ -1384,6 +1412,7 @@ pub fn fit_keyatm_cov<R: Rng>(
     num_threads: usize,
     offset: Option<&[Vec<f64>]>,
     draws: ThetaDrawOpts,
+    convergence_tol: f64,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -1434,6 +1463,10 @@ pub fn fit_keyatm_cov<R: Rng>(
                 .log_likelihood_history
                 .push((it + 1, model.model_loglik(), model.perplexity()));
             model.pi_history.push((it + 1, model.keyword_rate()));
+            if ll_converged(&model.log_likelihood_history, convergence_tol) {
+                model.converged = true;
+                break;
+            }
         }
     }
 
@@ -1596,6 +1629,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
     weights: WeightScheme,
     num_threads: usize,
     draws: ThetaDrawOpts,
+    convergence_tol: f64,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
@@ -1821,6 +1855,10 @@ pub fn fit_keyatm_dynamic<R: Rng>(
                 .log_likelihood_history
                 .push((it + 1, model.model_loglik(), model.perplexity()));
             model.pi_history.push((it + 1, model.keyword_rate()));
+            if ll_converged(&model.log_likelihood_history, convergence_tol) {
+                model.converged = true;
+                break;
+            }
         }
     }
 
@@ -1892,7 +1930,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -1993,7 +2031,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -2029,7 +2067,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
 
         let d = docs.len();
@@ -2087,7 +2125,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(1);
         let model = fit_keyatm_dynamic(
             &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0,
-            2.0, 1.0, 300, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            2.0, 1.0, 300, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
 
         let dyn_ = model.dynamic.as_ref().expect("dynamic state present");
@@ -2121,10 +2159,10 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(9);
         let mut r2 = ChaCha8Rng::seed_from_u64(9);
         let m1 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r1,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r1,
         );
         let m2 = fit_keyatm_dynamic(
-            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r2,
+            &docs, 12, 2, &keywords, &time_index, 2, 0.01, 0.1, 1.0, 1.0, 1.0, 1.0, 2.0, 1.0, 100, 0, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r2,
         );
         assert_eq!(
             m1.dynamic.as_ref().unwrap().r_est,
@@ -2150,8 +2188,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
@@ -2181,7 +2219,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(3);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
         let h = &model.log_likelihood_history;
         // iters=60, interval=10 -> sweeps 10,20,30,40,50,60.
@@ -2197,7 +2235,7 @@ mod tests {
         // interval 0 disables tracing.
         let mut rng2 = ChaCha8Rng::seed_from_u64(3);
         let none = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng2,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng2,
         );
         assert!(none.log_likelihood_history.is_empty());
     }
@@ -2212,7 +2250,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(77);
         let m = fit_keyatm(
             &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true,
-            WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), &mut rng,
+            WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
         );
         let base = crate::conformance::check_conformance(&m);
         assert!(base.is_empty(), "check_conformance: {:?}", base);
