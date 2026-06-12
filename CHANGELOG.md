@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `DMR(..., sampler="warp")` runs the WarpLDA backend for DMR (a per-document-α
+  doc phase: the doc-proposal and its acceptance use each document's
+  `α_{d,k} = exp(λ_k · x_d)`, with the λ optimization loop unchanged). Same
+  large-K win as LDA: on a 2,000-document poliblog subsample at K=500 it fits
+  ~2.4x faster than the default `"sparse"` DMR sweep at comparable coherence,
+  widening as K grows. Default stays `"sparse"`. Enabled by the shared per-doc
+  WarpLDA doc phase, so the LDA hot path is untouched.
+
 - `LDA(..., sampler="warp")` adds the WarpLDA cache-efficient two-pass
   Metropolis-Hastings sampler (Chen et al., 2016). Its per-sweep cost is flat in
   K (an O(1)-per-token MCEM scheme with delayed count updates), so it is the

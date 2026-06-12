@@ -71,6 +71,11 @@ pub struct WarpLda {
 
     /// Alias table over α, for the smoothing branch of the doc-proposal.
     alpha_alias: Alias,
+
+    /// Per-document prior `α_{d,k}` (DMR). When `Some`, the doc phase uses
+    /// `doc_alpha[d]` in place of the uniform `alpha`, rebuilding the
+    /// doc-proposal smoothing alias per document. `None` is the plain-LDA path.
+    doc_alpha: Option<Vec<Vec<f64>>>,
 }
 
 impl WarpLda {
@@ -117,7 +122,20 @@ impl WarpLda {
             prop,
             word_index,
             alpha_alias,
+            doc_alpha: None,
         }
+    }
+
+    /// Switch the doc-proposal to a per-document prior `α_{d,k}` (DMR). Called
+    /// each sweep by the DMR fit loop after recomputing α from the current λ.
+    pub fn set_doc_alpha(&mut self, doc_alpha: Vec<Vec<f64>>) {
+        self.doc_alpha = Some(doc_alpha);
+    }
+
+    /// The current per-token topic assignments, document-major — the input the
+    /// DMR λ optimizer needs (its document-topic counts).
+    pub fn doc_topics(&self) -> &[Vec<u32>] {
+        &self.z
     }
 
     /// Replace the hyperparameters (after an optimisation step) and rebuild the
@@ -145,7 +163,11 @@ impl WarpLda {
     /// One WarpLDA iteration: a document phase then a word phase. `C_k` is fixed
     /// during each phase (delayed update) and recomputed in between.
     pub fn sweep<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
-        self.doc_phase(corpus, rng);
+        if self.doc_alpha.is_some() {
+            self.doc_phase_dmr(corpus, rng);
+        } else {
+            self.doc_phase(corpus, rng);
+        }
         self.recount_n_k();
         self.word_phase(rng);
         self.recount_n_k();
@@ -201,6 +223,62 @@ impl WarpLda {
                     self.z[d][rng.gen_range(0..doc_len)] as usize
                 } else {
                     self.alpha_alias.sample(rng)
+                };
+                self.prop[d][pos] = dp as u32;
+            }
+        }
+    }
+
+    /// Document phase with a per-document prior `α_{d,k}` (DMR). Same structure
+    /// as [`Self::doc_phase`] but the acceptance and the doc-proposal smoothing
+    /// draw use this document's own α (from `self.doc_alpha`, cloned into a local
+    /// so the token loop can mutate `z`/`prop`; the smoothing alias is rebuilt
+    /// per document). Only called when `doc_alpha` is set.
+    fn doc_phase_dmr<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
+        let k = self.num_topics;
+        let beta_sum = self.beta_sum;
+        let mut c_d = vec![0i64; k];
+
+        for (d, doc) in corpus.docs.iter().enumerate() {
+            let doc_len = doc.len();
+            if doc_len == 0 {
+                continue;
+            }
+            for v in c_d.iter_mut() {
+                *v = 0;
+            }
+            for &t in &self.z[d] {
+                c_d[t as usize] += 1;
+            }
+            let doc_len_f = doc_len as f64;
+
+            // Clone this document's α into a local so the token loop below can
+            // mutate `self.z`/`self.prop` without holding a borrow of `self`.
+            let alpha_d: Vec<f64> = self.doc_alpha.as_ref().unwrap()[d].clone();
+            let alpha_sum_d: f64 = alpha_d.iter().sum();
+            let doc_alias = Alias::build(&alpha_d);
+
+            for pos in 0..doc_len {
+                let cur = self.z[d][pos] as usize;
+                let prop = self.prop[d][pos] as usize;
+
+                let mut new = cur;
+                if prop != cur {
+                    let num = (c_d[prop] as f64 + alpha_d[prop])
+                        * (self.n_k[cur] as f64 - 1.0 + beta_sum);
+                    let den = (c_d[cur] as f64 - 1.0 + alpha_d[cur])
+                        * (self.n_k[prop] as f64 + beta_sum);
+                    if num >= den || rng.gen::<f64>() * den < num {
+                        new = prop;
+                    }
+                }
+                self.z[d][pos] = new as u32;
+
+                let r = rng.gen::<f64>() * (doc_len_f + alpha_sum_d);
+                let dp = if r < doc_len_f {
+                    self.z[d][rng.gen_range(0..doc_len)] as usize
+                } else {
+                    doc_alias.sample(rng)
                 };
                 self.prop[d][pos] = dp as u32;
             }
@@ -424,6 +502,48 @@ mod tests {
             }
         }
         assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
+    }
+
+    #[test]
+    fn doc_alpha_path_recovers_planted_blocks() {
+        // The per-document-α (DMR) doc phase must recover planted topics too.
+        // Set a per-doc prior that mildly favours each document's own block, the
+        // regime a fitted DMR λ would produce.
+        let wpb = 5;
+        let (corpus, n_blocks) = planted(4, wpb, 200);
+        let k = n_blocks;
+        let v = corpus.num_types();
+        let alpha = vec![0.1f64; k];
+        let mut rng = Pcg64Mcg::seed_from_u64(1);
+        let mut s = WarpLda::new(&corpus, k, &alpha, 0.01, &mut rng);
+        // doc d belongs to block d % n_blocks; nudge its prior toward that topic.
+        let doc_alpha: Vec<Vec<f64>> = (0..corpus.docs.len())
+            .map(|d| {
+                let b = d % n_blocks;
+                (0..k).map(|t| if t == b { 0.5 } else { 0.1 }).collect()
+            })
+            .collect();
+        s.set_doc_alpha(doc_alpha);
+        for _ in 0..200 {
+            s.sweep(&corpus, &mut rng);
+        }
+        let phi = s.to_topic_model().topic_word();
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..k {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| phi[t][b].partial_cmp(&phi[t][a]).unwrap());
+            let top: std::collections::HashSet<usize> = idx[..wpb].iter().copied().collect();
+            for b in 0..n_blocks {
+                let block: std::collections::HashSet<usize> =
+                    (b * wpb..(b + 1) * wpb).collect();
+                if block.is_subset(&top) {
+                    covered.insert(b);
+                }
+            }
+        }
+        assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
+        // doc_topics() exposes assignments for the λ optimizer.
+        assert_eq!(s.doc_topics().len(), corpus.docs.len());
     }
 
     #[test]

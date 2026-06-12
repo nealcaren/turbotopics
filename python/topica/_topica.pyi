@@ -177,9 +177,17 @@ class DMR:
         seed: int = 42,
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
+        sampler: str = "sparse",
     ) -> None:
         """Create an unfitted DMR model. prior_variance is the Gaussian prior
-        variance on the feature weights; lbfgs_iters caps L-BFGS steps per round."""
+        variance on the feature weights; lbfgs_iters caps L-BFGS steps per round.
+
+        sampler selects the inference backend: "sparse" (default) is the
+        SparseLDA collapsed-Gibbs sweep with the per-document DMR prior; "warp"
+        is the WarpLDA cache-efficient sampler (per-document-α doc phase), whose
+        per-sweep cost is flat in K. As with plain LDA, prefer "sparse" up to
+        ~K=200 and "warp" for large-K (K >= ~500) models; "warp" does not record
+        the convergence trace, so convergence_tol has no effect there."""
         ...
 
     def fit(

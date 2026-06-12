@@ -2918,6 +2918,9 @@ pub struct DMR {
     seed: u64,
     prior_variance: f64,
     lbfgs_iters: usize,
+    // WarpLDA cache-efficient sampler (per-document-α doc phase) instead of the
+    // default SparseLDA DMR sweep. Recommended for large K.
+    warp: bool,
 
     fitted: bool,
     topic_names: Vec<String>,
@@ -2950,7 +2953,8 @@ impl DMR {
     /// `lbfgs_iters` caps the L-BFGS steps per optimization round.
     #[new]
     #[pyo3(signature = (num_topics, *, beta=0.01, optimize_interval=50,
-                        burn_in=200, seed=42, prior_variance=1.0, lbfgs_iters=20))]
+                        burn_in=200, seed=42, prior_variance=1.0, lbfgs_iters=20,
+                        sampler="sparse"))]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         beta: f64,
@@ -2959,6 +2963,7 @@ impl DMR {
         seed: u64,
         prior_variance: f64,
         lbfgs_iters: usize,
+        sampler: &str,
     ) -> PyResult<Self> {
         if num_topics == 0 {
             return Err(PyValueError::new_err("num_topics must be >= 1"));
@@ -2969,6 +2974,15 @@ impl DMR {
         if !finite_pos(prior_variance) {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
+        let warp = match sampler {
+            "sparse" => false,
+            "warp" | "warplda" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler {other:?}; expected \"sparse\" or \"warp\""
+                )))
+            }
+        };
         Ok(DMR {
             num_topics,
             beta,
@@ -2977,6 +2991,7 @@ impl DMR {
             seed,
             prior_variance,
             lbfgs_iters,
+            warp,
             fitted: false,
             topic_names: Vec::new(),
             phi: None,
@@ -3074,7 +3089,8 @@ impl DMR {
         let mut lambda = vec![vec![0.0f64; nf]; k];
         let mut model = TopicModel::new(k, k as f64, self.beta, num_types);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
-        model.initialize(&corpus, &mut rng);
+        // The sparse path initializes `model` inside its branch below; the warp
+        // path builds its own WarpLda state, so the shared init is deferred.
 
         let optimize_interval = self.optimize_interval;
         let burn_in = self.burn_in;
@@ -3083,7 +3099,91 @@ impl DMR {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
 
-        let (acc_phi, acc_theta, theta_draw_buf, feat_eff, ll_history, converged_flag, model, corpus) = py.allow_threads(move || {
+        let beta = self.beta;
+        let warp = self.warp;
+        let (acc_phi, acc_theta, theta_draw_buf, feat_eff, ll_history, converged_flag, model, corpus) =
+          if warp {
+            // WarpLDA DMR path: same λ-optimization loop, but the per-document
+            // prior α is fed to the WarpLDA per-doc doc phase each sweep. Like the
+            // LDA WarpLDA path it computes no inline log_likelihood, so the
+            // convergence trace / convergence_tol are not recorded here.
+            py.allow_threads(move || {
+                let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+                let mut ws = warplda::WarpLda::new(&corpus, k, &vec![1.0f64; k], beta, &mut rng);
+
+                for iter in 1..=iters {
+                    let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
+                    ws.set_doc_alpha(doc_alpha);
+                    ws.sweep(&corpus, &mut rng);
+
+                    if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
+                        let dtc = doc_topic_counts(ws.doc_topics(), k);
+                        dmr::optimize_lambda(
+                            &mut lambda, &feats, &dtc, k, nf, prior_variance, lbfgs_iters, None,
+                        );
+                    }
+
+                    if draws_opts.thin > 0 && iter % draws_opts.thin == 0 {
+                        let doc_alpha_snap = dmr::compute_doc_alpha(&lambda, &feats, None);
+                        let snap: Vec<Vec<f32>> = ws.doc_topics().iter()
+                            .enumerate()
+                            .map(|(d, topics)| {
+                                let mut c = vec![0.0f64; k];
+                                for &t in topics { c[t as usize] += 1.0; }
+                                let asum: f64 = doc_alpha_snap[d].iter().sum();
+                                let denom = c.iter().sum::<f64>() + asum;
+                                (0..k).map(|t| ((c[t] + doc_alpha_snap[d][t]) / denom) as f32).collect()
+                            })
+                            .collect();
+                        push_capped(&mut theta_draw_buf, snap, draws_opts.cap);
+                    }
+
+                    if let Some(cb) = &progress {
+                        if progress_interval > 0 && iter % progress_interval == 0 {
+                            let dtc = doc_topic_counts(ws.doc_topics(), k);
+                            let (ll, _) = dmr::dmr_objective_and_gradient(
+                                &lambda, &feats, &dtc, k, nf, prior_variance, None,
+                            );
+                            let llpt = ll / total_tokens;
+                            Python::with_gil(|py| {
+                                let _ = cb.call1(py, (iter, llpt));
+                            });
+                        }
+                    }
+                }
+
+                // Sampling phase: λ (and thus α per doc) fixed.
+                let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
+                ws.set_doc_alpha(doc_alpha.clone());
+                let mut acc_phi = vec![vec![0.0f64; k]; num_types];
+                let mut acc_theta = vec![vec![0.0f64; k]; num_docs];
+                for _ in 0..num_samples {
+                    for _ in 0..sample_interval {
+                        ws.sweep(&corpus, &mut rng);
+                    }
+                    ws.phi_into(&mut acc_phi);
+                    let counts = doc_topic_counts(ws.doc_topics(), k);
+                    for d in 0..num_docs {
+                        let asum: f64 = doc_alpha[d].iter().sum();
+                        let denom = corpus.docs[d].len() as f64 + asum;
+                        for t in 0..k {
+                            acc_theta[d][t] += (counts[d][t] as f64 + doc_alpha[d][t]) / denom;
+                        }
+                    }
+                }
+                let n = num_samples.max(1) as f64;
+                for row in acc_phi.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                for row in acc_theta.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                let model = ws.to_topic_model();
+                (acc_phi, acc_theta, theta_draw_buf, lambda, Vec::new(), false, model, corpus)
+            })
+          } else {
+            model.initialize(&corpus, &mut rng);
+            py.allow_threads(move || {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
             let mut ll_history: Vec<(usize, f64)> = Vec::new();
             let mut converged_flag = false;
@@ -3201,7 +3301,8 @@ impl DMR {
             }
 
             (acc_phi, acc_theta, theta_draw_buf, lambda, ll_history, converged_flag, model, corpus)
-        });
+            })
+          };
         let _ = model;
 
         let mut phi = Array2::<f64>::zeros((k, num_types));
@@ -3522,7 +3623,7 @@ impl DMR {
         Ok(DMR {
             num_topics: s.num_topics, beta: s.beta, optimize_interval: s.optimize_interval,
             burn_in: s.burn_in, seed: s.seed, prior_variance: s.prior_variance,
-            lbfgs_iters: s.lbfgs_iters, fitted: s.fitted,
+            lbfgs_iters: s.lbfgs_iters, warp: false, fitted: s.fitted,
             topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             feature_effects: arr2_back(s.feature_effects),

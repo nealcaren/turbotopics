@@ -460,3 +460,52 @@ class TestOneHot:
         # intercept is prepended, so feature_names should start with "intercept"
         assert model.feature_names[0] == "intercept"
         assert model.feature_effects.shape[1] == len(names) + 1
+
+
+# ---------------------------------------------------------------------------
+# WarpLDA sampler (cache-efficient large-K backend, per-document-α doc phase)
+# ---------------------------------------------------------------------------
+
+class TestDmrWarp:
+    def test_recovers_covariate_topics(self):
+        docs, _, feats = _make_corpus(seed=2)
+        m = _fit_dmr(docs, feats, sampler="warp")
+        a = _identify_A_topic(m)
+        # The A-topic's top words are the space vocab; the other topic is animals.
+        top_a = {w for w, _ in m.top_words(5, topic=a)}
+        assert top_a == set(_VOCAB_A)
+
+    def test_valid_distributions(self):
+        docs, _, feats = _make_corpus(seed=2)
+        m = _fit_dmr(docs, feats, sampler="warp")
+        npt.assert_allclose(m.topic_word.sum(axis=1), 1.0)
+        npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0)
+
+    def test_deterministic(self):
+        docs, _, feats = _make_corpus(seed=2)
+        a = _fit_dmr(docs, feats, seed=4, sampler="warp")
+        b = _fit_dmr(docs, feats, seed=4, sampler="warp")
+        npt.assert_array_equal(a.topic_word, b.topic_word)
+        npt.assert_array_equal(a.feature_effects, b.feature_effects)
+
+    def test_feature_effect_sign_matches_sparse(self):
+        # is_A should raise the A-topic's prevalence under both samplers.
+        docs, _, feats = _make_corpus(seed=2)
+        sparse = _fit_dmr(docs, feats, sampler="sparse")
+        warp = _fit_dmr(docs, feats, sampler="warp")
+        a_s = _identify_A_topic(sparse)
+        a_w = _identify_A_topic(warp)
+        # column 1 is is_A (column 0 is the prepended intercept).
+        assert sparse.feature_effects[a_s, 1] > 0
+        assert warp.feature_effects[a_w, 1] > 0
+
+    def test_bad_sampler_rejected(self):
+        with pytest.raises(ValueError):
+            DMR(num_topics=2, sampler="banana")
+
+    def test_sampler_aliases(self):
+        docs, _, feats = _make_corpus(seed=2)
+        for name in ("warp", "warplda"):
+            m = DMR(num_topics=2, seed=1, sampler=name)
+            m.fit(docs, feats, iters=50)
+            assert m.topic_word.shape[0] == 2
