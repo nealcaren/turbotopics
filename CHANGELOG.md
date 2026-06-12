@@ -6,6 +6,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Fixed
+
+- `SeededLDA` save/load is no longer lossy: the seed topic names, seed words, and
+  residual-topic count are now serialized, so a loaded model reports the correct
+  `num_topics` and `transform()` works instead of panicking (#98).
+- `predicted_prevalence` no longer crashes on categorical covariates passed
+  through a formula (`at=`/`contrast=`) or on the 2-element-sequence `contrast=`
+  form; the training `formulaic` model spec is reused for prediction so factor
+  levels stay consistent (#99).
+- `permutation_test` now threads the permuted covariate into each refit for
+  covariate-aware models (STM, DMR, KeyATM), matching `stm::permutationTest`;
+  p-values use the `(1 + count) / (1 + n)` convention and drop NaN null entries
+  (#101).
+
+### Changed
+
+- **Breaking (save format):** model files now carry an 8-byte header (magic,
+  format version, model tag). Loading a file saved by an earlier version, or
+  loading a file saved as the wrong model, now raises a clear error instead of
+  panicking or silently misreading. Models saved before this release must be
+  re-fit and re-saved. `LDA` save/load now also round-trips the retained MCMC
+  `theta_draws` and the sampler-backend flags (part of #102). DMR, LabeledLDA,
+  SAGE, and KeyATM still drop `theta_draws` on load; tracked as remaining work.
+
 ### Added
 
 - `CTM(...).fit(..., inference="svi")` adds a stochastic variational inference
