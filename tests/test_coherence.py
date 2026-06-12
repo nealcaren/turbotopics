@@ -129,3 +129,37 @@ class TestAnalysisContract:
         )
         assert topica.topic_diversity(c) == topica.topic_diversity(m)
         np.testing.assert_allclose(topica.exclusivity(c), topica.exclusivity(m))
+
+
+class TestUMassExternalCorpus:
+    """u_mass with an external reference corpus that does not contain some top
+    words must not produce a spuriously large positive score (issue #103)."""
+
+    def test_absent_word_does_not_inflate_umass(self):
+        # Reference corpus contains only "a" and "b"; "z" is absent.
+        reference = [["a", "b"]] * 20
+        topic_present = ["a", "b"]   # both words in reference: normal score
+        topic_absent = ["a", "z"]    # "z" absent from reference
+
+        s_present = topica.coherence([topic_present], reference,
+                                     coherence_type="u_mass", topn=2)[0]
+        s_absent = topica.coherence([topic_absent], reference,
+                                    coherence_type="u_mass", topn=2)[0]
+
+        # Before the fix, s_absent was a large positive (log(1/eps)).
+        # After the fix: the pair (a, z) is skipped, so s_absent equals
+        # nan (no pairs counted) or a non-positive finite value.
+        assert np.isnan(s_absent) or s_absent <= 0.0, (
+            f"u_mass with absent word should be nan or <= 0, got {s_absent}"
+        )
+
+    def test_umass_all_words_present_is_small_and_finite(self):
+        # Classic case: topic words all appear in the reference. With numerator
+        # +1 smoothing and perfect co-occurrence the score can be a hair above
+        # zero (log((occ+1)/occ)), but it is finite and near zero, never the
+        # large spurious positive the absent-word path used to produce.
+        reference = [["a", "b", "c"]] * 50
+        score = topica.coherence([["a", "b", "c"]], reference,
+                                 coherence_type="u_mass", topn=3)[0]
+        assert np.isfinite(score)
+        assert score < 0.1

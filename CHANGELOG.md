@@ -19,6 +19,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   covariate-aware models (STM, DMR, KeyATM), matching `stm::permutationTest`;
   p-values use the `(1 + count) / (1 + n)` convention and drop NaN null entries
   (#101).
+- Covariate, feature, embedding, and timestamp matrices are now checked for
+  non-finite values (NaN/inf) at the boundary and raise a clear `ValueError`
+  naming the parameter, instead of panicking (KeyATM) or silently producing
+  garbage estimates (STM, DMR) (#100).
+- `top_words`/`top_documents` and related rankings sort with `f64::total_cmp`,
+  so a stray NaN can no longer panic them into a `PanicException`. `BERTopic`
+  and `Top2Vec` raise a clear `RuntimeError` from `transform`/`top_words` when
+  clustering found no topics, rather than returning empty `(n, 0)` output.
+  `u_mass` coherence against an external reference corpus no longer rewards a
+  top word absent from the reference with a large positive score (#103).
 
 ### Changed
 
