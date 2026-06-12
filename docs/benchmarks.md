@@ -172,7 +172,7 @@ topica's HDP and tomotopy's infer different topic counts, and topica's supervise
 LDA is variational where tomotopy's is Gibbs, so neither is a like-for-like speed
 comparison.
 
-## Inference backends: SparseLDA, WarpLDA, LightLDA, and CVB0
+## Inference backends: SparseLDA, WarpLDA, LightLDA, CVB0, and SVI
 
 For most work, SparseLDA (the default `sampler="sparse"`) is the right choice:
 its sparse buckets keep it fastest and highest-coherence up to roughly K = 200.
@@ -207,10 +207,29 @@ increasingly so with K (on the same corpus, mean `c_v` −68.5 against −79.1 f
 faster** (≈47s vs ≈10s at K = 100) and produces no MCMC `theta_draws`. Use it
 when you want the cleanest topics and fit time is not the constraint.
 
-These backends are not LDA-only: `DMR` and `SeededLDA` also take `sampler="warp"`
-and `sampler="cvb0"` (with the per-document prior or seed weighting folded into
-the same machinery), so the speed and quality choices carry across the
-count-based topic models.
+These backends are not LDA-only. The same machinery carries the per-document
+prior, seed weighting, supervised label mask, or keyword-switch state across the
+family, so the speed and quality choices follow the model:
+
+| Model | default | speed backend | quality / scale backend |
+|-------|---------|---------------|-------------------------|
+| `LDA` | `sparse` | `warp` (flat in K), `lightlda` | `cvb0` (deterministic) |
+| `DMR` | `sparse` | `warp` (per-doc α) | `cvb0` (soft counts feed the λ optimizer) |
+| `SeededLDA` | `sparse` | `warp` (seeded word phase) | `cvb0` (asymmetric seed β) |
+| `LabeledLDA` | `sparse` | — | `cvb0` (label mask is free; warp can't serve it) |
+| `KeyATM` | `sparse` | — | `cvb0` (base model only; opt-in, non-R-parity) |
+| `CTM` | `batch` | — | `svi` (online VB, for web-scale corpora) |
+
+The Dirichlet-prior models gain a collapsible `cvb0` backend (zero off-mask
+responsibilities make `LabeledLDA`'s supervision and `keyATM`'s keyword switch
+exact and free, where a masked MH proposal would barely mix). The
+logistic-normal models have no Dirichlet to collapse, so `CTM` instead gains
+stochastic variational inference (`inference="svi"`): minibatch Laplace E-steps
+with Robbins-Monro global updates, so one epoch touches every document while the
+global state stays minibatch-sized — the backend for corpora too large to sweep
+in full each EM step. `keyATM`'s and `CTM`'s alternates are opt-in: keyATM-CVB0
+trades R-parity for determinism on the base model, and CTM-SVI trades the
+per-iteration bound trace for scale.
 
 ## Coherence
 

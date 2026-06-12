@@ -1,9 +1,10 @@
 %% =====================================================================
 %% NOTES (not part of the build) — pluggable sampler backends.
 %%
-%% Drop-in suggestions for topica.tex documenting the sampler= inference
-%% backends (WarpLDA, CVB0) shipped after the first draft. Not \input'd
-%% anywhere; copy what you want into topica.tex and delete this file when done.
+%% Drop-in suggestions for topica.tex documenting the sampler=/inference=
+%% inference backends (WarpLDA, CVB0, and CTM-SVI) shipped after the first
+%% draft. Not \input'd anywhere; copy what you want into topica.tex and delete
+%% this file when done.
 %% Generated as a hand-off note; verify numbers against the latest benchmarks.
 %% =====================================================================
 
@@ -13,18 +14,32 @@
 %%    or in the Models / Extending section.
 %% ---------------------------------------------------------------------
 
-% Beyond the default SparseLDA sweep, \pkg{topica} exposes the LDA inference
-% engine as a pluggable backend through the \code{sampler} argument, behind one
-% fitted-model contract. \code{"warp"} is the cache-efficient WarpLDA sampler
-% \citep{chen2016warplda}, an $O(1)$-per-token Metropolis--Hastings scheme whose
-% per-sweep cost is flat in $K$; at the fine-grained topic counts common in
-% social science (e.g.\ $K=1{,}000$) it fits several times faster than SparseLDA
-% and reaches higher coherence. \code{"cvb0"} is collapsed variational Bayes,
-% zeroth-order \citep{asuncion2009smoothing}, a deterministic, non-sampling
-% alternative that trades speed for higher topic coherence and exact
-% reproducibility. The same backends extend to the per-document-prior
-% (\code{DMR}) and seeded (\code{SeededLDA}) models, since they share the
-% count-based collapsed conditional.
+% Beyond the default SparseLDA sweep, \pkg{topica} exposes the inference engine
+% of each model as a pluggable backend behind one fitted-model contract,
+% selected with \code{sampler} (count-based models) or \code{inference}
+% (variational models). For the Dirichlet-prior family, \code{"warp"} is the
+% cache-efficient WarpLDA sampler \citep{chen2016warplda}, an $O(1)$-per-token
+% Metropolis--Hastings scheme whose per-sweep cost is flat in $K$; at the
+% fine-grained topic counts common in social science (e.g.\ $K=1{,}000$) it fits
+% several times faster than SparseLDA and reaches higher coherence.
+% \code{"cvb0"} is collapsed variational Bayes, zeroth-order
+% \citep{asuncion2009smoothing}, a deterministic, non-sampling alternative that
+% trades speed for higher topic coherence and exact reproducibility. These
+% extend across the count-based models that share the collapsed conditional:
+% the per-document prior (\code{DMR}), seeded (\code{SeededLDA}), supervised
+% (\code{LabeledLDA}), and keyword (\code{keyATM}) variants. CVB0 is the natural
+% home for the supervised and keyword models in particular, because its
+% per-cell responsibilities take the label mask or keyword-switch constraint
+% exactly and at no cost (the off-mask responsibility is simply zero), where a
+% masked Metropolis--Hastings proposal would barely mix.
+%
+% The logistic-normal models have no Dirichlet to collapse, so \code{CTM} (the
+% engine \code{STM} builds on) instead exposes stochastic variational inference
+% \citep{hoffman2013svi} through \code{inference="svi"}: minibatch Laplace
+% E-steps drive Robbins--Monro updates of the global topics, mean, and
+% covariance, so one epoch touches every document while the global state stays
+% minibatch-sized. It is the backend for corpora too large to sweep in full
+% each EM step, with the full-batch variational EM remaining the default.
 
 %% ---------------------------------------------------------------------
 %% 2. Model table note (line ~326): the LDA row could flag the options, e.g.
@@ -54,6 +69,17 @@
 %                Artificial Intelligence (UAI)},
 %   pages     = {27--34},
 %   year      = {2009},
+% }
+%
+% @article{hoffman2013svi,
+%   title   = {Stochastic Variational Inference},
+%   author  = {Hoffman, Matthew D. and Blei, David M. and Wang, Chong and
+%              Paisley, John},
+%   journal = {Journal of Machine Learning Research},
+%   volume  = {14},
+%   number  = {1},
+%   pages   = {1303--1347},
+%   year    = {2013},
 % }
 
 %% ---------------------------------------------------------------------
