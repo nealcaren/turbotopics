@@ -153,11 +153,13 @@ class TestUMassExternalCorpus:
             f"u_mass with absent word should be nan or <= 0, got {s_absent}"
         )
 
-    def test_umass_all_words_present_is_nonpositive(self):
-        # Classic case: topic words all appear in the reference.
+    def test_umass_all_words_present_is_small_and_finite(self):
+        # Classic case: topic words all appear in the reference. With numerator
+        # +1 smoothing and perfect co-occurrence the score can be a hair above
+        # zero (log((occ+1)/occ)), but it is finite and near zero, never the
+        # large spurious positive the absent-word path used to produce.
         reference = [["a", "b", "c"]] * 50
         score = topica.coherence([["a", "b", "c"]], reference,
                                  coherence_type="u_mass", topn=3)[0]
-        # UMass is always <= 0 when words are present (log <= 0 since
-        # co + 1 <= occ + 1 <= denom + 1, but occ >= co so denom >= co).
-        assert score <= 0.0 or np.isnan(score)
+        assert np.isfinite(score)
+        assert score < 0.1

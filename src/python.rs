@@ -113,18 +113,6 @@ fn check_all_finite_1d(name: &str, vals: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-/// Validate that `iters` is at least 1.  Called at the top of every `fit()`
-/// that accepts an explicit iteration count as `usize` (PyO3 already rejects
-/// negatives with an OverflowError; this catches the silent zero no-op).
-fn require_iters(iters: usize, name: &str) -> PyResult<()> {
-    if iters < 1 {
-        return Err(PyValueError::new_err(format!(
-            "{name} must be >= 1, got {iters}"
-        )));
-    }
-    Ok(())
-}
-
 // `from_py_with` hooks for count constructor arguments. They take the int as a
 // signed `i64` so a negative value yields a clean `ValueError` here rather than
 // PyO3's raw `OverflowError`. Per-model minimums above 1 (e.g. CTM/STM need >= 2)
@@ -1166,7 +1154,6 @@ impl LDA {
         convergence_tol: f64,
         check_every: usize,
     ) -> PyResult<()> {
-        require_iters(iters, "iters")?;
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -3253,7 +3240,6 @@ impl DMR {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
 
         let raw = parse_features(features)?;
         if raw.len() != corpus.num_docs() {
@@ -4002,7 +3988,6 @@ impl LabeledLDA {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         if labels.len() != num_docs {
             return Err(PyValueError::new_err(format!(
                 "labels has {} entries but corpus has {} documents",
@@ -4573,7 +4558,6 @@ impl SAGE {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
 
         let groups_str = parse_groups(groups)?;
         if groups_str.len() != num_docs {
@@ -5284,7 +5268,6 @@ impl CTM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let svi = match inference {
             "batch" => false,
             "svi" => true,
@@ -5746,7 +5729,6 @@ impl STM {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         if prevalence.is_none() && content.is_none() {
             return Err(PyValueError::new_err(
                 "STM needs prevalence and/or content covariates; use CTM for neither",
@@ -6567,7 +6549,6 @@ impl STS {
         kappa_estimation: &str,
         kappa_ridge: f64,
     ) -> PyResult<()> {
-        require_iters(iters, "iters")?;
         let kappa_est = match kappa_estimation {
             "lasso" => sts::KappaEst::Lasso { nlambda: 100, lambda_min_ratio: 0.001 },
             "ridge" => sts::KappaEst::Ridge(kappa_ridge),
@@ -7082,7 +7063,6 @@ impl HDP {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
 
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
@@ -7488,7 +7468,6 @@ impl DTM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         if times.len() != corpus.num_docs() {
             return Err(PyValueError::new_err(format!(
                 "times has length {} but there are {} documents",
@@ -7853,7 +7832,6 @@ impl SupervisedLDA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         if y.len() != corpus.num_docs() {
             return Err(PyValueError::new_err(format!(
                 "y has length {} but there are {} documents",
@@ -8270,7 +8248,6 @@ impl PT {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
         let (k, p, a, b) = (self.num_topics, self.num_pseudo, self.alpha, self.beta);
@@ -8537,7 +8514,6 @@ impl GSDMM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let num_types = corpus.num_types();
         let (k, a, b) = (self.k_max, self.alpha, self.beta);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
@@ -8879,7 +8855,6 @@ impl SeededLDA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let num_topics = self.num_topics_val();
         let num_types = corpus.num_types();
         let seeds = seed_word_ids(&self.seed_words, &corpus.id_to_word, num_topics);
@@ -11675,7 +11650,6 @@ impl KeyATM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let num_topics = self.num_topics;
         let num_types = corpus.num_types();
         // Thinned θ-draw retention schedule (issue #31), shared by all three fits.
@@ -12291,7 +12265,6 @@ impl PA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
-        require_iters(iters, "iters")?;
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
         let (s, k, a, b) = (self.num_super, self.num_sub, self.alpha, self.beta);
@@ -12803,20 +12776,6 @@ mod tests {
         let arr = Array2::from_shape_vec((2, 2), vec![1.0, f64::NAN, 3.0, 4.0]).unwrap();
         let err = check_all_finite_arr2("features", &arr.view()).unwrap_err();
         assert!(err.to_string().contains("features"));
-    }
-
-    #[test]
-    fn require_iters_accepts_positive() {
-        assert!(require_iters(1, "iters").is_ok());
-        assert!(require_iters(1000, "iters").is_ok());
-    }
-
-    #[test]
-    fn require_iters_rejects_zero() {
-        let err = require_iters(0, "iters").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("iters"), "message should name the parameter");
-        assert!(msg.contains("0"), "message should include the bad value");
     }
 
     #[test]

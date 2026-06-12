@@ -183,36 +183,21 @@ def test_embedding_doc_embeddings_valid_passes():
     m.fit(docs, emb)
 
 
-# --- 7. iters=0 and iters=-1 raise ValueError (issue #103) ----------------
-
-@pytest.mark.parametrize("bad_iters", [0])
-def test_lda_iters_zero_raises(bad_iters):
-    m = topica.LDA(num_topics=2, seed=42)
-    with pytest.raises(ValueError, match="iters"):
-        m.fit(DOCS, iters=bad_iters)
-
-
-@pytest.mark.parametrize("bad_iters", [0])
-def test_stm_iters_zero_raises(bad_iters):
-    m = topica.STM(num_topics=2, seed=42)
-    prev = np.ones((len(DOCS), 1))
-    with pytest.raises(ValueError, match="iters"):
-        m.fit(DOCS, prevalence=prev, iters=bad_iters)
-
-
-@pytest.mark.parametrize("bad_iters", [0])
-def test_keyatm_iters_zero_raises(bad_iters):
-    keywords = {"topic_a": ["a", "b"], "topic_b": ["c", "d"]}
-    m = topica.KeyATM(keywords, seed=42)
-    with pytest.raises(ValueError, match="iters"):
-        m.fit(DOCS, iters=bad_iters)
-
+# --- 7. iters bounds (issue #103) -----------------------------------------
+# iters=0 is a supported "initialize only" operation (e.g. inspecting the seed
+# prior before any sweep; see test_seeded_gsdmm_contracts), so it is NOT an
+# error. Negative iters is rejected by PyO3's usize conversion (OverflowError).
 
 def test_lda_iters_negative_raises():
     m = topica.LDA(num_topics=2, seed=42)
-    # Negative iters hits PyO3's OverflowError (usize) or our ValueError for 0.
     with pytest.raises((ValueError, OverflowError)):
         m.fit(DOCS, iters=-1)
+
+
+def test_lda_iters_zero_is_accepted():
+    m = topica.LDA(num_topics=2, seed=42)
+    m.fit(DOCS, iters=0)  # initialize without sweeping; must not raise
+    assert m.topic_word.shape[0] == 2
 
 
 def test_lda_iters_positive_works():

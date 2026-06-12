@@ -58,12 +58,14 @@ def _fit_bertopic_no_clusters():
     """Return a fitted BERTopic that found zero clusters (min_cluster_size too
     large for the data), which is the condition that triggered issue #103."""
     import warnings
-    rng = np.random.default_rng(99)
-    # Very few documents with min_cluster_size larger than the dataset forces
-    # HDBSCAN to find no clusters.
-    docs = [["a", "b"], ["c", "d"]]
+    rng = np.random.default_rng(0)
+    # Structureless (random) embeddings over enough documents that HDBSCAN
+    # runs cleanly but finds no cluster at this min_cluster_size, so num_topics
+    # is 0. (A handful of documents with min_cluster_size above the dataset
+    # size instead panics inside the MST crate; see the follow-up issue.)
+    docs = [["a", "b", "c"], ["b", "c", "d"], ["a", "d", "e"]] * 30
     emb = rng.standard_normal((len(docs), 4))
-    m = topica.BERTopic(min_cluster_size=100, seed=1)
+    m = topica.BERTopic(min_cluster_size=40, seed=1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m.fit(docs, emb)
