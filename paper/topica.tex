@@ -323,7 +323,7 @@ baseline to the structural topic model to neural clustering.
 Model & What it is for & Reference \\
 \midrule
 \multicolumn{3}{l}{\emph{Count-based}}\\
-\code{LDA}          & Classic topics, fast collapsed-Gibbs (SparseLDA)     & \citet{blei2003lda, yao2009sparselda} \\
+\code{LDA}          & Classic topics, fast collapsed-Gibbs (SparseLDA; WarpLDA / CVB0 optional) & \citet{blei2003lda, yao2009sparselda} \\
 \code{DMR}          & Topics conditioned on document metadata              & \citet{mimno2008dmr} \\
 \code{LabeledLDA}   & Supervised topics tied to document labels            & \citet{ramage2009llda} \\
 \code{CTM}          & Correlated topics (logistic-normal)                  & \citet{blei2007ctm} \\
@@ -410,6 +410,11 @@ meaning: \code{label\_topics} reports the highest-probability, FREX
 documents that load most heavily on a topic. Every iterative model also exposes
 its convergence trace as \code{fit\_history} and a \code{converged} flag, so a fit
 that stopped at the iteration cap is not mistaken for one that met a tolerance.
+The variational-EM models (\code{CTM} and the structural model built on it) stop
+when the relative change in the variational bound falls below a tolerance,
+\(10^{-5}\) by default to match \proglang{R} \pkg{stm}, or at the iteration cap,
+whichever comes first; the collapsed-Gibbs samplers run a fixed number of sweeps.
+The \code{converged} flag records which of the two ended the fit.
 Validation is not optional.
 \code{topica.coherence} computes the windowed coherence measures
 \citep{lau2014coherence} in the core, \code{topica.exclusivity} and
@@ -622,10 +627,10 @@ two make opposite algorithmic bets. \pkg{tomotopy} computes a dense topic
 distribution for every token and vectorizes it with \pkg{Eigen}, which is fastest
 when $K$ is small; \pkg{topica}, like \pkg{MALLET}, uses a sparse sampler that
 visits only the topics a word actually occupies, which wins when $K$ is large. On
-a 2{,}600-word, 3{,}500-document corpus the two cross near $K=200$: \pkg{tomotopy}
-is about $2\times$ faster at $K=20$, the gap closes through $K=100$, and
-\pkg{topica} is faster beyond, by about $1.5\times$ at $K=400$, where its time has
-barely grown while \pkg{tomotopy}'s has risen with $K$. The fine-grained models
+a 2{,}600-word, 3{,}500-document corpus the two cross between $K=50$ and $K=100$:
+\pkg{tomotopy} is about $1.5\times$ faster at $K=20$, the gap closes by $K=50$, and
+\pkg{topica} is faster from $K=100$ on, by about $2.3\times$ at $K=400$, where its
+time has barely grown while \pkg{tomotopy}'s has risen with $K$. The fine-grained models
 common in social science sit in the large-$K$ regime where the sparse sampler
 pays off, and there \pkg{topica} also matches \pkg{MALLET}. Throughout,
 \pkg{topica} retains the thinned posterior draws its uncertainty tooling needs
@@ -651,6 +656,33 @@ keyword-assisted model carries a heavier per-sweep merge and scales more
 modestly. Both are reproduced by \code{benchmarks/bench.py}.}
 \label{fig:threads}
 \end{figure}
+
+Beyond the default SparseLDA sweep, \pkg{topica} exposes the inference engine
+of each model as a pluggable backend behind one fitted-model contract,
+selected with \code{sampler} (count-based models) or \code{inference}
+(variational models). For the Dirichlet-prior family, \code{"warp"} is the
+cache-efficient WarpLDA sampler \citep{chen2016warplda}, an $O(1)$-per-token
+Metropolis--Hastings scheme whose per-sweep cost is flat in $K$; at the
+fine-grained topic counts common in social science (e.g.\ $K=1{,}000$) it fits
+several times faster than SparseLDA and reaches higher coherence.
+\code{"cvb0"} is collapsed variational Bayes, zeroth-order
+\citep{asuncion2009smoothing}, a deterministic, non-sampling alternative that
+trades speed for higher topic coherence and exact reproducibility. These
+extend across the count-based models that share the collapsed conditional:
+the per-document prior (\code{DMR}), seeded (\code{SeededLDA}), supervised
+(\code{LabeledLDA}), and keyword (\code{keyATM}) variants. CVB0 is the natural
+home for the supervised and keyword models in particular, because its
+per-cell responsibilities take the label mask or keyword-switch constraint
+exactly and at no cost (the off-mask responsibility is simply zero), where a
+masked Metropolis--Hastings proposal would barely mix.
+
+The logistic-normal models have no Dirichlet to collapse, so \code{CTM} (the
+engine \code{STM} builds on) instead exposes stochastic variational inference
+\citep{hoffman2013svi} through \code{inference="svi"}: minibatch Laplace
+E-steps drive Robbins--Monro updates of the global topics, mean, and
+covariance, so one epoch touches every document while the global state stays
+minibatch-sized. It is the backend for corpora too large to sweep in full
+each EM step, with the full-batch variational EM remaining the default.
 
 %% ===========================================================================
 \section{Worked example: many models, one workflow}\label{sec:example}
