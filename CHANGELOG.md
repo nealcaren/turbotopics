@@ -19,6 +19,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   covariate-aware models (STM, DMR, KeyATM), matching `stm::permutationTest`;
   p-values use the `(1 + count) / (1 + n)` convention and drop NaN null entries
   (#101).
+- The `_topica.pyi` type stub is back in sync with the compiled module (missing
+  `save`/`load`, `log_likelihood_history`, `doc_names`, several `fit()` keywords,
+  and `Corpus.from_documents` parameters added; a bogus `HLDA.coherence` removed),
+  and a parametrized test now guards against future drift (#108).
 - Covariate, feature, embedding, and timestamp matrices are now checked for
   non-finite values (NaN/inf) at the boundary and raise a clear `ValueError`
   naming the parameter, instead of panicking (KeyATM) or silently producing
