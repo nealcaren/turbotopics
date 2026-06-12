@@ -346,6 +346,24 @@ impl WarpLda {
     }
 }
 
+impl crate::mh::MhSampler for WarpLda {
+    fn sweep(&mut self, corpus: &Corpus, rng: &mut rand_pcg::Pcg64Mcg) {
+        WarpLda::sweep(self, corpus, rng)
+    }
+    fn set_hyper(&mut self, alpha: &[f64], beta: f64) {
+        WarpLda::set_hyper(self, alpha, beta)
+    }
+    fn phi_into(&self, acc: &mut [Vec<f64>]) {
+        WarpLda::phi_into(self, acc)
+    }
+    fn theta_into(&self, corpus: &Corpus, acc: &mut [Vec<f64>]) {
+        WarpLda::theta_into(self, corpus, acc)
+    }
+    fn to_topic_model(&self) -> TopicModel {
+        WarpLda::to_topic_model(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

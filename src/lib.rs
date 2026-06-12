@@ -14,6 +14,7 @@ pub mod hlda;
 pub mod keyatm;
 pub mod labeled;
 pub mod lightlda;
+pub mod mh;
 pub mod linalg;
 pub mod model;
 pub mod optimize;

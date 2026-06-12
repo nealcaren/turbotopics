@@ -361,3 +361,21 @@ impl LightLda {
         model
     }
 }
+
+impl crate::mh::MhSampler for LightLda {
+    fn sweep(&mut self, corpus: &Corpus, rng: &mut rand_pcg::Pcg64Mcg) {
+        LightLda::sweep(self, corpus, rng)
+    }
+    fn set_hyper(&mut self, alpha: &[f64], beta: f64) {
+        LightLda::set_hyper(self, alpha, beta)
+    }
+    fn phi_into(&self, acc: &mut [Vec<f64>]) {
+        LightLda::phi_into(self, acc)
+    }
+    fn theta_into(&self, corpus: &Corpus, acc: &mut [Vec<f64>]) {
+        LightLda::theta_into(self, corpus, acc)
+    }
+    fn to_topic_model(&self) -> TopicModel {
+        LightLda::to_topic_model(self)
+    }
+}
