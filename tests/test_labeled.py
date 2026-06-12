@@ -383,3 +383,54 @@ class TestLabeledLDATopWordsAndCoherence:
     def test_coherence_values_nonpositive(self, fitted):
         c = fitted.coherence(n=5)
         assert (c <= 0).all()
+
+
+# ---------------------------------------------------------------------------
+# CVB0 backend (deterministic; the masked-γ inference warp could not do well)
+# ---------------------------------------------------------------------------
+
+class TestLabeledCvb0:
+    def _fit(self, seed=1, iters=300):
+        docs, labels = _make_corpus(seed=2)
+        m = LabeledLDA(alpha=0.1, seed=seed, sampler="cvb0")
+        m.fit(docs, labels, iters=iters)
+        return m, labels
+
+    def test_recovers_labels(self):
+        m, _ = self._fit()
+        label_to_idx = {lbl: i for i, lbl in enumerate(m.labels)}
+        for lbl, vocab_words in _VOCAB.items():
+            t = label_to_idx[lbl]
+            top4 = [w for w, _ in m.top_words(4, topic=t)]
+            assert sum(1 for w in top4 if w in vocab_words) >= 3
+
+    def test_mask_respected_exactly(self):
+        # The supervised constraint must hold under CVB0: zero θ off the label set.
+        m, labels = self._fit()
+        dt = m.doc_topic
+        label_to_idx = {lbl: i for i, lbl in enumerate(m.labels)}
+        for d, doc_labels in enumerate(labels):
+            allowed = {label_to_idx[l] for l in doc_labels}
+            for t in range(m.num_topics):
+                if t not in allowed:
+                    assert dt[d, t] < 1e-12
+
+    def test_valid_distributions_and_no_draws(self):
+        m, _ = self._fit()
+        npt.assert_allclose(m.topic_word.sum(axis=1), 1.0)
+        npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0)
+        assert m.theta_draws is None
+
+    def test_deterministic(self):
+        a, _ = self._fit(seed=4, iters=120)
+        b, _ = self._fit(seed=4, iters=120)
+        npt.assert_array_equal(a.topic_word, b.topic_word)
+
+    def test_aliases_and_bad_name(self):
+        docs, labels = _make_corpus(seed=2)
+        for name in ("cvb0", "cvb"):
+            m = LabeledLDA(seed=1, sampler=name)
+            m.fit(docs, labels, iters=30)
+            assert m.num_topics == 3
+        with pytest.raises(ValueError):
+            LabeledLDA(sampler="banana")

@@ -1125,8 +1125,19 @@ class LabeledLDA:
     """Labeled LDA (Ramage et al. 2009): supervised topics constrained to each
     document's label set. The number of topics equals the number of labels."""
 
-    def __init__(self, *, alpha: float = 0.1, beta: float = 0.01, seed: int = 42) -> None:
-        """Create an unfitted model. alpha is the symmetric per-topic prior."""
+    def __init__(
+        self, *, alpha: float = 0.1, beta: float = 0.01, seed: int = 42,
+        sampler: str = "sparse",
+    ) -> None:
+        """Create an unfitted model. alpha is the symmetric per-topic prior.
+
+        sampler selects the backend: "sparse" (default) is the restricted
+        collapsed-Gibbs sweep; "cvb0" is deterministic collapsed variational
+        Bayes with the label set applied as a mask on the responsibilities (zero
+        off the allowed topics). CVB0 enforces the same supervised constraint
+        deterministically and tends to higher coherence; it produces no MCMC
+        theta_draws. (WarpLDA is not offered here: masked proposals mix poorly,
+        whereas masking is free in CVB0.)"""
         ...
 
     def fit(

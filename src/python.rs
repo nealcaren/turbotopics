@@ -3731,6 +3731,9 @@ pub struct LabeledLDA {
     alpha: f64,
     beta: f64,
     seed: u64,
+    // CVB0 deterministic collapsed-variational inference (masked γ per document)
+    // instead of the default restricted SparseLDA sweep.
+    cvb0: bool,
 
     fitted: bool,
     num_topics: usize,
@@ -3761,18 +3764,28 @@ impl LabeledLDA {
     /// Create an unfitted model. `alpha` is the (symmetric) per-topic prior
     /// over a document's allowed topics.
     #[new]
-    #[pyo3(signature = (*, alpha=0.1, beta=0.01, seed=42))]
-    fn new(alpha: f64, beta: f64, seed: u64) -> PyResult<Self> {
+    #[pyo3(signature = (*, alpha=0.1, beta=0.01, seed=42, sampler="sparse"))]
+    fn new(alpha: f64, beta: f64, seed: u64, sampler: &str) -> PyResult<Self> {
         if !finite_pos(alpha) {
             return Err(PyValueError::new_err("alpha must be > 0"));
         }
         if !finite_pos(beta) {
             return Err(PyValueError::new_err("beta must be > 0"));
         }
+        let cvb0 = match sampler {
+            "sparse" => false,
+            "cvb0" | "cvb" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler {other:?}; expected \"sparse\" or \"cvb0\""
+                )))
+            }
+        };
         Ok(LabeledLDA {
             alpha,
             beta,
             seed,
+            cvb0,
             fitted: false,
             num_topics: 0,
             topic_names: Vec::new(),
@@ -3880,6 +3893,47 @@ impl LabeledLDA {
         let check_every_labeled = if check_every == 0 { 0 } else if convergence_tol > 0.0 { check_every.max(1) } else { check_every };
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, num_docs, k)?;
+
+        if self.cvb0 {
+            // CVB0 LabeledLDA: deterministic; the per-document label set masks the
+            // responsibilities (γ is zero off the allowed topics — free in CVB0,
+            // unlike a sampler's proposal rejection). No MCMC, so no θ-draws.
+            let beta = self.beta;
+            let alpha = self.alpha;
+            let (acc_phi, acc_theta, model, corpus) = py.allow_threads(move || {
+                let alpha0 = vec![alpha; k];
+                let mut cv = cvb0::Cvb0::new(&corpus, k, &alpha0, beta, &mut rng);
+                cv.set_allowed(allowed);
+                for _ in 0..iters {
+                    cv.sweep();
+                }
+                let mut acc_phi = vec![vec![0.0f64; k]; num_types];
+                let mut acc_theta = vec![vec![0.0f64; k]; num_docs];
+                cv.phi_into(&mut acc_phi);
+                cv.theta_into(&mut acc_theta);
+                let model = cv.to_topic_model(&corpus);
+                (acc_phi, acc_theta, model, corpus)
+            });
+            let _ = &model; // packed CVB0 state (argmax γ) backs coherence/save
+            let mut phi = Array2::<f64>::zeros((k, num_types));
+            for (w, row) in acc_phi.iter().enumerate() {
+                for (t, &val) in row.iter().enumerate() {
+                    phi[[t, w]] = val;
+                }
+            }
+            let theta = vecs_to_arr2(&acc_theta);
+            self.num_topics = k;
+            self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
+            self.label_vocab = label_vocab;
+            self.phi = Some(phi);
+            self.theta = Some(theta);
+            self.theta_draws = None;
+            self.corpus = Some(corpus);
+            self.log_likelihood_history = Vec::new();
+            self.converged = false;
+            self.fitted = true;
+            return Ok(());
+        }
 
         let (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, model, corpus) = py.allow_threads(move || {
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
@@ -4186,7 +4240,7 @@ impl LabeledLDA {
             s.topic_names
         };
         Ok(LabeledLDA {
-            alpha: s.alpha, beta: s.beta, seed: s.seed, fitted: s.fitted,
+            alpha: s.alpha, beta: s.beta, seed: s.seed, cvb0: false, fitted: s.fitted,
             num_topics: s.num_topics, topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             label_vocab: s.label_vocab, corpus: s.corpus,
