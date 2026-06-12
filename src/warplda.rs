@@ -76,6 +76,22 @@ pub struct WarpLda {
     /// `doc_alpha[d]` in place of the uniform `alpha`, rebuilding the
     /// doc-proposal smoothing alias per document. `None` is the plain-LDA path.
     doc_alpha: Option<Vec<Vec<f64>>>,
+
+    /// Asymmetric β for SeededLDA. When `Some`, a seed word gets an extra
+    /// `seed_weight` pseudocount in each topic it seeds, so β and its per-topic
+    /// sum become topic/word dependent (see [`Self::beta_at`] /
+    /// [`Self::beta_sum_at`]). `None` is the plain symmetric-β path.
+    seed: Option<SeedBeta>,
+}
+
+/// SeededLDA's asymmetric-β bookkeeping: `β_{k,w} = β + seed_weight·[w ∈ seeds[k]]`
+/// and `β_sum_k = V·β + |seeds[k]|·seed_weight`.
+struct SeedBeta {
+    seed_weight: f64,
+    /// Per-topic β normalizer `β_sum_k`.
+    beta_sum_k: Vec<f64>,
+    /// `inv_seeds[w]` = the (sorted) topics that word `w` seeds.
+    inv_seeds: Vec<Vec<u32>>,
 }
 
 impl WarpLda {
@@ -123,6 +139,7 @@ impl WarpLda {
             word_index,
             alpha_alias,
             doc_alpha: None,
+            seed: None,
         }
     }
 
@@ -130,6 +147,47 @@ impl WarpLda {
     /// each sweep by the DMR fit loop after recomputing α from the current λ.
     pub fn set_doc_alpha(&mut self, doc_alpha: Vec<Vec<f64>>) {
         self.doc_alpha = Some(doc_alpha);
+    }
+
+    /// Enable SeededLDA's asymmetric β. `seeds[k]` is the list of seed word-ids
+    /// for topic `k`; each gets an extra `seed_weight` pseudocount in topic `k`.
+    pub fn set_seeds(&mut self, seeds: &[Vec<usize>], seed_weight: f64) {
+        let k = self.num_topics;
+        let v = self.num_types;
+        let mut beta_sum_k = vec![self.beta * v as f64; k];
+        let mut inv_seeds: Vec<Vec<u32>> = vec![Vec::new(); v];
+        for (t, ws) in seeds.iter().enumerate().take(k) {
+            beta_sum_k[t] += ws.len() as f64 * seed_weight;
+            for &w in ws {
+                if w < v {
+                    inv_seeds[w].push(t as u32);
+                }
+            }
+        }
+        for row in inv_seeds.iter_mut() {
+            row.sort_unstable();
+        }
+        self.seed = Some(SeedBeta { seed_weight, beta_sum_k, inv_seeds });
+    }
+
+    /// β_{k,w}: the base β plus the seed boost when word `w` seeds topic `k`.
+    #[inline]
+    fn beta_at(&self, k: usize, w: usize) -> f64 {
+        match &self.seed {
+            Some(s) if s.inv_seeds[w].binary_search(&(k as u32)).is_ok() => {
+                self.beta + s.seed_weight
+            }
+            _ => self.beta,
+        }
+    }
+
+    /// β_sum_k: the per-topic β normalizer (uniform `beta_sum` when unseeded).
+    #[inline]
+    fn beta_sum_at(&self, k: usize) -> f64 {
+        match &self.seed {
+            Some(s) => s.beta_sum_k[k],
+            None => self.beta_sum,
+        }
     }
 
     /// The current per-token topic assignments, document-major — the input the
@@ -169,7 +227,11 @@ impl WarpLda {
             self.doc_phase(corpus, rng);
         }
         self.recount_n_k();
-        self.word_phase(rng);
+        if self.seed.is_some() {
+            self.word_phase_seeded(rng);
+        } else {
+            self.word_phase(rng);
+        }
         self.recount_n_k();
     }
 
@@ -178,7 +240,6 @@ impl WarpLda {
     /// only the current document's `C_d` row is randomly accessed.
     fn doc_phase<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
         let k = self.num_topics;
-        let beta_sum = self.beta_sum;
         let mut c_d = vec![0i64; k];
 
         for (d, doc) in corpus.docs.iter().enumerate() {
@@ -206,9 +267,9 @@ impl WarpLda {
                 let mut new = cur;
                 if prop != cur {
                     let num = (c_d[prop] as f64 + self.alpha[prop])
-                        * (self.n_k[cur] as f64 - 1.0 + beta_sum);
+                        * (self.n_k[cur] as f64 - 1.0 + self.beta_sum_at(cur));
                     let den = (c_d[cur] as f64 - 1.0 + self.alpha[cur])
-                        * (self.n_k[prop] as f64 + beta_sum);
+                        * (self.n_k[prop] as f64 + self.beta_sum_at(prop));
                     if num >= den || rng.gen::<f64>() * den < num {
                         new = prop;
                     }
@@ -236,7 +297,6 @@ impl WarpLda {
     /// per document). Only called when `doc_alpha` is set.
     fn doc_phase_dmr<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
         let k = self.num_topics;
-        let beta_sum = self.beta_sum;
         let mut c_d = vec![0i64; k];
 
         for (d, doc) in corpus.docs.iter().enumerate() {
@@ -265,9 +325,9 @@ impl WarpLda {
                 let mut new = cur;
                 if prop != cur {
                     let num = (c_d[prop] as f64 + alpha_d[prop])
-                        * (self.n_k[cur] as f64 - 1.0 + beta_sum);
+                        * (self.n_k[cur] as f64 - 1.0 + self.beta_sum_at(cur));
                     let den = (c_d[cur] as f64 - 1.0 + alpha_d[cur])
-                        * (self.n_k[prop] as f64 + beta_sum);
+                        * (self.n_k[prop] as f64 + self.beta_sum_at(prop));
                     if num >= den || rng.gen::<f64>() * den < num {
                         new = prop;
                     }
@@ -346,7 +406,102 @@ impl WarpLda {
         }
     }
 
-    /// Accumulate a smoothed φ snapshot `(C_wk+β)/(C_k+β̄)` into `acc[word][topic]`.
+    /// Word phase with SeededLDA's asymmetric β. Same structure as
+    /// [`Self::word_phase`] but `β_{k,w}` carries the seed boost and the
+    /// normalizer is the per-topic `β_sum_k`. Only called when `seed` is set.
+    fn word_phase_seeded<R: Rng>(&mut self, rng: &mut R) {
+        let k = self.num_topics;
+        let beta = self.beta;
+        let kbeta = k as f64 * beta;
+        // Borrow the seed bookkeeping for the whole pass: disjoint from the
+        // z/prop/word_index fields the token loop touches.
+        let seed = self.seed.as_ref().unwrap();
+        let seed_weight = seed.seed_weight;
+        let mut c_w = vec![0i64; k];
+
+        for w in 0..self.num_types {
+            let toks = &self.word_index[w];
+            let n_w = toks.len();
+            if n_w == 0 {
+                continue;
+            }
+            for v in c_w.iter_mut() {
+                *v = 0;
+            }
+            for &(d, pos) in toks {
+                c_w[self.z[d as usize][pos as usize] as usize] += 1;
+            }
+            let n_w_f = n_w as f64;
+            let inv_w = &seed.inv_seeds[w];
+            // β_{k,w} = β + seed_weight·[k seeds w]; Σ_k β_{k,w} = Kβ + |inv_w|·sw.
+            let bt = |t: usize| -> f64 {
+                if inv_w.binary_search(&(t as u32)).is_ok() {
+                    beta + seed_weight
+                } else {
+                    beta
+                }
+            };
+            let sum_beta_w = kbeta + inv_w.len() as f64 * seed_weight;
+
+            for &(d, pos) in toks {
+                let (d, pos) = (d as usize, pos as usize);
+                let cur = self.z[d][pos] as usize;
+                let prop = self.prop[d][pos] as usize;
+
+                let mut new = cur;
+                if prop != cur {
+                    let num = (c_w[prop] as f64 + bt(prop))
+                        * (self.n_k[cur] as f64 - 1.0 + seed.beta_sum_k[cur]);
+                    let den = (c_w[cur] as f64 - 1.0 + bt(cur))
+                        * (self.n_k[prop] as f64 + seed.beta_sum_k[prop]);
+                    if num >= den || rng.gen::<f64>() * den < num {
+                        new = prop;
+                    }
+                }
+                self.z[d][pos] = new as u32;
+
+                // Word-proposal q_w(k) ∝ C_wk + β_{k,w}: with prob ∝ n_w copy a
+                // random token-of-w's topic; else draw from β_{k,w} (uniform with
+                // prob ∝ Kβ, else a random topic that w seeds).
+                let r = rng.gen::<f64>() * (n_w_f + sum_beta_w);
+                let wp = if r < n_w_f {
+                    let (rd, rp) = toks[rng.gen_range(0..n_w)];
+                    self.z[rd as usize][rp as usize] as usize
+                } else if (r - n_w_f) < kbeta || inv_w.is_empty() {
+                    rng.gen_range(0..k)
+                } else {
+                    inv_w[rng.gen_range(0..inv_w.len())] as usize
+                };
+                self.prop[d][pos] = wp as u32;
+            }
+        }
+    }
+
+    /// Smoothed topic-word matrix `(C_wk+β_{k,w})/(C_k+β_sum_k)`, shape
+    /// `[topic][word]` (seeded-β aware). Used by the SeededLDA warp path, whose
+    /// output orientation is topic-major.
+    pub fn topic_word(&self) -> Vec<Vec<f64>> {
+        let k = self.num_topics;
+        let v = self.num_types;
+        let mut c_w = vec![0i64; k];
+        let mut phi = vec![vec![0.0f64; v]; k];
+        for w in 0..v {
+            for x in c_w.iter_mut() {
+                *x = 0;
+            }
+            for &(d, pos) in &self.word_index[w] {
+                c_w[self.z[d as usize][pos as usize] as usize] += 1;
+            }
+            for t in 0..k {
+                phi[t][w] =
+                    (c_w[t] as f64 + self.beta_at(t, w)) / (self.n_k[t] as f64 + self.beta_sum_at(t));
+            }
+        }
+        phi
+    }
+
+    /// Accumulate a smoothed φ snapshot `(C_wk+β_{k,w})/(C_k+β_sum_k)` into
+    /// `acc[word][topic]`.
     pub fn phi_into(&self, acc: &mut [Vec<f64>]) {
         // Rebuild the word-topic counts from the assignments (not stored densely).
         let k = self.num_topics;
@@ -359,8 +514,8 @@ impl WarpLda {
                 c_w[self.z[d as usize][pos as usize] as usize] += 1;
             }
             for t in 0..k {
-                let denom = self.n_k[t] as f64 + self.beta_sum;
-                acc[w][t] += (c_w[t] as f64 + self.beta) / denom;
+                let denom = self.n_k[t] as f64 + self.beta_sum_at(t);
+                acc[w][t] += (c_w[t] as f64 + self.beta_at(t, w)) / denom;
             }
         }
     }
@@ -544,6 +699,40 @@ mod tests {
         assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
         // doc_topics() exposes assignments for the λ optimizer.
         assert_eq!(s.doc_topics().len(), corpus.docs.len());
+    }
+
+    #[test]
+    fn seeded_path_recovers_planted_blocks() {
+        // Seed each block's first word into its topic; the seeded word phase must
+        // still recover every block (and respect the asymmetric β).
+        let wpb = 5;
+        let (corpus, n_blocks) = planted(4, wpb, 200);
+        let k = n_blocks;
+        let v = corpus.num_types();
+        let alpha = vec![0.1f64; k];
+        let mut rng = Pcg64Mcg::seed_from_u64(1);
+        let mut s = WarpLda::new(&corpus, k, &alpha, 0.01, &mut rng);
+        // seeds[t] = the first word id of block t.
+        let seeds: Vec<Vec<usize>> = (0..k).map(|t| vec![t * wpb]).collect();
+        s.set_seeds(&seeds, 50.0);
+        for _ in 0..200 {
+            s.sweep(&corpus, &mut rng);
+        }
+        let phi = s.to_topic_model().topic_word();
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..k {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| phi[t][b].partial_cmp(&phi[t][a]).unwrap());
+            let top: std::collections::HashSet<usize> = idx[..wpb].iter().copied().collect();
+            for b in 0..n_blocks {
+                let block: std::collections::HashSet<usize> =
+                    (b * wpb..(b + 1) * wpb).collect();
+                if block.is_subset(&top) {
+                    covered.insert(b);
+                }
+            }
+        }
+        assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
     }
 
     #[test]

@@ -8432,6 +8432,9 @@ pub struct SeededLDA {
     beta: f64,
     weight: f64,
     seed: u64,
+    // WarpLDA cache-efficient sampler (seeded word phase) instead of the default
+    // SparseLDA seeded sweep. Recommended for large K.
+    warp: bool,
     fitted: bool,
     topic_names: Vec<String>,
     phi: Option<Array2<f64>>,
@@ -8464,7 +8467,8 @@ impl SeededLDA {
     /// matching the seededlda package) scales the seed prior. `alpha` is the
     /// per-topic Dirichlet, `beta` the base topic-word smoothing.
     #[new]
-    #[pyo3(signature = (seed_words, *, residual=0, alpha=0.1, beta=0.01, weight=0.01, seed=42))]
+    #[pyo3(signature = (seed_words, *, residual=0, alpha=0.1, beta=0.01, weight=0.01, seed=42,
+                        sampler="sparse"))]
     fn new(
         seed_words: &Bound<'_, PyDict>,
         residual: usize,
@@ -8472,6 +8476,7 @@ impl SeededLDA {
         beta: f64,
         weight: f64,
         seed: u64,
+        sampler: &str,
     ) -> PyResult<Self> {
         let (names, words) = parse_seed_dict(seed_words)?;
         if !finite_pos(alpha) || !finite_pos(beta) {
@@ -8480,8 +8485,17 @@ impl SeededLDA {
         if names.len() + residual < 2 {
             return Err(PyValueError::new_err("need at least 2 topics (seeded + residual)"));
         }
+        let warp = match sampler {
+            "sparse" => false,
+            "warp" | "warplda" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler {other:?}; expected \"sparse\" or \"warp\""
+                )))
+            }
+        };
         Ok(SeededLDA {
-            seed_names: names, seed_words: words, residual, alpha, beta, weight, seed,
+            seed_names: names, seed_words: words, residual, alpha, beta, weight, seed, warp,
             fitted: false, topic_names: Vec::new(), phi: None, theta: None,
             theta_draws: None, corpus: None,
             log_likelihood_history: Vec::new(), converged: false,
@@ -8559,6 +8573,52 @@ impl SeededLDA {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
+
+        if self.warp {
+            // WarpLDA seeded path. The per-document prior (doc_topic_prior) is not
+            // yet wired through the warp θ output, so require the symmetric case.
+            if doc_alpha.is_some() {
+                return Err(PyValueError::new_err(
+                    "sampler=\"warp\" does not support doc_topic_prior yet; use sampler=\"sparse\"",
+                ));
+            }
+            let num_docs = corpus.num_docs();
+            let (phi_tw, theta_dk, theta_draw_buf, corpus) = py.allow_threads(move || {
+                let alpha0 = vec![alpha; num_topics];
+                let mut ws = warplda::WarpLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                ws.set_seeds(&seeds, seed_weight);
+                let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+                for iter in 1..=iters {
+                    ws.sweep(&corpus, &mut rng);
+                    if draws_opts.thin > 0 && iter % draws_opts.thin == 0 {
+                        let mut tmp = vec![vec![0.0f64; num_topics]; num_docs];
+                        ws.theta_into(&corpus, &mut tmp);
+                        let snap = tmp.iter()
+                            .map(|r| r.iter().map(|&v| v as f32).collect())
+                            .collect();
+                        push_capped(&mut theta_draw_buf, snap, draws_opts.cap);
+                    }
+                }
+                let phi_tw = ws.topic_word();
+                let mut theta_dk = vec![vec![0.0f64; num_topics]; num_docs];
+                ws.theta_into(&corpus, &mut theta_dk);
+                (phi_tw, theta_dk, theta_draw_buf, corpus)
+            });
+            self.phi = Some(vecs_to_arr2(&phi_tw));
+            self.theta = Some(vecs_to_arr2(&theta_dk));
+            self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
+            let mut names = self.seed_names.clone();
+            for i in 0..self.residual {
+                names.push(format!("residual_{}", i + 1));
+            }
+            self.topic_names = names;
+            self.corpus = Some(corpus);
+            self.log_likelihood_history = Vec::new();
+            self.converged = false;
+            self.fitted = true;
+            return Ok(());
+        }
+
         let (model, ll_history, converged, corpus) = py.allow_threads(move || {
             let (m, ll, conv) = seeded::fit_seeded_lda(
                 &corpus.docs, num_types, num_topics, &seeds, alpha, beta, seed_weight, doc_alpha,
@@ -8698,7 +8758,7 @@ impl SeededLDA {
         Ok(SeededLDA {
             seed_names: Vec::new(), seed_words: Vec::new(),
             residual: s.num_topics.saturating_sub(s.topic_names.iter().filter(|n| !n.starts_with("residual_")).count()),
-            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, fitted: s.fitted,
+            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, warp: false, fitted: s.fitted,
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             theta_draws: None, corpus: s.corpus,
             log_likelihood_history: s.log_likelihood_history,
