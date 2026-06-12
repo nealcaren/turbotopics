@@ -70,12 +70,16 @@ class Corpus:
         stopwords: list[str] | None = None,
         min_doc_freq: int = 1,
         max_doc_fraction: float = 1.0,
+        min_cf: int = 0,
+        rm_top: int = 0,
     ) -> Corpus:
         """Build a Corpus from a list of token lists.
 
         A document left with no tokens by pruning is dropped, so ``num_docs`` can
         be smaller than ``len(documents)``; the surviving original indices are in
         ``kept_indices`` (realign external covariates with ``X[corpus.kept_indices]``).
+        ``min_cf`` drops words whose corpus frequency is below the threshold.
+        ``rm_top`` removes the top-N most frequent words before any other pruning.
         """
         ...
 
@@ -206,6 +210,8 @@ class DMR:
         progress_interval: int = 50,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
         covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
     ) -> None:
         """Fit by collapsed Gibbs with the per-document Dirichlet prior
@@ -298,6 +304,15 @@ class DMR:
         sets each document's Dirichlet prior alpha_d = exp(Xgamma); if omitted
         the intercept-only baseline is used. Shape (num_new_docs, num_topics).
         `iterations` is deprecated; use `iters` instead."""
+        ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with DMR.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "DMR":
+        """Load a model previously written by save."""
         ...
 
     @property
@@ -425,6 +440,16 @@ class CTM:
         """Infer document-topic theta for new documents by the variational
         E-step against the fitted globals. Shape (num_new_docs, num_topics)."""
         ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with CTM.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "CTM":
+        """Load a model previously written by save."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -578,6 +603,16 @@ class STM:
         (num_docs, num_topics-1) array, row d is the prior mean for document d.
         The ergonomic covariate path is topica.stm.transform."""
         ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with STM.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "STM":
+        """Load a model previously written by save."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -841,6 +876,16 @@ class HDP:
         Gibbs against the fixed topic-word matrix. Shape (num_new_docs,
         num_topics). `iterations` is deprecated; use `iters` instead."""
         ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with HDP.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "HDP":
+        """Load a model previously written by save."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -921,6 +966,15 @@ class DTM:
     @topic_names.setter
     def topic_names(self, value: list[str]) -> None: ...
 
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with DTM.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "DTM":
+        """Load a model previously written by save."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -944,6 +998,8 @@ class SupervisedLDA:
         var_iters: int = 15,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 1,
     ) -> None:
         """Fit by variational EM. `y` is the per-document response (length =
         number of documents)."""
@@ -1018,6 +1074,15 @@ class SupervisedLDA:
         (num_new_docs, num_topics). Predict the response with transform @ eta.
         `iterations` is deprecated; use `iters` instead."""
         ...
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with SupervisedLDA.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "SupervisedLDA":
+        """Load a model previously written by save."""
+        ...
+
     @property
     def fit_history(self) -> list[tuple[int, float]]:
         """Per-iteration ``(iteration, objective)`` trace recorded every
@@ -1062,6 +1127,8 @@ class SAGE:
         progress_interval: int = 50,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
     ) -> None:
         """Fit. groups is one group label per document (strings or ints);
         group_names fixes group order (default: sorted union)."""
@@ -1209,6 +1276,8 @@ class LabeledLDA:
         progress_interval: int = 50,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
     ) -> None:
         """Fit the model. labels is one label-list per document; the topic set is
         the union of all labels (or label_names, which fixes topic order). An
@@ -1287,6 +1356,15 @@ class LabeledLDA:
         Gibbs against the fitted topic-word matrix, treating every label as
         available. Shape (num_new_docs, num_topics); columns align with labels.
         `iterations` is deprecated; use `iters` instead."""
+        ...
+
+    def save(self, path: str) -> None:
+        """Persist the fitted model to path. Reload with LabeledLDA.load."""
+        ...
+
+    @staticmethod
+    def load(path: str) -> "LabeledLDA":
+        """Load a model previously written by save."""
         ...
 
     @property
@@ -1464,6 +1542,13 @@ class LDA:
         ...
 
     @property
+    def log_likelihood_history(self) -> list[tuple[int, float]]:
+        """Per-iteration log-likelihood trace: list of (iteration, log_likelihood) pairs,
+        recorded every ``check_every`` iterations. Empty when ``check_every=0``.
+        Alias of fit_history for LDA."""
+        ...
+
+    @property
     def fit_history(self) -> list[tuple[int, float]]:
         """Per-iteration log-likelihood trace: list of (iteration, log_likelihood) pairs,
         recorded every ``check_every`` iterations. Empty when ``check_every=0``."""
@@ -1606,6 +1691,8 @@ class PT:
         iters: int = 1000,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
     ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1768,6 +1855,8 @@ class PA:
         iters: int = 1000,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
     ) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -1802,6 +1891,8 @@ class PA:
     def num_topics(self) -> int: ...
     @property
     def vocabulary(self) -> list[str]: ...
+    @property
+    def doc_names(self) -> list[str]: ...
     @property
     def topic_names(self) -> list[str]: ...
     @topic_names.setter
@@ -1864,7 +1955,7 @@ class HLDA:
 
         eta is a deprecated alias for beta."""
         ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 1000) -> None: ...
+    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 500) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
         """Node-word matrix, shape (num_nodes, num_words); rows sum to 1."""
@@ -1894,7 +1985,6 @@ class HLDA:
     @topic_names.setter
     def topic_names(self, value: list[str]) -> None: ...
     def top_words(self, node: int, n: int = 10) -> list[tuple[str, float]]: ...
-    def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def save(self, path: str) -> None: ...
     @staticmethod
     def load(path: str) -> "HLDA": ...
@@ -2528,6 +2618,7 @@ class KeyATM:
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
         progress_interval: int = 0,
+        prior_offset: Optional[float] = None,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
         convergence_tol: float = 0.0,
