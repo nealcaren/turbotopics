@@ -48,7 +48,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts, warplda};
+use crate::{coherence as coh, ctm, cvb0, lightlda, optimize, output, sampler, spectral, sts, warplda};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -755,6 +755,8 @@ pub struct LDA {
     light: bool,
     // WarpLDA cache-efficient two-pass MH sampler (mutually exclusive with light).
     warp: bool,
+    // CVB0 deterministic collapsed-variational inference (no MCMC draws).
+    cvb0: bool,
     mh_steps: usize,
     // MALLET's --use-symmetric-alpha: optimize only the alpha concentration,
     // keeping every alpha[t] equal, instead of learning the per-topic shape.
@@ -931,13 +933,14 @@ impl LDA {
                 ));
             }
         }
-        let (light, warp) = match sampler {
-            "sparse" | "mallet" => (false, false),
-            "lightlda" | "light" | "alias" => (true, false),
-            "warp" | "warplda" => (false, true),
+        let (light, warp, cvb0) = match sampler {
+            "sparse" | "mallet" => (false, false, false),
+            "lightlda" | "light" | "alias" => (true, false, false),
+            "warp" | "warplda" => (false, true, false),
+            "cvb0" | "cvb" => (false, false, true),
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler {other:?}; expected \"sparse\", \"lightlda\", or \"warp\""
+                    "unknown sampler {other:?}; expected \"sparse\", \"lightlda\", \"warp\", or \"cvb0\""
                 )))
             }
         };
@@ -959,6 +962,7 @@ impl LDA {
             num_threads: num_threads.max(1),
             light,
             warp,
+            cvb0,
             mh_steps,
             use_symmetric_alpha,
             init_spectral,
@@ -1068,9 +1072,52 @@ impl LDA {
         let seed_base = self.seed;
         let light = self.light;
         let warp = self.warp;
+        let cvb0_flag = self.cvb0;
         let mh_steps = self.mh_steps;
         let beta = self.beta;
         let use_symmetric_alpha = self.use_symmetric_alpha;
+
+        // CVB0 path: deterministic collapsed-variational inference. No MCMC, so
+        // no θ-draws; convergence_tol early-stops on the mean |Δγ| per sweep.
+        if cvb0_flag {
+            let (acc_phi, acc_theta, ll_history, converged, model, corpus) =
+                py.allow_threads(move || {
+                    let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
+                    let mut cv = cvb0::Cvb0::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                    let mut ll_history: Vec<(usize, f64)> = Vec::new();
+                    let mut converged = false;
+                    for iter in 1..=iters {
+                        let change = cv.sweep();
+                        if let Some(cb) = &progress {
+                            if progress_interval > 0 && iter % progress_interval == 0 {
+                                let m = cv.to_topic_model(&corpus);
+                                let ll = output::model_log_likelihood(&m, &corpus) / total_tokens;
+                                Python::with_gil(|py| {
+                                    let _ = cb.call1(py, (iter, ll));
+                                });
+                            }
+                        }
+                        if check_every > 0 && iter % check_every == 0 {
+                            let m = cv.to_topic_model(&corpus);
+                            ll_history.push((iter, output::model_log_likelihood(&m, &corpus)));
+                        }
+                        if convergence_tol > 0.0 && change < convergence_tol {
+                            converged = true;
+                            break;
+                        }
+                    }
+                    let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
+                    let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
+                    cv.phi_into(&mut acc_phi);
+                    cv.theta_into(&mut acc_theta);
+                    let model = cv.to_topic_model(&corpus);
+                    (acc_phi, acc_theta, ll_history, converged, model, corpus)
+                });
+            self.theta_draws = None;
+            self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus,
+                ll_history, converged);
+            return Ok(());
+        }
 
         // Metropolis-Hastings backends (WarpLDA, LightLDA): each owns its dense
         // state and is driven through the shared `run_mh_training` loop, then
@@ -1605,6 +1652,7 @@ impl LDA {
             num_threads: 1,
             light: false,
             warp: false,
+            cvb0: false,
             mh_steps: 2,
             use_symmetric_alpha: false,
             init_spectral: false,
@@ -1996,7 +2044,7 @@ impl LDA {
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
-            num_threads: s.num_threads, light: false, warp: false, mh_steps: 2, fitted: s.fitted,
+            num_threads: s.num_threads, light: false, warp: false, cvb0: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
             init_spectral: s.init_spectral,
             topic_names,
