@@ -33,8 +33,9 @@ use crate::corpus::Corpus;
 use crate::model::TopicModel;
 
 /// Walker's alias method: turns sampling from a fixed K-way categorical into two
-/// O(1) draws (a uniform index plus a coin). Built in O(K).
-struct Alias {
+/// O(1) draws (a uniform index plus a coin). Built in O(K). Shared with the
+/// WarpLDA sampler ([`crate::warplda`]) for its α-proposal table.
+pub(crate) struct Alias {
     prob: Vec<f64>,
     alias: Vec<u32>,
 }
@@ -42,7 +43,7 @@ struct Alias {
 impl Alias {
     /// Build an alias table proportional to non-negative `weights`. A degenerate
     /// (all-zero) input falls back to a uniform table.
-    fn build(weights: &[f64]) -> Alias {
+    pub(crate) fn build(weights: &[f64]) -> Alias {
         let n = weights.len();
         let mut prob = vec![0.0f64; n];
         let mut alias = vec![0u32; n];
@@ -91,7 +92,7 @@ impl Alias {
     }
 
     #[inline]
-    fn sample<R: Rng>(&self, rng: &mut R) -> usize {
+    pub(crate) fn sample<R: Rng>(&self, rng: &mut R) -> usize {
         let i = rng.gen_range(0..self.prob.len());
         if rng.gen::<f64>() < self.prob[i] {
             i
@@ -358,5 +359,23 @@ impl LightLda {
         }
         model.type_topic_counts = ttc;
         model
+    }
+}
+
+impl crate::mh::MhSampler for LightLda {
+    fn sweep(&mut self, corpus: &Corpus, rng: &mut rand_pcg::Pcg64Mcg) {
+        LightLda::sweep(self, corpus, rng)
+    }
+    fn set_hyper(&mut self, alpha: &[f64], beta: f64) {
+        LightLda::set_hyper(self, alpha, beta)
+    }
+    fn phi_into(&self, acc: &mut [Vec<f64>]) {
+        LightLda::phi_into(self, acc)
+    }
+    fn theta_into(&self, corpus: &Corpus, acc: &mut [Vec<f64>]) {
+        LightLda::theta_into(self, corpus, acc)
+    }
+    fn to_topic_model(&self) -> TopicModel {
+        LightLda::to_topic_model(self)
     }
 }

@@ -1252,11 +1252,14 @@ class LDA:
 
         sampler selects the inference backend: "sparse" (default) is MALLET's
         SparseLDA collapsed Gibbs sampler; "lightlda" is the alias-table
-        Metropolis-Hastings sampler of Yuan et al. (2015), an O(1)-per-token
-        cycle-proposal sampler for the same model. The alias sampler is built
-        for the very-large-K / long-document regime; "sparse" is faster at the
-        topic counts typical of social-science work. mh_steps is the number of
-        MH proposals per token (alias sampler only).
+        Metropolis-Hastings sampler of Yuan et al. (2015); "warp" is the
+        cache-efficient two-pass MH sampler of Chen et al. (2016, WarpLDA),
+        whose per-sweep cost is flat in K. "sparse" is the best choice at the
+        topic counts typical of social-science work (K up to ~200). For
+        large-K, fine-grained models (K >= ~500) "warp" is the recommended
+        sampler: it is several times faster than "sparse" and both faster and
+        higher-coherence than "lightlda" there. mh_steps is the number of MH
+        proposals per token (lightlda only).
 
         init selects the initial token-topic assignment: "random" (default,
         MALLET-compatible) draws each token's topic uniformly; "spectral" seeds

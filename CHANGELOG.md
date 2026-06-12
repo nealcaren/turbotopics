@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `LDA(..., sampler="warp")` adds the WarpLDA cache-efficient two-pass
+  Metropolis-Hastings sampler (Chen et al., 2016). Its per-sweep cost is flat in
+  K (an O(1)-per-token MCEM scheme with delayed count updates), so it is the
+  recommended sampler for large-K, fine-grained models. On a 2,000-document
+  poliblog subsample at K=1,000 it fits ~4.7x faster than the default
+  `"sparse"` sampler *and* reaches higher topic coherence (sparse is too slow to
+  mix well at that K), and it dominates `"lightlda"` outright (several times
+  faster and far higher coherence). At the topic counts typical of
+  social-science work (K up to ~200) `"sparse"` remains the best
+  quality-per-wall-clock choice and stays the default. The MH acceptance ratios
+  were cross-checked against the reference C++ kernel (thu-ml/warplda).
+
 - `LDA(..., init="spectral")` seeds the initial token-topic assignment from a
   deterministic anchor-word topic-word matrix (the same spectral recovery STM
   and CTM use) instead of a uniform random draw. It does not speed convergence,

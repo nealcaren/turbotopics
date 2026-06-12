@@ -36,31 +36,37 @@ model.fit(docs, iters=1000)
 model.top_words(10)
 ```
 
-### Sampler choice: SparseLDA vs LightLDA
+### Sampler choice: SparseLDA, WarpLDA, and LightLDA
 
-`LDA` ships two interchangeable samplers for the *same model*, selected with
+`LDA` ships three interchangeable samplers for the *same model*, selected with
 `sampler=`:
 
 - **`"sparse"`** (default) — MALLET's SparseLDA collapsed-Gibbs sampler,
   `O(K_d + K_w)` per token. Near-optimal for the topic counts typical of social
-  science; the faster choice at every scale we tested (up to `K = 600` on a
-  2,000-document corpus).
-- **`"lightlda"`** — the alias-table Metropolis-Hastings sampler of
-  [Yuan et al. (2015)](https://arxiv.org/abs/1412.1576). It draws from cheap
-  word- and document-proposal alias tables and corrects with an MH accept/reject
-  step, for `O(1)` amortized work per token. This pays off only in the
-  web-scale regime it was designed for — very large `K`, long documents, and
-  large vocabularies — where SparseLDA's buckets stop being sparse.
+  science; the fastest, highest-coherence choice up to roughly `K = 200`.
+- **`"warp"`** — the cache-efficient two-pass MH sampler of
+  [Chen et al. (2016)](https://www.vldb.org/pvldb/vol9/p744-chen.pdf). It holds
+  the count tables fixed while every token samples (a delayed-update MCEM
+  scheme), which lets each pass touch a single count matrix, for `O(1)` work per
+  token with a per-sweep cost that is **flat in `K`**. This is the sampler for
+  fine-grained, large-`K` models: at `K = 1,000` on a 2,000-document corpus it
+  fits several times faster than SparseLDA *and* reaches higher coherence
+  (SparseLDA is too slow to mix well at that `K`), and it beats LightLDA on both
+  speed and coherence.
+- **`"lightlda"`** — the alias-table MH sampler of
+  [Yuan et al. (2015)](https://arxiv.org/abs/1412.1576), `O(1)` per token via
+  word/document proposal alias tables. Superseded by `"warp"`, which is faster
+  and mixes better at the same `K`; retained for compatibility and as an
+  independent cross-check.
 
 ```python
-model = topica.LDA(num_topics=500, seed=1, sampler="lightlda", mh_steps=2)
+# Fine-grained, large-K model: WarpLDA.
+model = topica.LDA(num_topics=1000, seed=1, sampler="warp")
 model.fit(docs, iters=1000)
 ```
 
-Both samplers target the same posterior and recover the same topics (matched
-coherence on shared corpora); LightLDA is also useful as an independent
-cross-check of a SparseLDA fit. Use the default unless you have a specific
-large-`K` reason not to.
+All three target the same model. Use the default `"sparse"` up to a couple
+hundred topics; switch to `"warp"` for large-`K` (`K ≳ 500`) work.
 
 ## STM
 

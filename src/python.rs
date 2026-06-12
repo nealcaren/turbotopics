@@ -48,7 +48,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts};
+use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts, warplda};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -753,6 +753,8 @@ pub struct LDA {
     num_threads: usize,
     // Sampling backend: false = SparseLDA (MALLET), true = LightLDA alias-MH.
     light: bool,
+    // WarpLDA cache-efficient two-pass MH sampler (mutually exclusive with light).
+    warp: bool,
     mh_steps: usize,
     // MALLET's --use-symmetric-alpha: optimize only the alpha concentration,
     // keeping every alpha[t] equal, instead of learning the per-topic shape.
@@ -929,12 +931,13 @@ impl LDA {
                 ));
             }
         }
-        let light = match sampler {
-            "sparse" | "mallet" => false,
-            "lightlda" | "light" | "alias" => true,
+        let (light, warp) = match sampler {
+            "sparse" | "mallet" => (false, false),
+            "lightlda" | "light" | "alias" => (true, false),
+            "warp" | "warplda" => (false, true),
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler {other:?}; expected \"sparse\" or \"lightlda\""
+                    "unknown sampler {other:?}; expected \"sparse\", \"lightlda\", or \"warp\""
                 )))
             }
         };
@@ -955,6 +958,7 @@ impl LDA {
             seed,
             num_threads: num_threads.max(1),
             light,
+            warp,
             mh_steps,
             use_symmetric_alpha,
             init_spectral,
@@ -1063,75 +1067,40 @@ impl LDA {
         let num_threads = self.num_threads;
         let seed_base = self.seed;
         let light = self.light;
+        let warp = self.warp;
         let mh_steps = self.mh_steps;
         let beta = self.beta;
         let use_symmetric_alpha = self.use_symmetric_alpha;
 
-        // LightLDA path: alias-MH sampling on dense count tables, packed back
-        // into a TopicModel at the end. Separate from the SparseLDA path below so
-        // the well-tested MALLET sampler is left untouched. LightLDA does not
-        // support convergence_tol yet (no log_likelihood computed inline), so we
-        // run the full iters and return an empty trace + converged=false.
-        if light {
-            let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
-                let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
-                let mut ls = lightlda::LightLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
-                ls.mh_steps = mh_steps;
-                let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
-
-                for iter in 1..=iters {
-                    ls.sweep(&corpus, &mut rng);
-                    if draw_thin > 0 && iter % draw_thin == 0 {
-                        // One snapshot: theta_into accumulates, so start from zero.
-                        let mut tmp = vec![vec![0.0f64; num_topics]; num_docs];
-                        ls.theta_into(&corpus, &mut tmp);
-                        let snap = tmp
-                            .iter()
-                            .map(|r| r.iter().map(|&v| v as f32).collect())
-                            .collect();
-                        push_capped(&mut theta_draw_buf, snap, draw_cap);
+        // Metropolis-Hastings backends (WarpLDA, LightLDA): each owns its dense
+        // state and is driven through the shared `run_mh_training` loop, then
+        // packed back into a TopicModel. Construction is the only per-sampler
+        // difference. Unlike the SparseLDA path below, these compute no inline
+        // log_likelihood, so convergence_tol is unsupported (full iters, empty
+        // trace, converged=false). The SparseLDA path stays separate to keep its
+        // convergence trace, parallel sweep, and MALLET byte-parity untouched.
+        if warp || light {
+            let (acc_phi, acc_theta, theta_draw_buf, model, corpus) =
+                py.allow_threads(move || {
+                    let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
+                    if warp {
+                        let ws = warplda::WarpLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                        run_mh_training(
+                            ws, corpus, num_topics, num_types, num_docs, iters, num_samples,
+                            sample_interval, burn_in, optimize_interval, use_symmetric_alpha,
+                            draw_thin, draw_cap, total_tokens, &mut rng, &progress, progress_interval,
+                        )
+                    } else {
+                        let mut ls =
+                            lightlda::LightLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                        ls.mh_steps = mh_steps;
+                        run_mh_training(
+                            ls, corpus, num_topics, num_types, num_docs, iters, num_samples,
+                            sample_interval, burn_in, optimize_interval, use_symmetric_alpha,
+                            draw_thin, draw_cap, total_tokens, &mut rng, &progress, progress_interval,
+                        )
                     }
-                    if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
-                        let mut m = ls.to_topic_model();
-                        if use_symmetric_alpha {
-                            optimize::optimize_alpha_symmetric(&mut m, &corpus);
-                        } else {
-                            optimize::optimize_alpha(&mut m, &corpus);
-                        }
-                        optimize::optimize_beta(&mut m);
-                        ls.set_hyper(&m.alpha, m.beta);
-                    }
-                    if let Some(cb) = &progress {
-                        if progress_interval > 0 && iter % progress_interval == 0 {
-                            let m = ls.to_topic_model();
-                            let ll = output::model_log_likelihood(&m, &corpus) / total_tokens;
-                            Python::with_gil(|py| {
-                                let _ = cb.call1(py, (iter, ll));
-                            });
-                        }
-                    }
-                }
-
-                let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
-                let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
-                for _ in 0..num_samples {
-                    for _ in 0..sample_interval {
-                        ls.sweep(&corpus, &mut rng);
-                    }
-                    ls.phi_into(&mut acc_phi);
-                    ls.theta_into(&corpus, &mut acc_theta);
-                }
-                let n = (num_samples.max(1)) as f64;
-                for row in acc_phi.iter_mut() {
-                    for v in row.iter_mut() { *v /= n; }
-                }
-                for row in acc_theta.iter_mut() {
-                    for v in row.iter_mut() { *v /= n; }
-                }
-                let model = ls.to_topic_model();
-                (acc_phi, acc_theta, theta_draw_buf, (model, corpus))
-            });
-            let (model, corpus) = model;
+                });
             self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
             self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus,
                 Vec::new(), false);
@@ -1635,6 +1604,7 @@ impl LDA {
             seed: 42,
             num_threads: 1,
             light: false,
+            warp: false,
             mh_steps: 2,
             use_symmetric_alpha: false,
             init_spectral: false,
@@ -2026,7 +1996,7 @@ impl LDA {
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
-            num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
+            num_threads: s.num_threads, light: false, warp: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
             init_spectral: s.init_spectral,
             topic_names,
@@ -2125,6 +2095,98 @@ fn push_capped(buf: &mut Vec<Vec<Vec<f32>>>, draw: Vec<Vec<f32>>, cap: usize) {
     if buf.len() > cap {
         buf.remove(0);
     }
+}
+
+/// Generic training loop for any [`crate::mh::MhSampler`] backend (LightLDA,
+/// WarpLDA, and future MH samplers). Runs `iters` sweeps with periodic θ-draw
+/// thinning, hyperparameter optimization, and an optional progress callback,
+/// then averages `num_samples` post-burn snapshots into φ/θ. Returns the
+/// accumulators, thinned draws, packed model, and the (moved-through) corpus.
+///
+/// This is the single place the MH samplers' fit loop lives; the per-sampler
+/// `LDA::fit` branches collapse to "construct the sampler, call this". Call it
+/// inside `py.allow_threads`; the progress closure re-acquires the GIL itself.
+#[allow(clippy::too_many_arguments)]
+fn run_mh_training<S: crate::mh::MhSampler>(
+    mut sampler: S,
+    corpus: corpus::Corpus,
+    num_topics: usize,
+    num_types: usize,
+    num_docs: usize,
+    iters: usize,
+    num_samples: usize,
+    sample_interval: usize,
+    burn_in: usize,
+    optimize_interval: usize,
+    use_symmetric_alpha: bool,
+    draw_thin: usize,
+    draw_cap: usize,
+    total_tokens: f64,
+    rng: &mut Pcg64Mcg,
+    progress: &Option<PyObject>,
+    progress_interval: usize,
+) -> (
+    Vec<Vec<f64>>,
+    Vec<Vec<f64>>,
+    Vec<Vec<Vec<f32>>>,
+    TopicModel,
+    corpus::Corpus,
+) {
+    let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+
+    for iter in 1..=iters {
+        sampler.sweep(&corpus, rng);
+
+        if draw_thin > 0 && iter % draw_thin == 0 {
+            let mut tmp = vec![vec![0.0f64; num_topics]; num_docs];
+            sampler.theta_into(&corpus, &mut tmp);
+            let snap = tmp
+                .iter()
+                .map(|r| r.iter().map(|&v| v as f32).collect())
+                .collect();
+            push_capped(&mut theta_draw_buf, snap, draw_cap);
+        }
+
+        if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
+            let mut m = sampler.to_topic_model();
+            if use_symmetric_alpha {
+                optimize::optimize_alpha_symmetric(&mut m, &corpus);
+            } else {
+                optimize::optimize_alpha(&mut m, &corpus);
+            }
+            optimize::optimize_beta(&mut m);
+            sampler.set_hyper(&m.alpha, m.beta);
+        }
+
+        if let Some(cb) = progress {
+            if progress_interval > 0 && iter % progress_interval == 0 {
+                let m = sampler.to_topic_model();
+                let ll = output::model_log_likelihood(&m, &corpus) / total_tokens;
+                Python::with_gil(|py| {
+                    let _ = cb.call1(py, (iter, ll));
+                });
+            }
+        }
+    }
+
+    let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
+    let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
+    for _ in 0..num_samples {
+        for _ in 0..sample_interval {
+            sampler.sweep(&corpus, rng);
+        }
+        sampler.phi_into(&mut acc_phi);
+        sampler.theta_into(&corpus, &mut acc_theta);
+    }
+    let n = (num_samples.max(1)) as f64;
+    for row in acc_phi.iter_mut() {
+        for v in row.iter_mut() { *v /= n; }
+    }
+    for row in acc_theta.iter_mut() {
+        for v in row.iter_mut() { *v /= n; }
+    }
+    let model = sampler.to_topic_model();
+    (acc_phi, acc_theta, theta_draw_buf, model, corpus)
 }
 
 /// Warn (once, before the heavy loop) when retaining θ draws would cost more

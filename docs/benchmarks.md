@@ -172,13 +172,31 @@ topica's HDP and tomotopy's infer different topic counts, and topica's supervise
 LDA is variational where tomotopy's is Gibbs, so neither is a like-for-like speed
 comparison.
 
-## Large-K sampling: SparseLDA vs LightLDA
+## Large-K sampling: SparseLDA, WarpLDA, and LightLDA
 
-[LightLDA](guides/models.md#sampler-choice-sparselda-vs-lightlda)'s
-`O(1)`-per-token alias sampler is built for very large K. At the corpus sizes
-typical of social science, SparseLDA stays faster, because its buckets remain
-sparse; LightLDA's flatter scaling in K only pulls ahead past roughly K ≈ 1,000.
-Use the default `sampler="sparse"` unless you have a specific large-K reason.
+For most work, SparseLDA (the default `sampler="sparse"`) is the right choice:
+its sparse buckets keep it fastest and highest-coherence up to roughly K = 200.
+Its per-token cost grows with K, though, so at large K the picture flips.
+
+WarpLDA (`sampler="warp"`) is a Metropolis-Hastings sampler whose per-sweep cost
+is **flat in K** (an O(1)-per-token scheme that holds the count tables fixed
+while every token samples, then updates them, so each pass touches a single
+count matrix). On a 2,000-document, 2,632-word poliblog subsample, fit time and
+mean topic coherence (`c_v`, top-10), single core:
+
+| K | sparse | warp | warp vs sparse |
+|---:|-------:|-----:|----------------|
+| 100 | 9.3s, coh −79.1 | 5.4s, coh −80.6 | faster, ~equal coherence |
+| 500 | 13.5s, coh −101.4 | 4.3s, coh −102.2 | **3× faster**, ~equal |
+| 1,000 | 17.9s, coh −99.2 | 3.8s, coh **−96.4** | **4.7× faster and higher coherence** |
+
+At K = 1,000 SparseLDA is too slow to mix well in a comparable budget, while
+WarpLDA stays fast and mixes more, so it wins on both axes. WarpLDA also
+dominates the older LightLDA alias-MH sampler (`sampler="lightlda"`) across the
+large-K range — several times faster and markedly higher coherence, because
+LightLDA mixes poorly at these topic counts. So: keep `"sparse"` for K up to a
+couple hundred, switch to `"warp"` for fine-grained, large-K models
+(K ≳ 500); `"lightlda"` is retained for compatibility but `"warp"` supersedes it.
 
 ## Coherence
 
