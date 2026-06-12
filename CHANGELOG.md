@@ -6,6 +6,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- `LDA(..., init="spectral")` seeds the initial token-topic assignment from a
+  deterministic anchor-word topic-word matrix (the same spectral recovery STM
+  and CTM use) instead of a uniform random draw. It does not speed convergence,
+  but it improves topic coherence at larger K (a robust +2 to +3 mean-coherence
+  points across seeds at K=50 and K=100 on the poliblog corpus; a wash at small
+  K), the fine-grained regime where the sparse sampler already pays off. It
+  falls back to the random draw when the corpus is too small for anchor
+  recovery. The default stays `init="random"`, so MALLET byte-parity and
+  same-seed determinism are unchanged.
+
 ### Changed
 
 - The collapsed-Gibbs samplers (LDA, DMR, LabeledLDA, SeededLDA, KeyATM, PA, PT,
