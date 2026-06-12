@@ -778,6 +778,38 @@ def _binary_covariate_effect(theta, covariate):
     return theta[mask1].mean(axis=0) - theta[mask0].mean(axis=0)
 
 
+def _covariate_kwarg_for(model):
+    """Return the keyword name used to pass a prevalence covariate to model.fit().
+
+    Returns a string (the kwarg name) for model families that accept a
+    covariate at fit time, or None for covariate-free models (plain LDA, HDP,
+    etc.) that should be fitted without one.
+
+    The mapping mirrors each model family's public API:
+      - STM / STS: second positional arg named ``prevalence``
+      - DMR: second positional arg named ``features``
+      - KeyATM: keyword arg ``covariates``
+    """
+    cls_name = type(model).__name__
+    if cls_name in ("STM", "STS"):
+        return "prevalence"
+    if cls_name == "DMR":
+        return "features"
+    if cls_name == "KeyATM":
+        return "covariates"
+    # For any other model, inspect fit() for known covariate parameter names.
+    fit_fn = getattr(type(model), "fit", None)
+    if fit_fn is not None:
+        try:
+            params = inspect.signature(fit_fn).parameters
+            for name in ("prevalence", "features", "covariates"):
+                if name in params:
+                    return name
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def permutation_test(
     model,
     corpus,
@@ -795,7 +827,8 @@ def permutation_test(
     Assesses whether a binary document-level covariate genuinely shifts topic
     prevalence, or whether an apparent association could arise by chance. Each
     permutation randomly reassigns the covariate at its empirical rate, refits
-    the model from fresh starting values, aligns the refit topics to the
+    the model from fresh starting values (passing the permuted covariate to the
+    model for covariate-aware families), aligns the refit topics to the
     reference (using the Hungarian top-word matcher from
     :func:`~topica.validation._hungarian`), and records the covariate's effect
     on every topic. The observed effect for each topic is then compared to the
@@ -838,6 +871,19 @@ def permutation_test(
         One entry per topic (restricted to ``topics`` when given), each with
         the observed effect, the permutation null distribution, and a two-sided
         p-value.
+
+    Notes
+    -----
+    For covariate-aware models (STM, DMR, KeyATM) the permuted covariate is
+    passed directly to each refit so the null model is correctly specified
+    (matching R ``stm``'s ``permutationTest`` behaviour). For covariate-free
+    models (LDA, HDP, etc.) permuting the labels used only in the effect
+    statistic remains a valid null.
+
+    The p-value uses the ``(1 + count) / (1 + n_perm)`` convention, so it is
+    never exactly zero. Permutation statistics that are NaN (from unmatched
+    topics in variable-K refits such as HDP) are dropped from the null before
+    computing the p-value; the effective n is reduced accordingly.
     """
     # --- resolve corpus to token lists ----------------------------------------
     if hasattr(corpus, "documents"):
@@ -879,6 +925,12 @@ def permutation_test(
     # --- observed effect -------------------------------------------------------
     obs_all = _binary_covariate_effect(theta_ref, cov)  # (k,)
 
+    # --- detect covariate kwarg for this model family -------------------------
+    # For covariate-aware models (STM, DMR, KeyATM) the permuted covariate is
+    # passed to each refit so the null is correctly specified.  For plain LDA
+    # and other covariate-free models this is None and we skip that argument.
+    _cov_kwarg = _covariate_kwarg_for(model)
+
     # --- build the model factory and fit kwargs --------------------------------
     if model_factory is None:
         cls = type(model)
@@ -908,7 +960,12 @@ def permutation_test(
         cov_perm = (rng.random(n_docs) < rate).astype(np.float64)
 
         m_perm = model_factory(perm_seed)
-        m_perm.fit(docs, **fit_kwargs)
+        if _cov_kwarg is not None:
+            # Covariate-aware model: pass the permuted covariate so the null
+            # is correctly specified (mirrors R stm::permutationTest).
+            m_perm.fit(docs, **{_cov_kwarg: cov_perm[:, None], **fit_kwargs})
+        else:
+            m_perm.fit(docs, **fit_kwargs)
 
         theta_perm = np.asarray(m_perm.doc_topic, dtype=np.float64)
 
@@ -934,9 +991,13 @@ def permutation_test(
     for t in topic_list:
         obs = float(obs_all[t])
         null = np.array(null_effects[t], dtype=np.float64)
-        # Two-sided p-value: fraction of permutations at least as extreme.
-        if null.size > 0:
-            pval = float(np.mean(np.abs(null) >= abs(obs)))
+        # Drop NaN entries (unmatched topics from variable-K models like HDP).
+        null_valid = null[~np.isnan(null)]
+        # Two-sided p-value using the (1 + count) / (1 + n) convention so
+        # p is never exactly zero regardless of how extreme the observed stat is.
+        n_valid = null_valid.size
+        if n_valid > 0:
+            pval = float((1 + np.sum(np.abs(null_valid) >= abs(obs))) / (1 + n_valid))
         else:
             pval = float("nan")
         out.append(PermutationResult(
