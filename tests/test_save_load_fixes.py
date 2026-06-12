@@ -189,3 +189,53 @@ def test_seededlda_file_cannot_load_as_lda(tmp_path):
     msg = str(exc_info.value)
     assert "SeededLDA" in msg, f"error should mention SeededLDA: {msg}"
     assert "LDA" in msg, f"error should mention LDA: {msg}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #102b (extended): DMR/LabeledLDA/SAGE/KeyATM also persist theta_draws.
+# Before the fix these four set theta_draws=None on load, so a saved-then-loaded
+# model silently fell back to the Dirichlet approximation in composition_theta,
+# changing estimate_effect / standard_errors uncertainty.
+# ---------------------------------------------------------------------------
+
+_TD_DOCS = [["a", "b", "c"], ["b", "c", "d"], ["a", "d", "e"],
+            ["c", "e", "f"], ["a", "b", "f"]] * 8
+
+
+def _fit_dmr():
+    X = np.ones((len(_TD_DOCS), 1))
+    m = topica.DMR(num_topics=3, seed=1)
+    m.fit(_TD_DOCS, X, feature_names=["x"], iters=30)
+    return m
+
+
+def _fit_labeled():
+    m = topica.LabeledLDA(seed=1)
+    m.fit(_TD_DOCS, [["t0", "t1"]] * len(_TD_DOCS), iters=30)
+    return m
+
+
+def _fit_sage():
+    groups = ["g0", "g1"] * (len(_TD_DOCS) // 2)
+    m = topica.SAGE(num_topics=3, seed=1)
+    m.fit(_TD_DOCS, groups, iters=30)
+    return m
+
+
+def _fit_keyatm():
+    m = topica.KeyATM({"k0": ["a", "b"], "k1": ["c", "d"]}, seed=1)
+    m.fit(_TD_DOCS, iters=30)
+    return m
+
+
+@pytest.mark.parametrize("fit_fn", [_fit_dmr, _fit_labeled, _fit_sage, _fit_keyatm])
+def test_theta_draws_survive_save_load(fit_fn, tmp_path):
+    m = fit_fn()
+    before = m.theta_draws
+    assert before is not None, "model should retain theta_draws by default"
+    path = str(tmp_path / "m.bin")
+    m.save(path)
+    m2 = type(m).load(path)
+    after = m2.theta_draws
+    assert after is not None, "theta_draws must survive load (issue #102)"
+    assert np.array_equal(before, after)

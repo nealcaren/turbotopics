@@ -302,6 +302,8 @@ struct DmrState {
     #[serde(default)] topic_names: Vec<String>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LabeledState {
@@ -311,6 +313,8 @@ struct LabeledState {
     #[serde(default)] topic_names: Vec<String>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SageState {
@@ -321,6 +325,8 @@ struct SageState {
     #[serde(default)] topic_names: Vec<String>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64)>,
     #[serde(default)] converged: bool,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 /// serde default for the bound of a model saved before convergence tracking
 /// existed: NaN signals "unknown", distinct from a real bound of 0.
@@ -435,6 +441,8 @@ struct KeyAtmState {
     #[serde(default)] pi_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] alpha_vec: Option<Vec<f64>>,
     #[serde(default = "default_num_threads")] num_threads: usize,
+    // Thinned MCMC theta draws (num_draws, num_docs, num_topics), f32.
+    #[serde(default)] theta_draws: Option<Arr3f32>,
 }
 fn default_num_threads() -> usize { 1 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -3891,6 +3899,7 @@ impl DMR {
             topic_names: self.topic_names.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
 
@@ -3911,7 +3920,7 @@ impl DMR {
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             feature_effects: arr2_back(s.feature_effects),
             feature_names: s.feature_names, corpus: s.corpus,
-            theta_draws: None,
+            theta_draws: arr3f32_back(s.theta_draws),
             log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
         })
@@ -4434,6 +4443,7 @@ impl LabeledLDA {
             topic_names: self.topic_names.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
 
@@ -4451,7 +4461,7 @@ impl LabeledLDA {
             num_topics: s.num_topics, topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             label_vocab: s.label_vocab, corpus: s.corpus,
-            theta_draws: None,
+            theta_draws: arr3f32_back(s.theta_draws),
             log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
         })
@@ -5003,6 +5013,7 @@ impl SAGE {
             topic_names: self.topic_names.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
             converged: self.converged,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
 
@@ -5021,7 +5032,7 @@ impl SAGE {
             lbfgs_iters: s.lbfgs_iters, fitted: s.fitted, num_groups: s.num_groups,
             topic_names,
             beta: s.beta, theta: arr2_back(s.theta), group_names: s.group_names, corpus: s.corpus,
-            theta_draws: None,
+            theta_draws: arr3f32_back(s.theta_draws),
             log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
         })
@@ -12392,6 +12403,7 @@ impl KeyATM {
             pi_history: self.pi_history.clone(),
             alpha_vec: self.alpha_vec.clone(),
             num_threads: self.num_threads,
+            theta_draws: arr3f32_opt(&self.theta_draws),
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -12409,7 +12421,7 @@ impl KeyATM {
             transition_matrix: None, log_likelihood_history: s.log_likelihood_history,
             converged: s.converged,
             alpha_history: s.alpha_history, pi_history: s.pi_history,
-            alpha_vec: s.alpha_vec, theta_draws: None,
+            alpha_vec: s.alpha_vec, theta_draws: arr3f32_back(s.theta_draws),
         })
     }
 
