@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-12
+
 ### Fixed
 
 - `SeededLDA` save/load is no longer lossy: the seed topic names, seed words, and
