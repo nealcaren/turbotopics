@@ -607,20 +607,20 @@ The structural topic model is the comparison that matters most for social
 scientists, since \proglang{R} \pkg{stm} is the field standard and its fits can
 take minutes. Table~\ref{tab:stm} shows \pkg{topica} fitting the same model three
 to six times faster on a single core and ten to twenty-two times faster across
-cores. It also fits in roughly a quarter of \proglang{R} \pkg{stm}'s memory
-(about 460MB against 1.7GB at 5{,}000 documents), since it holds the corpus and
+cores. It also fits in under a third of \proglang{R} \pkg{stm}'s memory
+(about 490MB against 1.6GB at 5{,}000 documents), since it holds the corpus and
 the variational state in compact native arrays rather than \proglang{R} objects.
 The keyword-assisted model matches \proglang{R} \pkg{keyATM}'s
-\proglang{C++} sampler single-threaded (25.9s versus 24.5s on a
-2{,}000-document, 10-topic fit of 1{,}000 sweeps) and runs about twice as fast on
-four cores (12.1s), through a document-partitioned parallel sweep that the
+\proglang{C++} sampler single-threaded (22.8s versus 23.5s on a
+2{,}000-document, 10-topic fit of 1{,}000 sweeps) and runs about 1.7 times as fast
+on four cores (13.7s), through a document-partitioned parallel sweep that the
 \proglang{R} package has no equivalent of.
 
 We report the LDA comparison straight, because it does not uniformly favor us.
 Against \pkg{MALLET}, the original \proglang{Java} sampler, the two are at parity
 single-threaded and stay close at matched thread counts, with \pkg{topica}'s
 document-partitioned parallelism pulling ahead on the larger corpora (a
-5{,}000-document fit on ten threads runs in 12.8s against \pkg{MALLET}'s 16.5s),
+5{,}000-document fit on ten threads runs in 11.2s against \pkg{MALLET}'s 13.1s),
 and \pkg{topica} adds no JVM startup. Against \pkg{tomotopy} \citep{tomotopy}, a
 \proglang{C++} library, the comparison turns on the number of topics, because the
 two make opposite algorithmic bets. \pkg{tomotopy} computes a dense topic
@@ -640,9 +640,9 @@ all, at no measurable cost to fit time.
 Both collapsed-Gibbs samplers parallelize by partitioning the documents across
 threads and merging the count tables each sweep, the approximate-distributed
 scheme \pkg{MALLET} also uses. Figure~\ref{fig:threads} shows the scaling on the
-5{,}000-document corpus: LDA reaches about $4.6\times$ on ten threads, while the
+5{,}000-document corpus: LDA reaches about $4.5\times$ on ten threads, while the
 keyword-assisted model, whose per-sweep keyword bookkeeping leaves a larger fixed
-cost in the merge, reaches about $2.3\times$. The merge is fixed overhead, so the
+cost in the merge, reaches about $2.2\times$. The merge is fixed overhead, so the
 multithreaded gain grows with corpus size as more sampling work amortizes it; the
 \proglang{R} packages have no parallel mode at all.
 
