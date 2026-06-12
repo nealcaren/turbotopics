@@ -17,6 +17,12 @@ class _KnotCapturingContext:
     call during training, then provides a frozen context that re-applies those
     exact knots when evaluating the formula on a new grid.
 
+    Also stores the ``formulaic.ModelSpec`` produced by the training
+    ``design_matrix`` call.  :func:`design_matrix_predict` re-uses that spec
+    (via ``spec.get_model_matrix``) so that categorical factor levels, dummy
+    coding, and other encoding decisions stay consistent with training even
+    when a single-row prediction frame contains only one level of a factor.
+
     Usage::
 
         kc = _KnotCapturingContext()
@@ -27,6 +33,7 @@ class _KnotCapturingContext:
     def __init__(self):
         self._knots_by_order: dict[int, np.ndarray] = {}
         self._call_order: int = 0
+        self.model_spec = None  # set by design_matrix after the training call
 
     def training_context(self) -> dict:
         """Return a formulaic ``context`` dict that records knots during training."""
@@ -118,6 +125,8 @@ def design_matrix(formula, data, _knot_ctx=None):
 
     ctx = _knot_ctx.training_context() if _knot_ctx is not None else _formula_context()
     mm = model_matrix(formula, data, context=ctx)
+    if _knot_ctx is not None:
+        _knot_ctx.model_spec = mm.model_spec
     frame = pd.DataFrame(mm)
     if "Intercept" in frame.columns:
         frame = frame.drop(columns=["Intercept"])
@@ -134,6 +143,13 @@ def design_matrix_predict(formula, data, knot_ctx):
     :func:`design_matrix` on the training frame, then call this function on the
     prediction grid to get a consistent design matrix where spline terms use the
     same knots as training.
+
+    When ``knot_ctx.model_spec`` is available (set automatically by
+    :func:`design_matrix`), prediction is done via
+    ``spec.get_model_matrix(data, context=...)`` so that the encoding of
+    categorical columns (treatment contrasts, factor levels) is fixed at the
+    training schema.  This prevents single-row prediction frames from dropping
+    dummy columns for factor levels not present in that row.
 
     Returns ``(X, feature_names)`` — same layout as :func:`design_matrix`.
     """
@@ -152,7 +168,14 @@ def design_matrix_predict(formula, data, knot_ctx):
         data = pd.DataFrame(data.to_dict(as_series=False))
 
     ctx = knot_ctx.prediction_context()
-    mm = model_matrix(formula, data, context=ctx)
+    spec = getattr(knot_ctx, "model_spec", None)
+    if spec is not None:
+        # Re-use the training ModelSpec so categorical factor levels and dummy
+        # coding stay consistent even when the prediction frame has only one
+        # level of a factor.
+        mm = spec.get_model_matrix(data, context=ctx)
+    else:
+        mm = model_matrix(formula, data, context=ctx)
     frame = pd.DataFrame(mm)
     if "Intercept" in frame.columns:
         frame = frame.drop(columns=["Intercept"])

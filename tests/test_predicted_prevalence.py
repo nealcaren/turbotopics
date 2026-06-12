@@ -505,3 +505,211 @@ class TestErrors:
         with pytest.raises(ValueError, match="topic"):
             predicted_prevalence(m, X=X, feature_names=["treat"],
                                   at={"treat": 0.0}, topics=[99])
+
+
+# ---------------------------------------------------------------------------
+# Issue #99 Part 1: categorical covariates via formula (closes #99)
+# ---------------------------------------------------------------------------
+
+def _make_docs_party(n=120, seed=7):
+    """Docs with a categorical 'party' covariate (D/R) and a numeric 'year'."""
+    rng = np.random.default_rng(seed)
+    docs, parties, years = [], [], []
+    for i in range(n):
+        party = "D" if i % 2 == 0 else "R"
+        year_val = 2010 + (i % 5)
+        heavy, light = (ECON, MIL) if party == "D" else (MIL, ECON)
+        docs.append(rng.choice(heavy, 9).tolist() + rng.choice(light, 3).tolist())
+        parties.append(party)
+        years.append(float(year_val))
+    return docs, parties, years
+
+
+@pytest.fixture(scope="module")
+def lda_party_model():
+    """LDA fitted on docs with a categorical 'party' covariate."""
+    docs, parties, years = _make_docs_party(n=120, seed=7)
+    m = topica.LDA(2, seed=3)
+    m.fit(docs, iters=200)
+    meta = pd.DataFrame({"party": parties, "year": years})
+    return m, meta
+
+
+class TestCategoricalFormulaIssue99:
+    """Categorical covariates via formula must not drop dummy columns on prediction
+    rows that contain only one factor level (issue #99 Part 1)."""
+
+    def test_at_categorical_shape(self, lda_party_model):
+        """at= with a list of categorical levels returns one estimate per level."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            at={"party": ["D", "R"]},
+            nsims=10, n_sim=200, seed=0,
+        )
+        assert isinstance(result, list)
+        assert len(result) == 2  # two topics
+        for r in result:
+            assert r.estimate.shape == (2,)
+            assert r.ci_low.shape == (2,)
+            assert r.ci_high.shape == (2,)
+            assert r.mode == "at"
+
+    def test_at_categorical_finite(self, lda_party_model):
+        """Predicted prevalences for categorical at= must be finite and in [0,1]."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            at={"party": ["D", "R"]},
+            nsims=10, n_sim=200, seed=0,
+        )
+        for r in result:
+            assert np.all(np.isfinite(r.estimate))
+            assert np.all(r.estimate >= -0.1)  # identity link can go slightly negative
+            assert np.all(np.isfinite(r.ci_low))
+            assert np.all(np.isfinite(r.ci_high))
+
+    def test_at_categorical_ci_ordering(self, lda_party_model):
+        """CI bounds must bracket the point estimate for each grid row."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            at={"party": ["D", "R"]},
+            nsims=10, n_sim=200, seed=0,
+        )
+        for r in result:
+            assert np.all(r.ci_low <= r.estimate + 1e-9)
+            assert np.all(r.estimate <= r.ci_high + 1e-9)
+
+    def test_contrast_categorical_formula(self, lda_party_model):
+        """contrast= with a categorical column must return finite values."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            contrast={"party": ["D", "R"]},
+            nsims=10, n_sim=200, seed=0,
+        )
+        assert isinstance(result, list)
+        assert len(result) == 2
+        for r in result:
+            assert r.mode == "contrast"
+            assert r.estimate.shape == (1,)
+            assert np.all(np.isfinite(r.estimate))
+            assert np.all(np.isfinite(r.ci_low))
+            assert np.all(np.isfinite(r.ci_high))
+
+    def test_contrast_categorical_opposite_sign(self, lda_party_model):
+        """Party should pull topics in opposite directions."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            contrast={"party": ["D", "R"]},
+            nsims=15, n_sim=400, seed=0,
+        )
+        diffs = [float(r.estimate[0]) for r in result]
+        # The two topics must have roughly opposite contrasts (sum near zero).
+        assert abs(diffs[0] + diffs[1]) < 0.3
+
+    def test_at_single_level_no_crash(self, lda_party_model):
+        """A single-level at= for a categorical must not crash (was the core bug)."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            at={"party": ["D"]},
+            nsims=5, n_sim=100, seed=0,
+        )
+        for r in result:
+            assert r.estimate.shape == (1,)
+            assert np.all(np.isfinite(r.estimate))
+
+    def test_to_frame_categorical_at(self, lda_party_model):
+        """to_frame() must include the covariate columns from at=."""
+        m, meta = lda_party_model
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            at={"party": ["D", "R"]},
+            nsims=5, n_sim=50, seed=0,
+        )
+        df = result[0].to_frame()
+        assert "party" in df.columns
+        assert "estimate" in df.columns
+        assert len(df) == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #99 Part 2: tuple/sequence contrast form (closes #99)
+# ---------------------------------------------------------------------------
+
+class TestTupleContrastIssue99:
+    """Sequence/tuple contrast= must work without raising NameError (issue #99 Part 2)."""
+
+    def test_scalar_tuple_contrast_single_feature(self, lda_model):
+        """(val_a, val_b) works for a single-feature raw-X model."""
+        m, treat = lda_model
+        X = treat.reshape(-1, 1)
+        result = predicted_prevalence(
+            m, X=X, feature_names=["treat"],
+            contrast=(0.0, 1.0),
+            nsims=10, n_sim=200, seed=0,
+        )
+        assert isinstance(result, list)
+        assert len(result) == 2
+        for r in result:
+            assert r.mode == "contrast"
+            assert r.estimate.shape == (1,)
+            assert np.all(np.isfinite(r.estimate))
+            assert np.all(np.isfinite(r.ci_low))
+            assert np.all(np.isfinite(r.ci_high))
+
+    def test_tuple_contrast_agrees_with_dict_contrast(self, lda_model):
+        """Tuple contrast (0.0, 1.0) must give the same result as dict contrast."""
+        m, treat = lda_model
+        X = treat.reshape(-1, 1)
+        res_tuple = predicted_prevalence(
+            m, X=X, feature_names=["treat"],
+            contrast=(0.0, 1.0),
+            nsims=15, n_sim=300, seed=42,
+        )
+        res_dict = predicted_prevalence(
+            m, X=X, feature_names=["treat"],
+            contrast={"treat": [0.0, 1.0]},
+            nsims=15, n_sim=300, seed=42,
+        )
+        for r_t, r_d in zip(res_tuple, res_dict):
+            np.testing.assert_allclose(r_t.estimate, r_d.estimate, atol=1e-9)
+
+    def test_dict_sequence_contrast_formula(self, lda_party_model):
+        """A 2-tuple of dicts works as two full covariate settings for the formula path."""
+        m, meta = lda_party_model
+        setting_d = {"party": "D", "year": 2012.0}
+        setting_r = {"party": "R", "year": 2012.0}
+        result = predicted_prevalence(
+            m, formula="~ party + year", data=meta,
+            contrast=(setting_d, setting_r),
+            nsims=10, n_sim=200, seed=0,
+        )
+        assert isinstance(result, list)
+        for r in result:
+            assert r.mode == "contrast"
+            assert np.all(np.isfinite(r.estimate))
+
+    def test_scalar_tuple_contrast_multi_feature_raises(self, lda_model):
+        """Scalar tuple contrast with multi-feature X must raise a clear ValueError."""
+        m, treat = lda_model
+        X2 = np.column_stack([treat, np.ones(len(treat))])
+        with pytest.raises(ValueError, match="multi-feature|dict"):
+            predicted_prevalence(
+                m, X=X2, feature_names=["treat", "other"],
+                contrast=(0.0, 1.0),
+                nsims=5, n_sim=50, seed=0,
+            )
+
+    def test_scalar_tuple_contrast_formula_scalar_raises(self, lda_party_model):
+        """Scalar tuple contrast with formula= must raise a clear ValueError."""
+        m, meta = lda_party_model
+        with pytest.raises(ValueError, match="dict"):
+            predicted_prevalence(
+                m, formula="~ party + year", data=meta,
+                contrast=(0.0, 1.0),
+                nsims=5, n_sim=50, seed=0,
+            )
