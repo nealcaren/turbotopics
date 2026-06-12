@@ -422,4 +422,70 @@ mod tests {
         };
         assert_eq!(run(), run());
     }
+
+    /// Rough per-sweep cost of WarpLDA (stage 1) vs SparseLDA at large K on a
+    /// poliblog-sized synthetic corpus. Run with:
+    ///   cargo test --release --lib warplda::tests::bench_vs_sparse -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_vs_sparse() {
+        use crate::model::TopicModel;
+        use std::time::Instant;
+
+        // 2,000 docs x ~120 tokens over V=3,000, mildly clustered so SparseLDA
+        // sees realistic sparsity (each doc favours one of 40 vocab bands).
+        let v = 3000usize;
+        let bands = 40usize;
+        let band = v / bands;
+        let n_docs = 2000usize;
+        let docs: Vec<Vec<u32>> = (0..n_docs)
+            .map(|d| {
+                let b = d % bands;
+                (0..120)
+                    .map(|i| ((b * band) + (i * 7 + d * 13) % band) as u32)
+                    .collect()
+            })
+            .collect();
+        let corpus = Corpus {
+            id_to_word: (0..v).map(|i| format!("w{i}")).collect(),
+            doc_names: (0..n_docs).map(|i| format!("d{i}")).collect(),
+            doc_labels: vec![String::new(); n_docs],
+            doc_freqs: vec![0u32; v],
+            total_freqs: vec![0u32; v],
+            docs,
+        };
+
+        for &k in &[100usize, 500usize] {
+            let alpha_each = 0.1f64;
+            let alpha = vec![alpha_each; k];
+            let beta = 0.01f64;
+            let sweeps = 30;
+
+            // WarpLDA
+            let mut rng = Pcg64Mcg::seed_from_u64(1);
+            let mut w = WarpLda::new(&corpus, k, &alpha, beta, &mut rng);
+            let t0 = Instant::now();
+            for _ in 0..sweeps {
+                w.sweep(&corpus, &mut rng);
+            }
+            let warp = t0.elapsed().as_secs_f64() / sweeps as f64;
+
+            // SparseLDA
+            let mut rng = Pcg64Mcg::seed_from_u64(1);
+            let mut m = TopicModel::new(k, alpha_each * k as f64, beta, v);
+            m.initialize(&corpus, &mut rng);
+            let t0 = Instant::now();
+            for _ in 0..sweeps {
+                crate::sampler::run_iteration(&mut m, &corpus, &mut rng);
+            }
+            let sparse = t0.elapsed().as_secs_f64() / sweeps as f64;
+
+            println!(
+                "K={k:>4}  warp {:>7.1}ms/sweep   sparse {:>7.1}ms/sweep   warp/sparse {:.2}x",
+                warp * 1e3,
+                sparse * 1e3,
+                warp / sparse
+            );
+        }
+    }
 }

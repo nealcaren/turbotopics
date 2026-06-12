@@ -48,7 +48,7 @@ use regex::Regex;
 
 use crate::corpus::{self, InputFormat, LoadOptions};
 use crate::model::TopicModel;
-use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts};
+use crate::{coherence as coh, ctm, lightlda, optimize, output, sampler, spectral, sts, warplda};
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -753,6 +753,8 @@ pub struct LDA {
     num_threads: usize,
     // Sampling backend: false = SparseLDA (MALLET), true = LightLDA alias-MH.
     light: bool,
+    // WarpLDA cache-efficient two-pass MH sampler (mutually exclusive with light).
+    warp: bool,
     mh_steps: usize,
     // MALLET's --use-symmetric-alpha: optimize only the alpha concentration,
     // keeping every alpha[t] equal, instead of learning the per-topic shape.
@@ -929,12 +931,13 @@ impl LDA {
                 ));
             }
         }
-        let light = match sampler {
-            "sparse" | "mallet" => false,
-            "lightlda" | "light" | "alias" => true,
+        let (light, warp) = match sampler {
+            "sparse" | "mallet" => (false, false),
+            "lightlda" | "light" | "alias" => (true, false),
+            "warp" | "warplda" => (false, true),
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler {other:?}; expected \"sparse\" or \"lightlda\""
+                    "unknown sampler {other:?}; expected \"sparse\", \"lightlda\", or \"warp\""
                 )))
             }
         };
@@ -955,6 +958,7 @@ impl LDA {
             seed,
             num_threads: num_threads.max(1),
             light,
+            warp,
             mh_steps,
             use_symmetric_alpha,
             init_spectral,
@@ -1063,9 +1067,78 @@ impl LDA {
         let num_threads = self.num_threads;
         let seed_base = self.seed;
         let light = self.light;
+        let warp = self.warp;
         let mh_steps = self.mh_steps;
         let beta = self.beta;
         let use_symmetric_alpha = self.use_symmetric_alpha;
+
+        // WarpLDA path: cache-efficient two-pass MH sampling on the warplda
+        // sampler, packed back into a TopicModel at the end. Same shape as the
+        // LightLDA path below (no inline log_likelihood, so convergence_tol is
+        // not supported: full iters, empty trace, converged=false).
+        if warp {
+            let (acc_phi, acc_theta, theta_draw_buf, model) = py.allow_threads(move || {
+                let alpha0 = vec![alpha_sum / num_topics as f64; num_topics];
+                let mut ws = warplda::WarpLda::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+
+                for iter in 1..=iters {
+                    ws.sweep(&corpus, &mut rng);
+                    if draw_thin > 0 && iter % draw_thin == 0 {
+                        let mut tmp = vec![vec![0.0f64; num_topics]; num_docs];
+                        ws.theta_into(&corpus, &mut tmp);
+                        let snap = tmp
+                            .iter()
+                            .map(|r| r.iter().map(|&v| v as f32).collect())
+                            .collect();
+                        push_capped(&mut theta_draw_buf, snap, draw_cap);
+                    }
+                    if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
+                        let mut m = ws.to_topic_model();
+                        if use_symmetric_alpha {
+                            optimize::optimize_alpha_symmetric(&mut m, &corpus);
+                        } else {
+                            optimize::optimize_alpha(&mut m, &corpus);
+                        }
+                        optimize::optimize_beta(&mut m);
+                        ws.set_hyper(&m.alpha, m.beta);
+                    }
+                    if let Some(cb) = &progress {
+                        if progress_interval > 0 && iter % progress_interval == 0 {
+                            let m = ws.to_topic_model();
+                            let ll = output::model_log_likelihood(&m, &corpus) / total_tokens;
+                            Python::with_gil(|py| {
+                                let _ = cb.call1(py, (iter, ll));
+                            });
+                        }
+                    }
+                }
+
+                let mut acc_phi = vec![vec![0.0f64; num_topics]; num_types];
+                let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
+                for _ in 0..num_samples {
+                    for _ in 0..sample_interval {
+                        ws.sweep(&corpus, &mut rng);
+                    }
+                    ws.phi_into(&mut acc_phi);
+                    ws.theta_into(&corpus, &mut acc_theta);
+                }
+                let n = (num_samples.max(1)) as f64;
+                for row in acc_phi.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                for row in acc_theta.iter_mut() {
+                    for v in row.iter_mut() { *v /= n; }
+                }
+                let model = ws.to_topic_model();
+                (acc_phi, acc_theta, theta_draw_buf, (model, corpus))
+            });
+            let (model, corpus) = model;
+            self.theta_draws = draws_to_array3(&theta_draw_buf, num_docs, num_topics, None);
+            self.finalize_fit(num_topics, num_types, num_docs, acc_phi, acc_theta, model, corpus,
+                Vec::new(), false);
+            return Ok(());
+        }
 
         // LightLDA path: alias-MH sampling on dense count tables, packed back
         // into a TopicModel at the end. Separate from the SparseLDA path below so
@@ -1635,6 +1708,7 @@ impl LDA {
             seed: 42,
             num_threads: 1,
             light: false,
+            warp: false,
             mh_steps: 2,
             use_symmetric_alpha: false,
             init_spectral: false,
@@ -2026,7 +2100,7 @@ impl LDA {
         Ok(LDA {
             num_topics: s.num_topics, alpha_sum: s.alpha_sum, beta: s.beta,
             optimize_interval: s.optimize_interval, burn_in: s.burn_in, seed: s.seed,
-            num_threads: s.num_threads, light: false, mh_steps: 2, fitted: s.fitted,
+            num_threads: s.num_threads, light: false, warp: false, mh_steps: 2, fitted: s.fitted,
             use_symmetric_alpha: s.use_symmetric_alpha,
             init_spectral: s.init_spectral,
             topic_names,
