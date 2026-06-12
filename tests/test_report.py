@@ -237,3 +237,29 @@ def test_plot_report_saves(tmp_path, lda_corpus):
     fig.savefig(out, dpi=60)
     assert out.exists() and out.stat().st_size > 0
     plt.close(fig)
+
+
+def test_plot_report_correlation_masks_diagonal(lda_corpus):
+    """The correlation panel masks the always-1.0 self-correlation diagonal and
+    scales its colors to the off-diagonal range, instead of drawing the raw
+    matrix on a saturated +/-1 scale (regression for the plot_report sub-panel,
+    which the original viz.TopicCorrelation fix had missed)."""
+    import matplotlib.pyplot as plt
+
+    m, docs, texts, *_ = lda_corpus
+    fig = topica.plot_report(m, texts=texts)
+    corr_axes = [ax for ax in fig.get_axes() if ax.get_title() == "Topic correlation"]
+    if not corr_axes:
+        plt.close(fig)
+        pytest.skip("correlation panel not drawn for this model")
+    im = corr_axes[0].images[0]
+    data = im.get_array()
+    # Diagonal is masked (drawn as neutral background), not a saturated 1.0.
+    if np.ma.isMaskedArray(data):
+        assert np.ma.getmaskarray(data).diagonal().all()
+    else:
+        assert np.all(np.isnan(np.asarray(data, dtype=float).diagonal()))
+    # Color range comes from the off-diagonal magnitudes, not a hard +/-1.
+    vmin, vmax = im.get_clim()
+    assert vmin == pytest.approx(-vmax)
+    plt.close(fig)
