@@ -434,7 +434,9 @@ struct KeyAtmState {
     #[serde(default)] alpha_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] pi_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] alpha_vec: Option<Vec<f64>>,
+    #[serde(default = "default_num_threads")] num_threads: usize,
 }
+fn default_num_threads() -> usize { 1 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PaState {
     num_super: usize, num_sub: usize, alpha: f64, beta: f64, seed: u64, fitted: bool,
@@ -1138,7 +1140,7 @@ impl LDA {
     #[pyo3(signature = (data, *, iters=1000, num_samples=5, sample_interval=25,
                         progress=None, progress_interval=50,
                         keep_theta_draws=true, num_theta_draws=25,
-                        convergence_tol=0.0_f64, check_every=10_usize))]
+                        convergence_tol=0.0_f64, check_every=10_usize, num_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -1153,6 +1155,7 @@ impl LDA {
         num_theta_draws: usize,
         convergence_tol: f64,
         check_every: usize,
+        num_threads: Option<usize>,
     ) -> PyResult<()> {
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -1210,7 +1213,8 @@ impl LDA {
 
         let optimize_interval = self.optimize_interval;
         let burn_in = self.burn_in;
-        let num_threads = self.num_threads;
+        // num_threads from fit() overrides the constructor default for this run.
+        let num_threads = num_threads.unwrap_or(self.num_threads).max(1);
         let seed_base = self.seed;
         let light = self.light;
         let warp = self.warp;
@@ -3241,16 +3245,17 @@ impl DMR {
     /// `features` is a `(num_docs, F)` numpy array or list of float lists (an
     /// intercept column is prepended automatically). `feature_names` (length F)
     /// names the columns; an "intercept" name is prepended.
-    #[pyo3(signature = (data, features, *, feature_names=None, iters=1000,
+    /// `covariates` is accepted as a no-deprecation alias for `features`.
+    #[pyo3(signature = (data, features=None, *, feature_names=None, iters=1000,
                         num_samples=5, sample_interval=25, progress=None, progress_interval=50,
                         keep_theta_draws=true, num_theta_draws=25,
-                        convergence_tol=0.0_f64, check_every=10_usize))]
+                        convergence_tol=0.0_f64, check_every=10_usize, covariates=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
-        features: &Bound<'_, PyAny>,
+        features: Option<&Bound<'_, PyAny>>,
         feature_names: Option<Vec<String>>,
         iters: usize,
         num_samples: usize,
@@ -3261,7 +3266,23 @@ impl DMR {
         num_theta_draws: usize,
         convergence_tol: f64,
         check_every: usize,
+        covariates: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
+        // covariates= is a no-deprecation alias for features=
+        let features: &Bound<'_, PyAny> = match (features, covariates) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "DMR.fit: pass either features= or covariates=, not both",
+                ));
+            }
+            (Some(f), None) => f,
+            (None, Some(c)) => c,
+            (None, None) => {
+                return Err(PyValueError::new_err(
+                    "DMR.fit: features (or covariates) is required",
+                ));
+            }
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -4522,7 +4543,7 @@ impl SAGE {
     /// `prior_variance` is the Gaussian prior on the κ content deviations.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=0.1, prior_variance=1.0,
-                        optimize_interval=50, burn_in=100, seed=42, lbfgs_iters=20))]
+                        optimize_interval=50, burn_in=200, seed=42, lbfgs_iters=20))]
     fn new(
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha: f64,
@@ -5290,8 +5311,8 @@ impl CTM {
 
     /// Fit by variational EM. `data` is a :class:`Corpus` or `list[list[str]]`.
     /// EM runs until the relative change in the variational bound drops below
-    /// `em_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
-    /// whichever comes first. Pass ``em_tol=0`` to always run `iters` steps.
+    /// `convergence_tol` (R `stm`'s `emtol`) or `iters` iterations are reached,
+    /// whichever comes first. Pass ``convergence_tol=0`` to always run `iters` steps.
     /// Check :attr:`converged` and :attr:`bound` afterward.
     /// `inference="svi"` switches from full-batch variational EM to stochastic
     /// variational inference (online VB): documents are processed in minibatches
@@ -5299,20 +5320,33 @@ impl CTM {
     /// decaying learning rate `(tau + t)^(-kappa)`, for `iters` epochs. SVI is
     /// for very large corpora; on moderate corpora the default `"batch"` EM is
     /// preferable. SVI uses the base logistic-normal model only.
-    #[pyo3(signature = (data, *, iters=500, em_tol=1e-5, inference="batch",
-                        batch_size=256, tau=64.0, kappa=0.7))]
+    #[pyo3(signature = (data, *, iters=500, convergence_tol=1e-5, inference="batch",
+                        batch_size=256, tau=64.0, kappa=0.7, em_tol=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         iters: usize,
-        em_tol: f64,
+        convergence_tol: f64,
         inference: &str,
         batch_size: usize,
         tau: f64,
         kappa: f64,
+        em_tol: Option<f64>,
     ) -> PyResult<()> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "CTM.fit(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            // convergence_tol wins if explicitly set (not the default 1e-5); else deprecated.
+            if (convergence_tol - 1e-5_f64).abs() > f64::EPSILON { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -5348,7 +5382,7 @@ impl CTM {
                 )
             } else {
                 ctm::fit_ctm(
-                    &corpus.docs, k, num_types, iters, em_tol, shrink, None, None, spectral,
+                    &corpus.docs, k, num_types, iters, convergence_tol, shrink, None, None, spectral,
                     ctm::GammaPrior::Pooled, &mut rng,
                 )
             };
@@ -5757,8 +5791,8 @@ impl STM {
     /// component (R `stm`'s ``gamma.enet``). `gamma_enet` is ignored when
     /// `gamma_prior="pooled"`.
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
-                        content=None, content_names=None, iters=500, em_tol=1e-5,
-                        gamma_prior="pooled", gamma_enet=1.0))]
+                        content=None, content_names=None, iters=500, convergence_tol=1e-5,
+                        gamma_prior="pooled", gamma_enet=1.0, em_tol=None, covariates=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5769,10 +5803,34 @@ impl STM {
         content: Option<&Bound<'_, PyAny>>,
         content_names: Option<Vec<String>>,
         iters: usize,
-        em_tol: f64,
+        convergence_tol: f64,
         gamma_prior: &str,
         gamma_enet: f64,
+        em_tol: Option<f64>,
+        covariates: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "STM.fit(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (convergence_tol - 1e-5_f64).abs() > f64::EPSILON { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
+        // covariates= is a no-deprecation alias for prevalence=
+        let prevalence = match (prevalence, covariates) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "STM.fit: pass either prevalence= or covariates=, not both",
+                ));
+            }
+            (Some(p), None) => Some(p),
+            (None, Some(c)) => Some(c),
+            (None, None) => None,
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -5893,7 +5951,7 @@ impl STM {
             let prev_ref = prevalence_x.as_deref();
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
             let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, iters, em_tol, shrink, prev_ref, cont_ref,
+                &corpus.docs, k, num_types, iters, convergence_tol, shrink, prev_ref, cont_ref,
                 spectral, gprior, &mut rng,
             );
             (m, corpus)
@@ -6582,7 +6640,7 @@ impl STS {
     /// Σ)`); an intercept is prepended.
     ///
     /// EM runs until the relative change in the variational bound drops below
-    /// `em_tol` or `iters` iterations are reached.
+    /// `convergence_tol` or `iters` iterations are reached.
     ///
     /// `kappa_estimation` chooses the topic-word (κ) estimator: ``"ridge"``
     /// (default) is a fast ridge-penalized Poisson fit (`kappa_ridge` sets the
@@ -6590,8 +6648,8 @@ impl STS {
     /// matching the reference R `sts` exactly (sparser κ) at a higher cost. The
     /// two give the same topics on well-conditioned corpora.
     #[pyo3(signature = (data, sentiment_seed, prevalence=None, *,
-                        prevalence_names=None, iters=30, em_tol=1e-5,
-                        kappa_estimation="ridge", kappa_ridge=1e-3))]
+                        prevalence_names=None, iters=30, convergence_tol=1e-5,
+                        kappa_estimation="ridge", kappa_ridge=1e-3, em_tol=None, covariates=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -6601,10 +6659,34 @@ impl STS {
         prevalence: Option<&Bound<'_, PyAny>>,
         prevalence_names: Option<Vec<String>>,
         iters: usize,
-        em_tol: f64,
+        convergence_tol: f64,
         kappa_estimation: &str,
         kappa_ridge: f64,
+        em_tol: Option<f64>,
+        covariates: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "STS.fit(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (convergence_tol - 1e-5_f64).abs() > f64::EPSILON { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
+        // covariates= is a no-deprecation alias for prevalence=
+        let prevalence = match (prevalence, covariates) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "STS.fit: pass either prevalence= or covariates=, not both",
+                ));
+            }
+            (Some(p), None) => Some(p),
+            (None, Some(c)) => Some(c),
+            (None, None) => None,
+        };
         let kappa_est = match kappa_estimation {
             "lasso" => sts::KappaEst::Lasso { nlambda: 100, lambda_min_ratio: 0.001 },
             "ridge" => sts::KappaEst::Ridge(kappa_ridge),
@@ -6683,7 +6765,7 @@ impl STS {
         let (model, corpus) = py.allow_threads(move || {
             let prev_ref = prevalence_x.as_deref();
             let m = sts::fit_sts(
-                &corpus.docs, k, num_types, iters, em_tol, prev_ref, Some(&sentiment_seed),
+                &corpus.docs, k, num_types, iters, convergence_tol, prev_ref, Some(&sentiment_seed),
                 kappa_est, spectral, &mut rng,
             );
             (m, corpus)
@@ -7068,18 +7150,29 @@ impl HDP {
     /// bounded, but fixed concentrations remain the recommended default; set
     /// `gamma` to choose the granularity directly.
     #[new]
-    #[pyo3(signature = (*, alpha=0.1, gamma=0.1, eta=0.01, seed=42, resample_conc=false))]
-    fn new(alpha: f64, gamma: f64, eta: f64, seed: u64, resample_conc: bool) -> PyResult<Self> {
+    #[pyo3(signature = (*, alpha=0.1, gamma=0.1, beta=0.01, seed=42, resample_conc=false, eta=None))]
+    fn new(py: Python<'_>, alpha: f64, gamma: f64, beta: f64, seed: u64, resample_conc: bool, eta: Option<f64>) -> PyResult<Self> {
+        let beta = if let Some(old_val) = eta {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "HDP(eta=) is deprecated; use beta= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (beta - 0.01_f64).abs() > f64::EPSILON { beta } else { old_val }
+        } else {
+            beta
+        };
         if !finite_pos(alpha) || !finite_pos(gamma) {
             return Err(PyValueError::new_err("alpha and gamma must be > 0"));
         }
-        if !finite_pos(eta) {
-            return Err(PyValueError::new_err("eta must be > 0"));
+        if !finite_pos(beta) {
+            return Err(PyValueError::new_err("beta must be > 0"));
         }
         Ok(HDP {
             alpha,
             gamma,
-            eta,
+            eta: beta,
             seed,
             resample_conc,
             fitted: false,
@@ -7097,17 +7190,30 @@ impl HDP {
 
     /// Fit by Gibbs sampling for `iters` sweeps. `data` is a :class:`Corpus` or
     /// `list[list[str]]`. The inferred topic count is available as `num_topics`.
-    #[pyo3(signature = (data, *, iters=150, report_interval=0,
-                        keep_theta_draws=true, num_theta_draws=25))]
+    #[pyo3(signature = (data, *, iters=150, progress_interval=0,
+                        keep_theta_draws=true, num_theta_draws=25, report_interval=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         iters: usize,
-        report_interval: usize,
+        progress_interval: usize,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        report_interval: Option<usize>,
     ) -> PyResult<()> {
+        let progress_interval = if let Some(old_val) = report_interval {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "HDP.fit(report_interval=) is deprecated; use progress_interval= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            // progress_interval wins if explicitly set (non-zero); else deprecated value.
+            if progress_interval != 0 { progress_interval } else { old_val }
+        } else {
+            progress_interval
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -7125,7 +7231,7 @@ impl HDP {
         let (alpha, gamma, eta, conc) = (self.alpha, self.gamma, self.eta, self.resample_conc);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
         // 0 = auto: ~50 evenly spaced trace points across the run.
-        let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
+        let ll_interval = if progress_interval == 0 { (iters / 50).max(1) } else { progress_interval };
 
         // HDP's K varies during training, so theta_draws are sampled from the final
         // Dirichlet posterior Dirichlet(njk[d]+alpha*beta[k]) after the chain ends.
@@ -8554,17 +8660,29 @@ impl GSDMM {
     }
 
     /// Fit by the Movie Group Process (collapsed Gibbs) for `iters` sweeps.
-    /// `report_interval` controls the cluster-discovery trace
+    /// `progress_interval` controls the cluster-discovery trace
     /// (`cluster_count_history` / `log_likelihood_history`): 0 = auto (~50
     /// points), a positive value records every that-many sweeps.
-    #[pyo3(signature = (data, *, iters=30, report_interval=0))]
+    #[pyo3(signature = (data, *, iters=30, progress_interval=0, report_interval=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         iters: usize,
-        report_interval: usize,
+        progress_interval: usize,
+        report_interval: Option<usize>,
     ) -> PyResult<()> {
+        let progress_interval = if let Some(old_val) = report_interval {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "GSDMM.fit(report_interval=) is deprecated; use progress_interval= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if progress_interval != 0 { progress_interval } else { old_val }
+        } else {
+            progress_interval
+        };
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -8579,7 +8697,7 @@ impl GSDMM {
         let num_types = corpus.num_types();
         let (k, a, b) = (self.k_max, self.alpha, self.beta);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
-        let ll_interval = if report_interval == 0 { (iters / 50).max(1) } else { report_interval };
+        let ll_interval = if progress_interval == 0 { (iters / 50).max(1) } else { progress_interval };
         let (model, corpus) = py.allow_threads(move || {
             let m = gsdmm::fit_gsdmm(&corpus.docs, num_types, k, a, b, iters, ll_interval, &mut rng);
             (m, corpus)
@@ -10390,20 +10508,21 @@ impl ETM {
     /// Create an unfitted model. `inference` selects the engine: `"em"` (default)
     /// is per-document variational EM, accurate but not minibatched; `"vae"` is the
     /// reference's amortized autoencoder, which scales to large corpora and maps new
-    /// documents with a single encoder pass. `em_tol`/`prior_variance`/
+    /// documents with a single encoder pass. `convergence_tol`/`prior_variance`/
     /// `max_inner`/`sigma_shrink` govern the EM path; `hidden_size`/
-    /// `batch_size`/`lr`/`wdecay`/`em_tol` govern the VAE path.
+    /// `batch_size`/`lr`/`wdecay`/`convergence_tol` govern the VAE path.
     /// Pass `iters` to :meth:`fit` to set the iteration count.
     #[new]
-    #[pyo3(signature = (num_topics, *, inference="em", em_tol=1e-4,
+    #[pyo3(signature = (num_topics, *, inference="em", convergence_tol=1e-4,
                         sigma_shrink=0.0, prior_variance=1e6, max_inner=25,
                         hidden_size=800, batch_size=1000, lr=0.005,
-                        wdecay=1.2e-6, seed=42))]
+                        wdecay=1.2e-6, seed=42, em_tol=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         inference: &str,
-        em_tol: f64,
+        convergence_tol: f64,
         sigma_shrink: f64,
         prior_variance: f64,
         max_inner: usize,
@@ -10412,7 +10531,19 @@ impl ETM {
         lr: f64,
         wdecay: f64,
         seed: u64,
+        em_tol: Option<f64>,
     ) -> PyResult<Self> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "ETM(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (convergence_tol - 1e-4_f64).abs() > f64::EPSILON { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
@@ -10425,7 +10556,7 @@ impl ETM {
         Ok(ETM {
             num_topics,
             inference: inference.to_string(),
-            em_tol,
+            em_tol: convergence_tol,
             sigma_shrink,
             prior_variance,
             max_inner,
@@ -10447,7 +10578,8 @@ impl ETM {
     /// (`(len(vocabulary), E)`) and the aligned `vocabulary`. The vocabulary
     /// defines the word ids; tokens outside it are dropped.
     /// `iters` sets the number of training iterations (EM iterations or VAE epochs).
-    #[pyo3(signature = (data, word_embeddings, vocabulary, *, iters=None))]
+    /// `convergence_tol` overrides the constructor value for this run (when given).
+    #[pyo3(signature = (data, word_embeddings, vocabulary, *, iters=None, convergence_tol=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -10455,7 +10587,10 @@ impl ETM {
         word_embeddings: &Bound<'_, PyAny>,
         vocabulary: Vec<String>,
         iters: Option<usize>,
+        convergence_tol: Option<f64>,
     ) -> PyResult<()> {
+        // Use fit()-level convergence_tol if given, else fall back to constructor value.
+        let tol = convergence_tol.unwrap_or(self.em_tol);
         let (docs_str, corpus_opt): (Vec<Vec<String>>, Option<corpus::Corpus>) =
             if let Ok(c) = data.extract::<Corpus>() {
                 let strings = c.inner.docs.iter()
@@ -10497,7 +10632,7 @@ impl ETM {
             let ep = iters.unwrap_or(150);
             let (k, h, bs, lr, wd, et) = (
                 self.num_topics, self.hidden_size, self.batch_size,
-                self.lr, self.wdecay, self.em_tol,
+                self.lr, self.wdecay, tol,
             );
             let m = py.allow_threads(move || {
                 etm_vae::fit_etm_vae(&docs_ids, k, num_types, &rho, h, ep, bs, lr, wd, et, &mut rng)
@@ -10507,7 +10642,7 @@ impl ETM {
         } else {
             let ei = iters.unwrap_or(100);
             let (k, et, ss, pv, mi) = (
-                self.num_topics, self.em_tol, self.sigma_shrink,
+                self.num_topics, tol, self.sigma_shrink,
                 self.prior_variance, self.max_inner,
             );
             let model = py.allow_threads(move || {
@@ -10788,7 +10923,7 @@ impl ETM {
         vocabulary: Vec<String>,
         iters: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data, word_embeddings, vocabulary, iters)?;
+        self.fit(py, data, word_embeddings, vocabulary, iters, None)?;
         Ok(vecs_to_arr2(&self.surf_doc_topic()?).to_pyarray_bound(py))
     }
 
@@ -10878,22 +11013,36 @@ impl ProdLDA {
     /// concentration (reference 1.0); `hidden_size` is the encoder width (reference
     /// 100); `dropout` is the dropout rate on the hidden layer and on `theta`;
     /// `batch_size`/`lr` drive Adam (reference 200/0.002, with `beta1 = 0.99`);
-    /// `em_tol > 0` stops early on the relative change in the epoch ELBO (0 runs
+    /// `convergence_tol > 0` stops early on the relative change in the epoch ELBO (0 runs
     /// all epochs). Pass `iters` to :meth:`fit` to set the number of epochs.
     #[new]
     #[pyo3(signature = (num_topics, *, alpha=1.0, hidden_size=100, dropout=0.2,
-                        batch_size=200, lr=0.002, em_tol=0.0, seed=42))]
+                        batch_size=200, lr=0.002, convergence_tol=0.0, seed=42, em_tol=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         alpha: f64,
         hidden_size: usize,
         dropout: f64,
         batch_size: usize,
         lr: f64,
-        em_tol: f64,
+        convergence_tol: f64,
         seed: u64,
+        em_tol: Option<f64>,
     ) -> PyResult<Self> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "ProdLDA(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            // ProdLDA default is 0.0; if unchanged, use the deprecated value.
+            if convergence_tol != 0.0 { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
@@ -10910,7 +11059,7 @@ impl ProdLDA {
             dropout,
             batch_size,
             lr,
-            em_tol,
+            em_tol: convergence_tol,
             seed,
             fitted: false,
             topic_names: Vec::new(),
@@ -10921,8 +11070,10 @@ impl ProdLDA {
 
     /// Fit on `data` (a Corpus or list of token lists).
     /// `iters` sets the number of training epochs (default 200).
-    #[pyo3(signature = (data, *, iters=None))]
-    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: Option<usize>) -> PyResult<()> {
+    /// `convergence_tol` overrides the constructor value for this run (when given).
+    #[pyo3(signature = (data, *, iters=None, convergence_tol=None))]
+    fn fit(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>, iters: Option<usize>, convergence_tol: Option<f64>) -> PyResult<()> {
+        let tol = convergence_tol.unwrap_or(self.em_tol);
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -10941,7 +11092,7 @@ impl ProdLDA {
         let ep = iters.unwrap_or(200);
         let (k, h, a, dp, bs, lr, et) = (
             self.num_topics, self.hidden_size, self.alpha, self.dropout,
-            self.batch_size, self.lr, self.em_tol,
+            self.batch_size, self.lr, tol,
         );
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         let (model, corpus) = py.allow_threads(move || {
@@ -11064,7 +11215,7 @@ impl ProdLDA {
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data, None)?;
+        self.fit(py, data, None, None)?;
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
     }
 
@@ -11230,24 +11381,37 @@ impl FASTopic {
     /// Create an unfitted model. `lr` drives the full-batch Adam optimizer;
     /// `dt_alpha`/`tw_alpha` are the inverse entropic regularizations for the
     /// doc-topic and topic-word transport (reference defaults 3.0 and 2.0);
-    /// `theta_temp` is the inference temperature; `em_tol` stops on the relative
+    /// `theta_temp` is the inference temperature; `convergence_tol` stops on the relative
     /// loss change. `sinkhorn_iters`/`sinkhorn_tol` cap each Sinkhorn solve.
     /// Pass `iters` to :meth:`fit` to set the number of training epochs.
     #[new]
     #[pyo3(signature = (num_topics, *, lr=0.002, dt_alpha=3.0, tw_alpha=2.0,
-                        theta_temp=1.0, em_tol=1e-6, sinkhorn_iters=50, sinkhorn_tol=1e-4, seed=42))]
+                        theta_temp=1.0, convergence_tol=1e-6, sinkhorn_iters=50, sinkhorn_tol=1e-4, seed=42, em_tol=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         #[pyo3(from_py_with = "py_num_topics")] num_topics: usize,
         lr: f64,
         dt_alpha: f64,
         tw_alpha: f64,
         theta_temp: f64,
-        em_tol: f64,
+        convergence_tol: f64,
         sinkhorn_iters: usize,
         sinkhorn_tol: f64,
         seed: u64,
+        em_tol: Option<f64>,
     ) -> PyResult<Self> {
+        let convergence_tol = if let Some(old_val) = em_tol {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "FASTopic(em_tol=) is deprecated; use convergence_tol= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (convergence_tol - 1e-6_f64).abs() > f64::EPSILON { convergence_tol } else { old_val }
+        } else {
+            convergence_tol
+        };
         if num_topics < 2 {
             return Err(PyValueError::new_err("need at least 2 topics"));
         }
@@ -11260,7 +11424,7 @@ impl FASTopic {
             dt_alpha,
             tw_alpha,
             theta_temp,
-            em_tol,
+            em_tol: convergence_tol,
             sinkhorn_iters,
             sinkhorn_tol,
             seed,
@@ -11276,14 +11440,17 @@ impl FASTopic {
     /// (`(num_docs, E)`), one frozen row per document. The vocabulary is taken from
     /// the corpus; FASTopic learns the word embeddings itself, so none are passed.
     /// `iters` sets the number of training epochs (default 200).
-    #[pyo3(signature = (data, doc_embeddings, *, iters=None))]
+    /// `convergence_tol` overrides the constructor value for this run (when given).
+    #[pyo3(signature = (data, doc_embeddings, *, iters=None, convergence_tol=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         doc_embeddings: &Bound<'_, PyAny>,
         iters: Option<usize>,
+        convergence_tol: Option<f64>,
     ) -> PyResult<()> {
+        let tol = convergence_tol.unwrap_or(self.em_tol);
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -11314,7 +11481,7 @@ impl FASTopic {
 
         let (k, lr, dta, twa, tt, et, si, st) = (
             self.num_topics, self.lr, self.dt_alpha, self.tw_alpha,
-            self.theta_temp, self.em_tol, self.sinkhorn_iters, self.sinkhorn_tol,
+            self.theta_temp, tol, self.sinkhorn_iters, self.sinkhorn_tol,
         );
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
         let model = py.allow_threads(move || {
@@ -11450,7 +11617,7 @@ impl FASTopic {
         data: &Bound<'py, PyAny>,
         doc_embeddings: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        self.fit(py, data, doc_embeddings, None)?;
+        self.fit(py, data, doc_embeddings, None, None)?;
         Ok(vecs_to_arr2(&self.fitted_model()?.doc_topic).to_pyarray_bound(py))
     }
 
@@ -11545,6 +11712,8 @@ pub struct KeyATM {
     gamma2: f64,
     seed: u64,
     estimate_alpha: bool,
+    // Default thread count for fit(); can be overridden per-call via fit(num_threads=).
+    num_threads: usize,
     // CVB0 deterministic collapsed-variational inference for the base model
     // (optional, non-R-parity; covariate/dynamic variants stay Gibbs-only).
     cvb0: bool,
@@ -11601,7 +11770,7 @@ impl KeyATM {
     /// `beta`/`beta_keyword` are the regular and keyword topic-word smoothing, and
     /// `gamma1`/`gamma2` the Beta prior on the keyword-vs-regular switch.
     #[new]
-    #[pyo3(signature = (keywords, *, num_topics=None, alpha=None, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true, sampler="sparse"))]
+    #[pyo3(signature = (keywords, *, num_topics=None, alpha=None, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true, sampler="sparse", num_threads=1))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         keywords: &Bound<'_, PyDict>,
@@ -11614,6 +11783,7 @@ impl KeyATM {
         seed: u64,
         estimate_alpha: bool,
         sampler: &str,
+        num_threads: usize,
     ) -> PyResult<Self> {
         let (names, words) = parse_seed_dict(keywords)?;
         let k = num_topics.unwrap_or(names.len());
@@ -11641,7 +11811,8 @@ impl KeyATM {
         };
         Ok(KeyATM {
             key_names: names, keywords: words, num_topics: k, alpha, beta, beta_keyword,
-            gamma1, gamma2, seed, estimate_alpha, cvb0, fitted: false, topic_names: Vec::new(),
+            gamma1, gamma2, seed, estimate_alpha, num_threads: num_threads.max(1),
+            cvb0, fitted: false, topic_names: Vec::new(),
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
@@ -11669,6 +11840,7 @@ impl KeyATM {
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics, alpha, beta,
             beta_keyword: 0.1, gamma1: 1.0, gamma2: 1.0, seed, estimate_alpha: true,
+            num_threads: 1,
             cvb0: false,
             fitted: false,
             topic_names: Vec::new(), keyword_rate: Vec::new(), phi: None, theta: None,
@@ -11698,9 +11870,10 @@ impl KeyATM {
     /// and `covariates` are mutually exclusive.
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
                         timestamps=None, num_states=5, weights="information-theory",
-                        num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
-                        lbfgs_iters=20, report_interval=0, prior_offset=None,
-                        keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64))]
+                        num_threads=None, optimize_interval=50, burn_in=200, prior_variance=1.0,
+                        lbfgs_iters=20, progress_interval=0, prior_offset=None,
+                        keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64,
+                        report_interval=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -11712,17 +11885,31 @@ impl KeyATM {
         timestamps: Option<&Bound<'_, PyAny>>,
         num_states: usize,
         weights: &str,
-        num_threads: usize,
+        num_threads: Option<usize>,
         optimize_interval: usize,
         burn_in: usize,
         prior_variance: f64,
         lbfgs_iters: usize,
-        report_interval: usize,
+        progress_interval: usize,
         prior_offset: Option<&Bound<'_, PyAny>>,
         keep_theta_draws: bool,
         num_theta_draws: usize,
         convergence_tol: f64,
+        report_interval: Option<usize>,
     ) -> PyResult<()> {
+        let progress_interval = if let Some(old_val) = report_interval {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "KeyATM.fit(report_interval=) is deprecated; use progress_interval= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if progress_interval != 0 { progress_interval } else { old_val }
+        } else {
+            progress_interval
+        };
+        // num_threads: fit()-level value overrides the constructor default.
+        let nthreads_fit = num_threads.unwrap_or(self.num_threads).max(1);
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
         } else {
@@ -11769,7 +11956,7 @@ impl KeyATM {
             (self.alpha, self.beta, self.beta_keyword, self.gamma1, self.gamma2);
         let estimate_alpha = self.estimate_alpha;
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
-        let nthreads = num_threads.max(1);
+        let nthreads = nthreads_fit;
         let weight_scheme = match weights {
             "information-theory" | "info" => keyatm::WeightScheme::InfoTheory,
             "inv-freq" | "inverse-frequency" => keyatm::WeightScheme::InvFreq,
@@ -11782,10 +11969,10 @@ impl KeyATM {
         };
         // Convergence trace cadence (keyATM's model_fit). 0 = auto: ~50 evenly
         // spaced points across the run.
-        let ll_interval = if report_interval == 0 {
+        let ll_interval = if progress_interval == 0 {
             (iters / 50).max(1)
         } else {
-            report_interval
+            progress_interval
         };
 
         // The CVB0 backend covers only the base model.
@@ -12204,6 +12391,7 @@ impl KeyATM {
             alpha_history: self.alpha_history.clone(),
             pi_history: self.pi_history.clone(),
             alpha_vec: self.alpha_vec.clone(),
+            num_threads: self.num_threads,
         })
     }
     /// Load a model previously written by :meth:`save`.
@@ -12214,7 +12402,7 @@ impl KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics: s.num_topics,
             alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
             gamma2: s.gamma2, seed: s.seed, estimate_alpha: true, cvb0: false, fitted: s.fitted,
-            topic_names: s.topic_names,
+            topic_names: s.topic_names, num_threads: s.num_threads,
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
@@ -12592,19 +12780,30 @@ impl HLDA {
 #[pymethods]
 impl HLDA {
     /// Create an unfitted model. `depth` is the (fixed) tree depth; `gamma` is
-    /// the nested-CRP concentration (larger ⇒ more child topics); `eta` the
+    /// the nested-CRP concentration (larger => more child topics); `beta` the
     /// topic-word Dirichlet; `alpha` the per-document level distribution.
     #[new]
-    #[pyo3(signature = (*, depth=3, gamma=1.0, eta=0.01, alpha=0.1, seed=42))]
-    fn new(#[pyo3(from_py_with = "py_depth")] depth: usize, gamma: f64, eta: f64, alpha: f64, seed: u64) -> PyResult<Self> {
+    #[pyo3(signature = (*, depth=3, gamma=1.0, beta=0.01, alpha=0.1, seed=42, eta=None))]
+    fn new(py: Python<'_>, #[pyo3(from_py_with = "py_depth")] depth: usize, gamma: f64, beta: f64, alpha: f64, seed: u64, eta: Option<f64>) -> PyResult<Self> {
+        let beta = if let Some(old_val) = eta {
+            let warnings = py.import_bound("warnings")?;
+            warnings.call_method1("warn", (
+                "HLDA(eta=) is deprecated; use beta= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ))?;
+            if (beta - 0.01_f64).abs() > f64::EPSILON { beta } else { old_val }
+        } else {
+            beta
+        };
         if depth < 2 {
             return Err(PyValueError::new_err("depth must be >= 2"));
         }
-        if !finite_pos(gamma) || !finite_pos(eta) || !finite_pos(alpha) {
-            return Err(PyValueError::new_err("gamma, eta, alpha must be > 0"));
+        if !finite_pos(gamma) || !finite_pos(beta) || !finite_pos(alpha) {
+            return Err(PyValueError::new_err("gamma, beta, alpha must be > 0"));
         }
         Ok(HLDA {
-            depth, gamma, eta, alpha, seed,
+            depth, gamma, eta: beta, alpha, seed,
             fitted: false, num_nodes: 0, topic_names: Vec::new(),
             node_topic_word: None,
             node_levels: Vec::new(), node_parents: Vec::new(), doc_paths: Vec::new(), corpus: None,

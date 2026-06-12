@@ -150,7 +150,7 @@ def test_gsdmm_public_outputs_follow_movie_group_process_formulas() -> None:
 def test_gsdmm_trace_records_effective_cluster_count_and_formula_likelihood() -> None:
     docs = [["cat", "cat"], ["dog", "dog"], ["cat", "dog"]]
     model = topica.GSDMM(num_topics=3, alpha=0.1, beta=0.1, seed=2)
-    model.fit(docs, iters=1, report_interval=1)
+    model.fit(docs, iters=1, progress_interval=1)
 
     clusters = np.asarray(model.doc_cluster)
     encoded_docs, _, n, nw = _manual_gsdmm_counts(docs, clusters, model.vocabulary)

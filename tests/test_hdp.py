@@ -120,7 +120,7 @@ class TestDeterminismAndApi:
         with pytest.raises(ValueError):
             HDP(alpha=0.0)
         with pytest.raises(ValueError):
-            HDP(eta=-1.0)
+            HDP(beta=-1.0)
 
 
 class TestDiscoveryTrace:
@@ -129,7 +129,7 @@ class TestDiscoveryTrace:
     def test_traces_recorded_and_aligned(self):
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1)
-        m.fit(docs, iters=120, report_interval=10)
+        m.fit(docs, iters=120, progress_interval=10)
         tch = m.topic_count_history
         llh = m.log_likelihood_history
         ch = m.concentration_history
@@ -143,26 +143,26 @@ class TestDiscoveryTrace:
     def test_auto_spacing(self):
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1)
-        m.fit(docs, iters=150)  # report_interval=0 -> auto
+        m.fit(docs, iters=150)  # progress_interval=0 -> auto
         assert len(m.topic_count_history) == 50
 
     def test_final_count_matches_num_topics(self):
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1)
-        m.fit(docs, iters=120, report_interval=20)
+        m.fit(docs, iters=120, progress_interval=20)
         assert m.topic_count_history[-1][1] == m.num_topics
 
     def test_log_likelihood_improves(self):
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1, alpha=1.0, gamma=1.0)
-        m.fit(docs, iters=120, report_interval=5)
+        m.fit(docs, iters=120, progress_interval=5)
         lls = [ll for _, ll in m.log_likelihood_history]
         assert lls[-1] > lls[0]
 
     def test_trace_survives_save_load(self, tmp_path):
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1)
-        m.fit(docs, iters=80, report_interval=10)
+        m.fit(docs, iters=80, progress_interval=10)
         path = str(tmp_path / "hdp.bin")
         m.save(path)
         reloaded = HDP.load(path)
@@ -176,7 +176,7 @@ class TestDiscoveryTrace:
         plt = pytest.importorskip("matplotlib.pyplot")
         docs, _, _ = _planted_corpus()
         m = HDP(seed=1)
-        m.fit(docs, iters=80, report_interval=10)
+        m.fit(docs, iters=80, progress_interval=10)
         ax = topica.plot_topic_discovery(m)
         assert ax.get_xlabel() == "Gibbs iteration"
         plt.close("all")

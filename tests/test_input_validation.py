@@ -41,7 +41,7 @@ def test_other_constructors_reject_nan():
         (topica.DMR, dict(num_topics=2, beta=NAN)),
         (topica.DMR, dict(num_topics=2, prior_variance=NAN)),
         (topica.LabeledLDA, dict(alpha=NAN)),
-        (topica.HDP, dict(eta=NAN)),
+        (topica.HDP, dict(beta=NAN)),
         (topica.HDP, dict(alpha=NAN)),
         (topica.DTM, dict(num_topics=2, chain_variance=NAN)),
         (topica.SupervisedLDA, dict(num_topics=2, alpha=NAN)),
