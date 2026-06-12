@@ -545,6 +545,7 @@ def _build_reference_rows(
             setting_a, setting_b = vals
         elif len(contrast) == 2:
             setting_a, setting_b = contrast
+            col = None  # no named column in the sequence form
         else:
             raise ValueError("contrast= must be a 2-item dict or a 2-element sequence.")
 
@@ -555,11 +556,20 @@ def _build_reference_rows(
                     base = {c: (data[c].mean() if data[c].dtype.kind in "fc" else data[c].mode()[0])
                             for c in data.columns}
                     base.update(setting)
-                else:
-                    # scalar contrast: the dict key is ``col``
+                elif col is not None:
+                    # scalar contrast value paired with the named column from the
+                    # dict form: {col: [val_a, val_b]}
                     base = {c: (data[c].mean() if data[c].dtype.kind in "fc" else data[c].mode()[0])
                             for c in data.columns}
                     base[col] = setting
+                else:
+                    raise ValueError(
+                        "contrast= as a 2-element sequence requires each element "
+                        "to be a dict of covariate settings, e.g. "
+                        "contrast=({'party': 'D', 'year': 2012}, {'party': 'R', 'year': 2012}). "
+                        "To contrast one variable use the dict form: "
+                        "contrast={'party': ['D', 'R']}."
+                    )
                 row_df = pd.DataFrame([base])
                 X_row, _ = design_matrix_predict(formula, row_df, knot_ctx)
             elif feature_names is not None:
@@ -570,9 +580,20 @@ def _build_reference_rows(
                     for k, v in setting.items():
                         if k in fn:
                             x_row[fn.index(k)] = v
-                else:
+                elif col is not None:
                     if col in fn:
                         x_row[fn.index(col)] = setting
+                else:
+                    # 2-element sequence with raw X: treat the sequence as
+                    # (value_for_feature_0, ...) — only valid for single-feature models.
+                    if len(fn) == 1:
+                        x_row[0] = float(setting)
+                    else:
+                        raise ValueError(
+                            "contrast= as a 2-element scalar sequence is only supported "
+                            "for single-feature models when using raw X. For multi-feature "
+                            "models pass a dict: contrast={'feature_name': [val_a, val_b]}."
+                        )
                 X_row = x_row[None, :]
             else:
                 raise ValueError(
