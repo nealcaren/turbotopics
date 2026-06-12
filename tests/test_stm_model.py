@@ -516,14 +516,14 @@ class TestSTMCoherence:
 
 
 # ---------------------------------------------------------------------------
-# EM convergence (em_tol / bound / converged) — matches R stm's emtol stop
+# EM convergence (convergence_tol / bound / converged) — matches R stm's emtol stop
 # ---------------------------------------------------------------------------
 
 class TestSTMConvergence:
     def test_bound_history_monotone_increasing(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], iters=200, em_tol=1e-6)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=200, convergence_tol=1e-6)
         h = m.bound_history
         assert len(h) >= 2
         assert all(h[i + 1] >= h[i] - 1e-6 for i in range(len(h) - 1))
@@ -533,21 +533,21 @@ class TestSTMConvergence:
     def test_converges_before_cap(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, em_tol=1e-5)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, convergence_tol=1e-5)
         assert m.converged is True
         assert len(m.bound_history) < 500
 
-    def test_em_tol_zero_runs_full_cap(self, stm_corpus_and_x):
+    def test_convergence_tol_zero_runs_full_cap(self, stm_corpus_and_x):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], iters=15, em_tol=0.0)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=15, convergence_tol=0.0)
         assert m.converged is False
         assert len(m.bound_history) == 15
 
     def test_convergence_state_survives_save_load(self, stm_corpus_and_x, tmp_path):
         docs, x_2d = stm_corpus_and_x
         m = STM(num_topics=2, seed=1)
-        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, em_tol=1e-5)
+        m.fit(docs, x_2d, prevalence_names=["x"], iters=500, convergence_tol=1e-5)
         path = str(tmp_path / "stm.bin")
         m.save(path)
         reloaded = STM.load(path)

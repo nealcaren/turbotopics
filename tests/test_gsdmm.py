@@ -88,7 +88,7 @@ class TestClusterDiscovery:
     def test_count_collapses_from_k_max(self):
         docs = _short_corpus(n=300)
         m = topica.GSDMM(num_topics=12, seed=1)
-        m.fit(docs, iters=40, report_interval=5)
+        m.fit(docs, iters=40, progress_interval=5)
         cch = m.cluster_count_history
         assert [it for it, _ in cch] == list(range(5, 41, 5))
         # The Movie Group Process starts near the cap and collapses.
@@ -98,7 +98,7 @@ class TestClusterDiscovery:
     def test_log_likelihood_stabilizes(self):
         docs = _short_corpus(n=300)
         m = topica.GSDMM(num_topics=12, seed=1)
-        m.fit(docs, iters=60, report_interval=5)
+        m.fit(docs, iters=60, progress_interval=5)
         lls = [ll for _, ll in m.log_likelihood_history]
         assert all(np.isfinite(ll) and ll < 0 for ll in lls)
         # The cluster-fit score settles once the clustering stops moving (it can
@@ -115,7 +115,7 @@ class TestClusterDiscovery:
     def test_trace_survives_save_load(self, tmp_path):
         docs = _short_corpus(n=150)
         m = topica.GSDMM(num_topics=10, seed=1)
-        m.fit(docs, iters=30, report_interval=5)
+        m.fit(docs, iters=30, progress_interval=5)
         path = str(tmp_path / "g.bin")
         m.save(path)
         ld = topica.GSDMM.load(path)

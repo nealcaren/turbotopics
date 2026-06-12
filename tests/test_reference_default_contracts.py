@@ -111,7 +111,7 @@ def test_stm_fit_defaults_match_r_stm() -> None:
 
     assert init_defaults["init"] == r["init"].lower()
     assert fit_defaults["iters"] == int(r["max_em_its"])
-    assert math.isclose(fit_defaults["em_tol"], float(r["emtol"]), rel_tol=0, abs_tol=0)
+    assert math.isclose(fit_defaults["convergence_tol"], float(r["emtol"]), rel_tol=0, abs_tol=0)
 
 
 def test_keyatm_base_defaults_match_r_keyatm_for_shared_controls() -> None:
@@ -147,7 +147,11 @@ def test_keyatm_base_defaults_match_r_keyatm_for_shared_controls() -> None:
     assert init_defaults["gamma2"] == float(r["gamma2"])
     assert init_defaults["estimate_alpha"] is (r["estimate_alpha"] == "1")
     assert fit_defaults["weights"] == r["weights"]
-    assert fit_defaults["num_threads"] == (1 if r["parallel_init"] == "FALSE" else None)
+    # num_threads defaults to 1 in the constructor (matching R keyATM's single-threaded
+    # default when parallel_init=FALSE). In fit(), num_threads=None means "use the
+    # constructor value", so the effective default is still 1.
+    assert init_defaults["num_threads"] == (1 if r["parallel_init"] == "FALSE" else 4)
+    assert fit_defaults["num_threads"] is None  # fit() overrides constructor; None = use constructor
 
 
 def test_keyatm_alpha_default_matches_r_keyatm() -> None:

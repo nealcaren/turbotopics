@@ -43,14 +43,14 @@ def test_trace_recorded_auto_spacing():
 def test_trace_explicit_interval():
     docs, _ = _corpus()
     m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
-    m.fit(docs, iters=100, report_interval=25)
+    m.fit(docs, iters=100, progress_interval=25)
     assert [it for it, _, _ in m.log_likelihood_history] == [25, 50, 75, 100]
 
 
 def test_trace_rises_from_random_start():
     docs, _ = _corpus()
     m = topica.KeyATM(SEEDS, num_topics=2, seed=1)
-    m.fit(docs, iters=200, report_interval=5)
+    m.fit(docs, iters=200, progress_interval=5)
     lls = [ll for _, ll, _ in m.log_likelihood_history]
     # The fit should improve overall as Gibbs moves away from the random start.
     assert lls[-1] > lls[0]
@@ -72,7 +72,7 @@ def test_trace_for_covariate_and_dynamic():
 def test_alpha_and_pi_traces():
     docs, _ = _corpus()
     m = topica.KeyATM(SEEDS, num_topics=4, seed=1)
-    m.fit(docs, iters=200, report_interval=20)
+    m.fit(docs, iters=200, progress_interval=20)
     # plot_alpha: base model estimates an asymmetric alpha that moves over sweeps.
     assert len(m.alpha_history) == 10
     it, alpha = m.alpha_history[-1]

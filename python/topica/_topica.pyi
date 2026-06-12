@@ -196,7 +196,7 @@ class DMR:
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
-        features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
+        features: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
         *,
         feature_names: list[str] | None = None,
         iters: int = 1000,
@@ -206,13 +206,15 @@ class DMR:
         progress_interval: int = 50,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
     ) -> None:
         """Fit by collapsed Gibbs with the per-document Dirichlet prior
-        alpha_{d,t} = exp(lambda_t . x_d). `features` is required: an (num_docs, F)
-        covariate matrix (no intercept column — one is prepended), with
-        feature_names naming the F columns. The L-BFGS optimization of lambda runs
-        every optimize_interval sweeps after burn_in; topic-word phi is averaged
-        over num_samples samples taken every sample_interval sweeps."""
+        alpha_{d,t} = exp(lambda_t . x_d). `features` (or `covariates`, a
+        symmetric alias) is required: an (num_docs, F) covariate matrix (no
+        intercept column — one is prepended), with feature_names naming the F
+        columns. The L-BFGS optimization of lambda runs every optimize_interval
+        sweeps after burn_in; topic-word phi is averaged over num_samples samples
+        taken every sample_interval sweeps."""
         ...
 
     @property
@@ -336,23 +338,27 @@ class CTM:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 500,
-        em_tol: float = 1e-5,
+        convergence_tol: float = 1e-5,
         inference: str = "batch",
         batch_size: int = 256,
         tau: float = 64.0,
         kappa: float = 0.7,
+        em_tol: Optional[float] = None,
     ) -> None:
         """EM stops once the relative change in the variational bound falls below
-        em_tol or after iters iterations, whichever comes first. Pass em_tol=0
-        to always run iters steps. Check converged and bound afterward.
+        convergence_tol or after iters iterations, whichever comes first. Pass
+        convergence_tol=0 to always run iters steps. Check converged and bound
+        afterward.
 
         inference selects the backend: "batch" (default, full variational EM) or
         "svi" (stochastic/online VB, Hoffman et al. 2013) for very large corpora.
         Under "svi", iters is the number of epochs (passes over the data), and the
         global parameters update from minibatches of batch_size docs with a Robbins-
         Monro step rho_t = (tau + t)^(-kappa). tau (>= 0) and kappa in (0.5, 1] set
-        the learning-rate schedule; em_tol is ignored. SVI does not retain a
-        per-iteration bound trace."""
+        the learning-rate schedule; convergence_tol is ignored. SVI does not retain a
+        per-iteration bound trace.
+
+        em_tol is a deprecated alias for convergence_tol."""
         ...
 
     @property
@@ -449,25 +455,30 @@ class STM:
         content: Sequence[str] | Sequence[int] | None = None,
         content_names: list[str] | None = None,
         iters: int = 500,
-        em_tol: float = 1e-5,
+        convergence_tol: float = 1e-5,
         gamma_prior: str = "pooled",
         gamma_enet: float = 1.0,
+        em_tol: Optional[float] = None,
+        covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
     ) -> None:
-        """Fit. prevalence is (num_docs, F) covariates driving topic proportions
-        (mu_d = X_d gamma; intercept prepended). content is one group label per
-        document, making topic-word distributions vary by group (SAGE). At least
-        one of prevalence/content must be given.
+        """Fit. prevalence (or covariates, a symmetric alias) is (num_docs, F)
+        covariates driving topic proportions (mu_d = X_d gamma; intercept
+        prepended). content is one group label per document, making topic-word
+        distributions vary by group (SAGE). At least one of
+        prevalence/content must be given.
 
         EM stops once the relative change in the variational bound falls below
-        em_tol (R stm's emtol) or after iters iterations, whichever comes
-        first. Pass em_tol=0 to always run iters steps. Check converged and
-        bound afterward.
+        convergence_tol (R stm's emtol) or after iters iterations, whichever
+        comes first. Pass convergence_tol=0 to always run iters steps. Check
+        converged and bound afterward.
 
         gamma_prior controls the prevalence-coefficient regression in the M-step:
         "pooled" (default) uses ridge regression; "l1" uses an elastic-net path
         with AIC-selected penalty, recommended for high-dimensional prevalence
         designs. gamma_enet is the elastic-net mix (1.0 = pure lasso, values in
-        (0,1) add ridge; R stm's gamma.enet). Ignored when gamma_prior="pooled"."""
+        (0,1) add ridge; R stm's gamma.enet). Ignored when gamma_prior="pooled".
+
+        em_tol is a deprecated alias for convergence_tol."""
         ...
 
     @property
@@ -595,22 +606,27 @@ class STS:
         *,
         prevalence_names: list[str] | None = None,
         iters: int = 30,
-        em_tol: float = 1e-5,
+        convergence_tol: float = 1e-5,
         kappa_estimation: str = "ridge",
         kappa_ridge: float = 1e-3,
+        em_tol: Optional[float] = None,
+        covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
     ) -> None:
         """Fit. sentiment_seed (required, one value per document) defines the
         aggregation groups for the topic-word (kappa) Poisson M-step and seeds the
         initial sentiment — e.g. a star rating the sentiment should track.
-        prevalence is (num_docs, F) covariates driving both topic prevalence and
-        sentiment-discourse (alpha_d ~ N(X_d Gamma, Sigma); intercept prepended).
+        prevalence (or covariates, a symmetric alias) is (num_docs, F) covariates
+        driving both topic prevalence and sentiment-discourse (alpha_d ~ N(X_d
+        Gamma, Sigma); intercept prepended).
 
         EM stops once the relative change in the variational bound falls below
-        em_tol or after iters iterations. kappa_estimation chooses the topic-word
-        estimator: "ridge" (default, fast; kappa_ridge sets the ridge) or "lasso"
-        (an L1 Poisson path with AIC-selected penalty, matching the reference R
-        sts exactly at higher cost). Both give the same topics on well-conditioned
-        corpora."""
+        convergence_tol or after iters iterations. kappa_estimation chooses the
+        topic-word estimator: "ridge" (default, fast; kappa_ridge sets the ridge)
+        or "lasso" (an L1 Poisson path with AIC-selected penalty, matching the
+        reference R sts exactly at higher cost). Both give the same topics on
+        well-conditioned corpora.
+
+        em_tol is a deprecated alias for convergence_tol."""
         ...
 
     @property
@@ -704,17 +720,20 @@ class HDP:
         *,
         alpha: float = 0.1,
         gamma: float = 0.1,
-        eta: float = 0.01,
+        beta: float = 0.01,
         seed: int = 42,
         resample_conc: bool = False,
+        eta: Optional[float] = None,
     ) -> None:
         """alpha/gamma are the document- and corpus-level DP concentrations.
         gamma is the dominant lever on the inferred topic count (0.1 is
         conservative; raise it for more topics). resample_conc defaults to False
         (fixed concentrations -> a stable topic count); set it True to adapt the
         concentrations to the data, which is now capped to avoid the runaway
-        topic count it used to cause (issue #68). eta is the topic-word Dirichlet
-        (base measure). alpha, gamma, eta must be > 0."""
+        topic count it used to cause (issue #68). beta is the topic-word Dirichlet
+        (base measure). alpha, gamma, beta must be > 0.
+
+        eta is a deprecated alias for beta."""
         ...
 
     def fit(
@@ -722,16 +741,19 @@ class HDP:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 150,
-        report_interval: int = 0,
+        progress_interval: int = 0,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        report_interval: Optional[int] = None,
     ) -> None:
         """Fit by `iters` Gibbs sweeps. The inferred K is then `num_topics`.
 
-        report_interval controls the discovery/convergence trace
+        progress_interval controls the discovery/convergence trace
         (topic_count_history / log_likelihood_history / concentration_history):
         0 (default) records ~50 evenly spaced points; a positive value records
-        every that-many sweeps."""
+        every that-many sweeps.
+
+        report_interval is a deprecated alias for progress_interval."""
         ...
 
     @property
@@ -1022,7 +1044,7 @@ class SAGE:
         alpha: float = 0.1,
         prior_variance: float = 1.0,
         optimize_interval: int = 50,
-        burn_in: int = 100,
+        burn_in: int = 200,
         seed: int = 42,
         lbfgs_iters: int = 20,
     ) -> None: ...
@@ -1348,6 +1370,7 @@ class LDA:
         num_theta_draws: int = 25,
         convergence_tol: float = 0.0,
         check_every: int = 10,
+        num_threads: Optional[int] = None,
     ) -> None:
         """Run Gibbs sampling to fit the model on data.
 
@@ -1362,6 +1385,9 @@ class LDA:
         relative change in log-likelihood across two consecutive check points falls
         below ``convergence_tol``. The default (0.0) disables early stopping and
         reproduces the historical fit bit-for-bit.
+
+        ``num_threads`` overrides the constructor's num_threads for this fit call
+        only (None = use constructor value).
         """
         ...
 
@@ -1665,10 +1691,13 @@ class GSDMM:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 30,
-        report_interval: int = 0,
+        progress_interval: int = 0,
+        report_interval: Optional[int] = None,
     ) -> None:
-        """Fit by the Movie Group Process. report_interval controls the
-        cluster-discovery trace (0 = auto ~50 points)."""
+        """Fit by the Movie Group Process. progress_interval controls the
+        cluster-discovery trace (0 = auto ~50 points).
+
+        report_interval is a deprecated alias for progress_interval."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -1824,10 +1853,17 @@ class HLDA:
         *,
         depth: int = 3,
         gamma: float = 1.0,
-        eta: float = 0.01,
+        beta: float = 0.01,
         alpha: float = 0.1,
         seed: int = 42,
-    ) -> None: ...
+        eta: Optional[float] = None,
+    ) -> None:
+        """depth is the number of levels in the topic tree. gamma controls
+        branching (higher = more nodes). beta is the topic-word Dirichlet base
+        measure. alpha is the document-path concentration.
+
+        eta is a deprecated alias for beta."""
+        ...
     def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int = 1000) -> None: ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -2173,7 +2209,7 @@ class ETM:
         num_topics: int,
         *,
         inference: str = "em",
-        em_tol: float = 1e-4,
+        convergence_tol: float = 1e-4,
         sigma_shrink: float = 0.0,
         prior_variance: float = 1e6,
         max_inner: int = 25,
@@ -2182,7 +2218,10 @@ class ETM:
         lr: float = 0.005,
         wdecay: float = 1.2e-6,
         seed: int = 42,
-    ) -> None: ...
+        em_tol: Optional[float] = None,
+    ) -> None:
+        """em_tol is a deprecated alias for convergence_tol."""
+        ...
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -2190,10 +2229,14 @@ class ETM:
         vocabulary: Sequence[str],
         *,
         iters: int | None = None,
+        convergence_tol: Optional[float] = None,
     ) -> None:
         """Fit on token documents plus word embeddings (len(vocabulary) x E) and
         the aligned vocabulary, which defines the word ids. `iters` sets the number
-        of training iterations (EM iterations or VAE epochs)."""
+        of training iterations (EM iterations or VAE epochs).
+
+        convergence_tol overrides the constructor's convergence_tol for this fit
+        call only (None = use constructor value)."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -2241,6 +2284,7 @@ class ETM:
         vocabulary: Sequence[str],
         *,
         iters: int | None = None,
+        convergence_tol: Optional[float] = None,
     ) -> numpy.typing.NDArray[numpy.float64]: ...
     def save(self, path: str) -> None: ...
     @staticmethod
@@ -2266,11 +2310,23 @@ class ProdLDA:
         dropout: float = 0.2,
         batch_size: int = 200,
         lr: float = 0.002,
-        em_tol: float = 0.0,
+        convergence_tol: float = 0.0,
         seed: int = 42,
-    ) -> None: ...
-    def fit(self, data: Corpus | Sequence[Sequence[str]], *, iters: int | None = None) -> None:
-        """Fit on a Corpus or a list of token lists. `iters` sets the number of epochs."""
+        em_tol: Optional[float] = None,
+    ) -> None:
+        """em_tol is a deprecated alias for convergence_tol."""
+        ...
+    def fit(
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        *,
+        iters: int | None = None,
+        convergence_tol: Optional[float] = None,
+    ) -> None:
+        """Fit on a Corpus or a list of token lists. `iters` sets the number of epochs.
+
+        convergence_tol overrides the constructor's convergence_tol for this fit
+        call only (None = use constructor value)."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -2332,21 +2388,28 @@ class FASTopic:
         dt_alpha: float = 3.0,
         tw_alpha: float = 2.0,
         theta_temp: float = 1.0,
-        em_tol: float = 1e-6,
+        convergence_tol: float = 1e-6,
         sinkhorn_iters: int = 50,
         sinkhorn_tol: float = 1e-4,
         seed: int = 42,
-    ) -> None: ...
+        em_tol: Optional[float] = None,
+    ) -> None:
+        """em_tol is a deprecated alias for convergence_tol."""
+        ...
     def fit(
         self,
         data: Corpus | Sequence[Sequence[str]],
         doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
         *,
         iters: int | None = None,
+        convergence_tol: Optional[float] = None,
     ) -> None:
         """Fit on token documents plus frozen document embeddings (num_docs x E).
         The vocabulary is taken from the corpus; the word embeddings are learned.
-        `iters` sets the number of training epochs."""
+        `iters` sets the number of training epochs.
+
+        convergence_tol overrides the constructor's convergence_tol for this fit
+        call only (None = use constructor value)."""
         ...
     @property
     def num_topics(self) -> int: ...
@@ -2418,6 +2481,7 @@ class KeyATM:
         seed: int = 42,
         estimate_alpha: bool = True,
         sampler: str = "sparse",
+        num_threads: int = 1,
     ) -> None:
         """estimate_alpha (default True, matching R keyATM) slice-samples an
         asymmetric document-topic prior alpha each sweep. Set it False for a
@@ -2431,7 +2495,10 @@ class KeyATM:
         opt-in alternative for the base model only (it errors with covariates,
         timestamps, or a prior_offset) and does NOT preserve R-parity -- it is a
         different, deterministic estimator with no MCMC theta_draws, useful when
-        you want reproducibility/quality over R-faithfulness."""
+        you want reproducibility/quality over R-faithfulness.
+
+        num_threads > 1 enables approximate parallel Gibbs (AD-LDA-style);
+        can be overridden per-call in fit()."""
         ...
     @staticmethod
     def weighted_lda(
@@ -2455,15 +2522,16 @@ class KeyATM:
         timestamps: Sequence[float] | Sequence[str] | None = None,
         num_states: int = 5,
         weights: str = "information-theory",
-        num_threads: int = 1,
+        num_threads: Optional[int] = None,
         optimize_interval: int = 50,
         burn_in: int = 200,
         prior_variance: float = 1.0,
         lbfgs_iters: int = 20,
-        report_interval: int = 0,
+        progress_interval: int = 0,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
         convergence_tol: float = 0.0,
+        report_interval: Optional[int] = None,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -2481,7 +2549,10 @@ class KeyATM:
         'none' (unweighted). Weighting downweights frequent words and applies to
         every variant (base, covariate, dynamic).
 
-        `report_interval` sets how often model_fit is recorded for
+        `num_threads` overrides the constructor's num_threads for this fit call
+        only (None = use constructor value).
+
+        `progress_interval` sets how often model_fit is recorded for
         `log_likelihood_history` (keyATM's model_fit / plot_modelfit): 0
         (default) records ~50 evenly spaced points across the run; a positive
         value records every that-many sweeps.
@@ -2492,7 +2563,9 @@ class KeyATM:
         tolerance, setting `converged` to True (the relative-bound criterion R
         stm uses; 0.0 runs the full `iters`, the field convention for collapsed
         samplers). Applies to the base/covariate/dynamic Gibbs backends; ignored
-        by the CVB0 backend, which keeps no trace."""
+        by the CVB0 backend, which keeps no trace.
+
+        report_interval is a deprecated alias for progress_interval."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
