@@ -69,9 +69,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   format version, model tag). Loading a file saved by an earlier version, or
   loading a file saved as the wrong model, now raises a clear error instead of
   panicking or silently misreading. Models saved before this release must be
-  re-fit and re-saved. `LDA` save/load now also round-trips the retained MCMC
-  `theta_draws` and the sampler-backend flags (part of #102). DMR, LabeledLDA,
-  SAGE, and KeyATM still drop `theta_draws` on load; tracked as remaining work.
+  re-fit and re-saved. Save/load now also round-trips the retained MCMC
+  `theta_draws` (so method-of-composition standard errors survive a round-trip)
+  for every collapsed-Gibbs model: LDA and SeededLDA plus DMR, LabeledLDA, SAGE,
+  and KeyATM, and the LDA sampler-backend flags (#102).
 
 ### Added
 
