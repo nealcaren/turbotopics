@@ -170,8 +170,12 @@ def _score_umass(topic, vocab, occ, co, eps):
     for i in range(1, len(idx)):
         for j in range(i):
             a, b = idx[i], idx[j]  # a follows b in the ranked list
-            denom = occ[b] if occ[b] > 0 else eps
-            total += math.log((co[a, b] + 1.0) / denom)
+            # If the conditioning word b never appears in the reference corpus,
+            # skip this pair rather than using eps as denominator, which would
+            # produce a spuriously large positive score.
+            if occ[b] == 0:
+                continue
+            total += math.log((co[a, b] + 1.0) / occ[b])
             n += 1
     return total / n if n else float("nan")
 

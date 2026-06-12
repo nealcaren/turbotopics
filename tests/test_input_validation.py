@@ -6,6 +6,8 @@ Adversarial inputs must fail loudly, not silently corrupt the fit:
   3. Misusing the diagnostics (raw matrix, non-integer topn) gives a clear error.
   4. coherence on an empty reference corpus errors rather than returning NaN.
   5. frex rejects out-of-range frequency weights.
+  6. NaN/Inf in covariate/embedding matrices raises ValueError (issue #100).
+  7. iters=0 and iters=-1 raise ValueError (issue #103).
 """
 
 import numpy as np
@@ -113,3 +115,107 @@ def test_frex_rejects_bad_weight(model, w):
 def test_frex_valid_weight_works(model):
     out = topica.frex(model, w=0.5)
     assert len(out) == 2 and isinstance(out[0][0][0], str)
+
+
+# --- 6. NaN/Inf in covariate and embedding matrices (issue #100) -----------
+
+BIGGER_DOCS = [["a", "b", "c"], ["b", "c", "d"], ["a", "d", "e"]] * 10
+N = len(BIGGER_DOCS)
+
+
+def _nan_matrix(n, cols=2, nan_row=0, nan_col=0):
+    x = np.ones((n, cols))
+    x[nan_row, nan_col] = float("nan")
+    return x
+
+
+def _inf_matrix(n, cols=2):
+    x = np.ones((n, cols))
+    x[0, 0] = float("inf")
+    return x
+
+
+def test_stm_prevalence_nan_raises():
+    m = topica.STM(num_topics=2, seed=42)
+    prev = _nan_matrix(N)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.fit(BIGGER_DOCS, prevalence=prev, iters=5)
+
+
+def test_stm_prevalence_inf_raises():
+    m = topica.STM(num_topics=2, seed=42)
+    prev = _inf_matrix(N)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.fit(BIGGER_DOCS, prevalence=prev, iters=5)
+
+
+def test_dmr_features_nan_raises():
+    m = topica.DMR(num_topics=2, seed=42)
+    feats = _nan_matrix(N)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.fit(BIGGER_DOCS, feats, iters=5)
+
+
+def test_keyatm_covariates_nan_raises():
+    keywords = {"topic_a": ["a", "b"], "topic_b": ["c", "d"]}
+    m = topica.KeyATM(keywords, seed=42)
+    covs = _nan_matrix(N)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.fit(BIGGER_DOCS, iters=5, covariates=covs)
+
+
+def test_embedding_doc_embeddings_nan_raises():
+    rng = np.random.default_rng(0)
+    docs = BIGGER_DOCS
+    emb = rng.standard_normal((N, 8))
+    emb[2, 3] = float("nan")
+    m = topica.BERTopic(min_cluster_size=5, seed=1)
+    with pytest.raises(ValueError, match="non-finite"):
+        m.fit(docs, emb)
+
+
+def test_embedding_doc_embeddings_valid_passes():
+    rng = np.random.default_rng(0)
+    docs = [["a", "b", "c"], ["b", "c", "d"], ["a", "d", "e"]] * 20
+    emb = rng.standard_normal((len(docs), 4))
+    m = topica.BERTopic(min_cluster_size=5, seed=1)
+    # Should not raise; cluster count may be 0 (just warns).
+    m.fit(docs, emb)
+
+
+# --- 7. iters=0 and iters=-1 raise ValueError (issue #103) ----------------
+
+@pytest.mark.parametrize("bad_iters", [0])
+def test_lda_iters_zero_raises(bad_iters):
+    m = topica.LDA(num_topics=2, seed=42)
+    with pytest.raises(ValueError, match="iters"):
+        m.fit(DOCS, iters=bad_iters)
+
+
+@pytest.mark.parametrize("bad_iters", [0])
+def test_stm_iters_zero_raises(bad_iters):
+    m = topica.STM(num_topics=2, seed=42)
+    prev = np.ones((len(DOCS), 1))
+    with pytest.raises(ValueError, match="iters"):
+        m.fit(DOCS, prevalence=prev, iters=bad_iters)
+
+
+@pytest.mark.parametrize("bad_iters", [0])
+def test_keyatm_iters_zero_raises(bad_iters):
+    keywords = {"topic_a": ["a", "b"], "topic_b": ["c", "d"]}
+    m = topica.KeyATM(keywords, seed=42)
+    with pytest.raises(ValueError, match="iters"):
+        m.fit(DOCS, iters=bad_iters)
+
+
+def test_lda_iters_negative_raises():
+    m = topica.LDA(num_topics=2, seed=42)
+    # Negative iters hits PyO3's OverflowError (usize) or our ValueError for 0.
+    with pytest.raises((ValueError, OverflowError)):
+        m.fit(DOCS, iters=-1)
+
+
+def test_lda_iters_positive_works():
+    m = topica.LDA(num_topics=2, seed=42)
+    m.fit(DOCS, iters=5)
+    assert m.topic_word.shape[0] == 2

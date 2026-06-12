@@ -71,6 +71,60 @@ fn require_count(value: i64, min: i64, name: &str) -> PyResult<usize> {
     Ok(value as usize)
 }
 
+/// Guard that every element of a 2-D feature/covariate/embedding matrix is
+/// finite. Called right after `parse_features` returns and the row-count check
+/// passes, so the error names the parameter exactly as the user passed it.
+fn check_all_finite_2d(name: &str, rows: &[Vec<f64>]) -> PyResult<()> {
+    for (i, row) in rows.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(PyValueError::new_err(format!(
+                    "{name} contains non-finite values (NaN or inf) at row {i}, col {j}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Guard that every element of a 2-D ndarray view is finite. Used when data
+/// enters via `PyReadonlyArray2` rather than through `parse_features`.
+fn check_all_finite_arr2(name: &str, arr: &numpy::ndarray::ArrayView2<f64>) -> PyResult<()> {
+    for ((i, j), &v) in arr.indexed_iter() {
+        if !v.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{name} contains non-finite values (NaN or inf) at row {i}, col {j}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Guard that every element of a 1-D numeric sequence (e.g. timestamps) is
+/// finite.
+fn check_all_finite_1d(name: &str, vals: &[f64]) -> PyResult<()> {
+    for (i, &v) in vals.iter().enumerate() {
+        if !v.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{name} contains non-finite values (NaN or inf) at index {i}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate that `iters` is at least 1.  Called at the top of every `fit()`
+/// that accepts an explicit iteration count as `usize` (PyO3 already rejects
+/// negatives with an OverflowError; this catches the silent zero no-op).
+fn require_iters(iters: usize, name: &str) -> PyResult<()> {
+    if iters < 1 {
+        return Err(PyValueError::new_err(format!(
+            "{name} must be >= 1, got {iters}"
+        )));
+    }
+    Ok(())
+}
+
 // `from_py_with` hooks for count constructor arguments. They take the int as a
 // signed `i64` so a negative value yields a clean `ValueError` here rather than
 // PyO3's raw `OverflowError`. Per-model minimums above 1 (e.g. CTM/STM need >= 2)
@@ -935,7 +989,7 @@ impl LDA {
         (0..self.num_topics)
             .map(|t| {
                 let mut idx: Vec<usize> = (0..num_words).collect();
-                idx.sort_by(|&a, &b| phi[[t, b]].partial_cmp(&phi[[t, a]]).unwrap());
+                idx.sort_by(|&a, &b| f64::total_cmp(&phi[[t, b]], &phi[[t, a]]));
                 idx.truncate(n);
                 idx
             })
@@ -1112,6 +1166,7 @@ impl LDA {
         convergence_tol: f64,
         check_every: usize,
     ) -> PyResult<()> {
+        require_iters(iters, "iters")?;
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -1482,7 +1537,7 @@ impl LDA {
                 )));
             }
             let mut idx: Vec<usize> = (0..num_words).collect();
-            idx.sort_by(|&a, &b| phi[[t, b]].partial_cmp(&phi[[t, a]]).unwrap());
+            idx.sort_by(|&a, &b| f64::total_cmp(&phi[[t, b]], &phi[[t, a]]));
             let items: Vec<Bound<'py, PyTuple>> = idx
                 .iter()
                 .take(n)
@@ -2030,7 +2085,7 @@ impl LDA {
         let num_docs = theta.shape()[0];
 
         let mut idx: Vec<usize> = (0..num_docs).collect();
-        idx.sort_by(|&a, &b| theta[[b, topic]].partial_cmp(&theta[[a, topic]]).unwrap());
+        idx.sort_by(|&a, &b| f64::total_cmp(&theta[[b, topic]], &theta[[a, topic]]));
         let items: Vec<Bound<'py, PyTuple>> = idx
             .iter()
             .take(n)
@@ -2103,7 +2158,7 @@ impl LDA {
                 (d, js_divergence(&target, &q))
             })
             .collect();
-        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        scored.sort_by(|a, b| f64::total_cmp(&a.1, &b.1));
 
         let items: Vec<Bound<'py, PyTuple>> = scored
             .iter()
@@ -2974,7 +3029,7 @@ fn top_word_ids_phi(phi: &Array2<f64>, num_topics: usize, n: usize) -> Vec<Vec<u
     (0..num_topics)
         .map(|t| {
             let mut idx: Vec<usize> = (0..w).collect();
-            idx.sort_by(|&a, &b| phi[[t, b]].partial_cmp(&phi[[t, a]]).unwrap());
+            idx.sort_by(|&a, &b| f64::total_cmp(&phi[[t, b]], &phi[[t, a]]));
             idx.truncate(n);
             idx
         })
@@ -3013,6 +3068,7 @@ fn build_time_index(
                 num_docs
             )));
         }
+        check_all_finite_1d("timestamps", &vals)?;
         let mut uniq = vals.clone();
         uniq.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         uniq.dedup();
@@ -3197,6 +3253,7 @@ impl DMR {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
 
         let raw = parse_features(features)?;
         if raw.len() != corpus.num_docs() {
@@ -3206,6 +3263,7 @@ impl DMR {
                 corpus.num_docs()
             )));
         }
+        check_all_finite_2d("features", &raw)?;
         let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
         if raw.iter().any(|r| r.len() != f_in) {
             return Err(PyValueError::new_err("all feature rows must have the same length"));
@@ -3733,6 +3791,7 @@ impl DMR {
                         nf - 1
                     )));
                 }
+                check_all_finite_arr2("features", &x)?;
                 (0..docs_usize.len())
                     .map(|d| {
                         (0..k)
@@ -3943,6 +4002,7 @@ impl LabeledLDA {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         if labels.len() != num_docs {
             return Err(PyValueError::new_err(format!(
                 "labels has {} entries but corpus has {} documents",
@@ -4513,6 +4573,7 @@ impl SAGE {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
 
         let groups_str = parse_groups(groups)?;
         if groups_str.len() != num_docs {
@@ -4819,7 +4880,7 @@ impl SAGE {
             }
         };
         let mut idx: Vec<usize> = (0..vocab.len()).collect();
-        idx.sort_by(|&a, &b| dist[b].partial_cmp(&dist[a]).unwrap());
+        idx.sort_by(|&a, &b| f64::total_cmp(&dist[b], &dist[a]));
         let items: Vec<Bound<'py, PyTuple>> = idx
             .iter()
             .take(n)
@@ -4853,7 +4914,7 @@ impl SAGE {
             .map(|v| (a[v].max(1e-300) / b[v].max(1e-300)).ln())
             .collect();
         let mut idx: Vec<usize> = (0..vocab.len()).collect();
-        idx.sort_by(|&x, &y| ratio[y].partial_cmp(&ratio[x]).unwrap());
+        idx.sort_by(|&x, &y| f64::total_cmp(&ratio[y], &ratio[x]));
         let items: Vec<Bound<'py, PyTuple>> = idx
             .iter()
             .take(n)
@@ -5223,6 +5284,7 @@ impl CTM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let svi = match inference {
             "batch" => false,
             "svi" => true,
@@ -5684,6 +5746,7 @@ impl STM {
         if num_docs == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         if prevalence.is_none() && content.is_none() {
             return Err(PyValueError::new_err(
                 "STM needs prevalence and/or content covariates; use CTM for neither",
@@ -5702,6 +5765,7 @@ impl STM {
                     num_docs
                 )));
             }
+            check_all_finite_2d("prevalence", &raw)?;
             let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
             if raw.iter().any(|r| r.len() != f_in) {
                 return Err(PyValueError::new_err("all prevalence rows must have the same length"));
@@ -6018,7 +6082,7 @@ impl STM {
             .map(|v| (a[v].max(1e-300) / b[v].max(1e-300)).ln())
             .collect();
         let mut idx: Vec<usize> = (0..vocab.len()).collect();
-        idx.sort_by(|&x, &y| ratio[y].partial_cmp(&ratio[x]).unwrap());
+        idx.sort_by(|&x, &y| f64::total_cmp(&ratio[y], &ratio[x]));
         let items: Vec<Bound<'py, PyTuple>> = idx
             .iter()
             .take(n)
@@ -6503,6 +6567,7 @@ impl STS {
         kappa_estimation: &str,
         kappa_ridge: f64,
     ) -> PyResult<()> {
+        require_iters(iters, "iters")?;
         let kappa_est = match kappa_estimation {
             "lasso" => sts::KappaEst::Lasso { nlambda: 100, lambda_min_ratio: 0.001 },
             "ridge" => sts::KappaEst::Ridge(kappa_ridge),
@@ -6544,6 +6609,7 @@ impl STS {
                     num_docs
                 )));
             }
+            check_all_finite_2d("prevalence", &raw)?;
             let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
             if raw.iter().any(|r| r.len() != f_in) {
                 return Err(PyValueError::new_err("all prevalence rows must have the same length"));
@@ -7016,6 +7082,7 @@ impl HDP {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
 
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
@@ -7421,6 +7488,7 @@ impl DTM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         if times.len() != corpus.num_docs() {
             return Err(PyValueError::new_err(format!(
                 "times has length {} but there are {} documents",
@@ -7533,7 +7601,7 @@ impl DTM {
         let vocab = &self.corpus.as_ref().unwrap().id_to_word;
         let row = &self.topic_words.as_ref().unwrap()[time][topic];
         let mut idx: Vec<usize> = (0..row.len()).collect();
-        idx.sort_by(|&a, &b| row[b].partial_cmp(&row[a]).unwrap());
+        idx.sort_by(|&a, &b| f64::total_cmp(&row[b], &row[a]));
         Ok(idx.into_iter().take(n).map(|w| (vocab[w].clone(), row[w])).collect())
     }
 
@@ -7567,7 +7635,7 @@ impl DTM {
         let a = &tw[from_time][topic];
         let b = &tw[to][topic];
         let mut deltas: Vec<(usize, f64)> = (0..a.len()).map(|w| (w, b[w] - a[w])).collect();
-        deltas.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap()); // descending by delta
+        deltas.sort_by(|x, y| f64::total_cmp(&y.1, &x.1)); // descending by delta
 
         let to_pairs = |items: Vec<(usize, f64)>| -> Vec<(String, f64)> {
             items.into_iter().map(|(w, d)| (vocab[w].clone(), d)).collect()
@@ -7785,6 +7853,7 @@ impl SupervisedLDA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         if y.len() != corpus.num_docs() {
             return Err(PyValueError::new_err(format!(
                 "y has length {} but there are {} documents",
@@ -8201,6 +8270,7 @@ impl PT {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
         let (k, p, a, b) = (self.num_topics, self.num_pseudo, self.alpha, self.beta);
@@ -8467,6 +8537,7 @@ impl GSDMM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let num_types = corpus.num_types();
         let (k, a, b) = (self.k_max, self.alpha, self.beta);
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
@@ -8808,6 +8879,7 @@ impl SeededLDA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let num_topics = self.num_topics_val();
         let num_types = corpus.num_types();
         let seeds = seed_word_ids(&self.seed_words, &corpus.id_to_word, num_topics);
@@ -9314,6 +9386,7 @@ impl Top2Vec {
                 corpus.num_docs()
             )));
         }
+        check_all_finite_2d("doc_embeddings", &doc_emb)?;
         let num_types = corpus.num_types();
 
         // Realign user word embeddings to topica's vocabulary order; words topica
@@ -9331,6 +9404,7 @@ impl Top2Vec {
                         vocab.len()
                     )));
                 }
+                check_all_finite_2d("word_embeddings", &rows)?;
                 let e = rows.first().map(|r| r.len()).unwrap_or(0);
                 let map: std::collections::HashMap<&str, usize> =
                     vocab.iter().enumerate().map(|(i, w)| (w.as_str(), i)).collect();
@@ -9445,6 +9519,12 @@ impl Top2Vec {
         representation: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.fitted_model()?;
+        if m.num_topics == 0 {
+            return Err(PyRuntimeError::new_err(
+                "model found no topics (num_topics=0); refit with a smaller \
+                 min_cluster_size or more data",
+            ));
+        }
         let rep = match representation {
             Some(r) => r,
             None if self.has_word_vectors => "centroid",
@@ -9553,6 +9633,12 @@ impl Top2Vec {
         doc_embeddings: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let m = self.fitted_model()?;
+        if m.num_topics == 0 {
+            return Err(PyRuntimeError::new_err(
+                "model found no topics (num_topics=0); refit with a smaller \
+                 min_cluster_size or more data",
+            ));
+        }
         let _ = data;
         let de = parse_features(doc_embeddings)?;
         Ok(vecs_to_arr2(&m.assign(&de)).to_pyarray_bound(py))
@@ -9819,6 +9905,7 @@ impl BERTopic {
                 corpus.num_docs()
             )));
         }
+        check_all_finite_2d("doc_embeddings", &doc_emb)?;
         let num_types = corpus.num_types();
         self.id_to_word = corpus.id_to_word.clone();
         self.docs = corpus.docs.clone();
@@ -9900,6 +9987,12 @@ impl BERTopic {
         topic: Option<usize>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.fitted_model()?;
+        if m.num_topics == 0 {
+            return Err(PyRuntimeError::new_err(
+                "model found no topics (num_topics=0); refit with a smaller \
+                 min_cluster_size or more data",
+            ));
+        }
         let phi = vecs_to_arr2(&m.topic_word);
         topic_words_helper(py, &phi, &self.id_to_word, m.num_topics, n, topic)
     }
@@ -9947,6 +10040,12 @@ impl BERTopic {
         stride: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let m = self.fitted_model()?;
+        if m.num_topics == 0 {
+            return Err(PyRuntimeError::new_err(
+                "model found no topics (num_topics=0); refit with a smaller \
+                 min_cluster_size or more data",
+            ));
+        }
         let docs_str: Vec<Vec<String>> = if let Ok(c) = data.extract::<Corpus>() {
             c.inner.docs.iter().map(|d| d.iter().map(|&w| c.inner.id_to_word[w as usize].clone()).collect()).collect()
         } else {
@@ -10331,6 +10430,7 @@ impl ETM {
                 vocabulary.len()
             )));
         }
+        check_all_finite_2d("word_embeddings", &rho)?;
         if vocabulary.len() < self.num_topics {
             return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
         }
@@ -11152,6 +11252,7 @@ impl FASTopic {
                 corpus.num_docs()
             )));
         }
+        check_all_finite_2d("doc_embeddings", &doc_emb)?;
         let num_types = corpus.num_types();
         if num_types < self.num_topics {
             return Err(PyValueError::new_err("vocabulary must have at least num_topics words"));
@@ -11574,6 +11675,7 @@ impl KeyATM {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let num_topics = self.num_topics;
         let num_types = corpus.num_types();
         // Thinned θ-draw retention schedule (issue #31), shared by all three fits.
@@ -11718,6 +11820,7 @@ impl KeyATM {
                         corpus.num_docs()
                     )));
                 }
+                check_all_finite_2d("covariates", &raw)?;
                 let f_in = raw.first().map(|r| r.len()).unwrap_or(0);
                 if raw.iter().any(|r| r.len() != f_in) {
                     return Err(PyValueError::new_err("all covariate rows must have the same length"));
@@ -11767,6 +11870,7 @@ impl KeyATM {
                         "prior_offset must have {num_topics} columns (one per topic)"
                     )));
                 }
+                check_all_finite_2d("prior_offset", &off)?;
                 Some(off)
             }
             None => None,
@@ -12187,6 +12291,7 @@ impl PA {
         if corpus.num_docs() == 0 {
             return Err(PyValueError::new_err("corpus contains no documents"));
         }
+        require_iters(iters, "iters")?;
         let num_docs = corpus.num_docs();
         let num_types = corpus.num_types();
         let (s, k, a, b) = (self.num_super, self.num_sub, self.alpha, self.beta);
@@ -12570,7 +12675,7 @@ impl HLDA {
         let vocab = &self.corpus.as_ref().unwrap().id_to_word;
         let v = tw.shape()[1];
         let mut idx: Vec<usize> = (0..v).collect();
-        idx.sort_by(|&a, &b| tw[[node, b]].partial_cmp(&tw[[node, a]]).unwrap());
+        idx.sort_by(|&a, &b| f64::total_cmp(&tw[[node, b]], &tw[[node, a]]));
         Ok(idx.into_iter().take(n).map(|w| (vocab[w].clone(), tw[[node, w]])).collect())
     }
 
@@ -12642,4 +12747,86 @@ fn _topica(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DEFAULT_TOKEN_REGEX", corpus::DEFAULT_TOKEN_REGEX)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use numpy::ndarray::Array2;
+
+    #[test]
+    fn check_all_finite_2d_accepts_clean_data() {
+        let rows = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert!(check_all_finite_2d("x", &rows).is_ok());
+    }
+
+    #[test]
+    fn check_all_finite_2d_rejects_nan() {
+        let rows = vec![vec![1.0, f64::NAN], vec![3.0, 4.0]];
+        let err = check_all_finite_2d("prevalence", &rows).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("prevalence"), "message should name the parameter");
+        assert!(msg.contains("non-finite"), "message should mention non-finite");
+        assert!(msg.contains("row 0"), "message should include row number");
+    }
+
+    #[test]
+    fn check_all_finite_2d_rejects_inf() {
+        let rows = vec![vec![0.0, f64::INFINITY]];
+        assert!(check_all_finite_2d("features", &rows).is_err());
+    }
+
+    #[test]
+    fn check_all_finite_1d_accepts_clean_data() {
+        assert!(check_all_finite_1d("timestamps", &[1.0, 2.0, 3.0]).is_ok());
+    }
+
+    #[test]
+    fn check_all_finite_1d_rejects_nan() {
+        let vals = vec![1.0, f64::NAN, 3.0];
+        let err = check_all_finite_1d("timestamps", &vals).unwrap_err();
+        assert!(err.to_string().contains("timestamps"));
+    }
+
+    #[test]
+    fn check_all_finite_arr2_accepts_clean() {
+        let arr = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert!(check_all_finite_arr2("features", &arr.view()).is_ok());
+    }
+
+    #[test]
+    fn check_all_finite_arr2_rejects_nan() {
+        let arr = Array2::from_shape_vec((2, 2), vec![1.0, f64::NAN, 3.0, 4.0]).unwrap();
+        let err = check_all_finite_arr2("features", &arr.view()).unwrap_err();
+        assert!(err.to_string().contains("features"));
+    }
+
+    #[test]
+    fn require_iters_accepts_positive() {
+        assert!(require_iters(1, "iters").is_ok());
+        assert!(require_iters(1000, "iters").is_ok());
+    }
+
+    #[test]
+    fn require_iters_rejects_zero() {
+        let err = require_iters(0, "iters").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("iters"), "message should name the parameter");
+        assert!(msg.contains("0"), "message should include the bad value");
+    }
+
+    #[test]
+    fn total_cmp_sort_with_nan_does_not_panic() {
+        // A NaN in a float slice should sort without panicking when using total_cmp.
+        let data = vec![3.0f64, f64::NAN, 1.0, 2.0];
+        let mut idx: Vec<usize> = (0..data.len()).collect();
+        // Descending sort: using total_cmp equivalent pattern.
+        idx.sort_by(|&a, &b| f64::total_cmp(&data[b], &data[a]));
+        // NaN is larger than any finite value under total_cmp, so it sorts to position 0.
+        assert_eq!(idx[0], 1); // NaN is "greatest" under total_cmp
+    }
 }

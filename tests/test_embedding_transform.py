@@ -52,3 +52,35 @@ def test_bertopic_transform_and_ctfidf_options():
     for t in range(mb.num_topics):
         blocks = {w.split("w")[0] for w, _ in mb.top_words(4, topic=t)}
         assert len(blocks) == 1
+
+
+def _fit_bertopic_no_clusters():
+    """Return a fitted BERTopic that found zero clusters (min_cluster_size too
+    large for the data), which is the condition that triggered issue #103."""
+    import warnings
+    rng = np.random.default_rng(99)
+    # Very few documents with min_cluster_size larger than the dataset forces
+    # HDBSCAN to find no clusters.
+    docs = [["a", "b"], ["c", "d"]]
+    emb = rng.standard_normal((len(docs), 4))
+    m = topica.BERTopic(min_cluster_size=100, seed=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        m.fit(docs, emb)
+    return m, docs
+
+
+def test_bertopic_zero_clusters_transform_raises():
+    m, docs = _fit_bertopic_no_clusters()
+    if m.num_topics > 0:
+        pytest.skip("clustering found topics with this seed; skip zero-cluster guard test")
+    with pytest.raises(RuntimeError, match="num_topics=0"):
+        m.transform(docs)
+
+
+def test_bertopic_zero_clusters_top_words_raises():
+    m, _ = _fit_bertopic_no_clusters()
+    if m.num_topics > 0:
+        pytest.skip("clustering found topics with this seed; skip zero-cluster guard test")
+    with pytest.raises(RuntimeError, match="num_topics=0"):
+        m.top_words(5)
