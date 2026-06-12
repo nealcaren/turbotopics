@@ -25,6 +25,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   `save`/`load`, `log_likelihood_history`, `doc_names`, several `fit()` keywords,
   and `Corpus.from_documents` parameters added; a bogus `HLDA.coherence` removed),
   and a parametrized test now guards against future drift (#108).
+- `plot_report`'s topic-correlation panel now masks the always-1.0 diagonal and
+  scales to the off-diagonal range, instead of drawing the raw matrix on a
+  saturated +/-1 scale where the diagonal swamped the real structure. (The
+  original fix had only reached the standalone `viz.TopicCorrelation`.)
+
+### Changed
+
+- `plot_report`'s "Prevalence by class" panel is now a connected-dot (dumbbell)
+  plot for up to five classes: one dot per class per topic joined by a line, with
+  topics ordered by the between-class gap, so the class differences read directly.
+  It falls back to the heatmap for more than five classes.
 - Covariate, feature, embedding, and timestamp matrices are now checked for
   non-finite values (NaN/inf) at the boundary and raise a clear `ValueError`
   naming the parameter, instead of panicking (KeyATM) or silently producing

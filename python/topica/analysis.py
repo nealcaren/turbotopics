@@ -349,7 +349,18 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
             # (e.g. "1e-10+9.99e-1") from rendering on the axis.
             ax.ticklabel_format(useOffset=False, style="plain")
         elif panel == "correlation":
-            im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
+            # Mask the always-1.0 diagonal (self-correlation carries no
+            # information and, left in, saturates the diverging scale and
+            # dominates the panel) and set the color range from the off-diagonal
+            # magnitudes so the real structure reads. Matches
+            # topica.viz.TopicCorrelation.
+            import matplotlib as mpl
+            cmax = max(float(np.abs(corr - np.eye(K)).max()), 1e-3)
+            disp = corr.astype(float).copy()
+            np.fill_diagonal(disp, np.nan)
+            cmap = mpl.colormaps["RdBu_r"].copy()
+            cmap.set_bad("#f0f0f0")
+            im = ax.imshow(disp, cmap=cmap, vmin=-cmax, vmax=cmax)
             ax.set_title("Topic correlation")
             ax.set_xlabel("topic")
             ax.set_ylabel("topic")
@@ -366,13 +377,38 @@ def plot_report(model, *, texts=None, timestamps=None, groups=None, n=8,
             ax.set_title("Topics over time (top 6)")
             ax.legend(fontsize=6, ncol=2)
         elif panel == "class":
-            levels, means = per_class
-            im = ax.imshow(means, aspect="auto", cmap="viridis")
-            ax.set_yticks(range(len(levels)))
-            ax.set_yticklabels([str(lv) for lv in levels], fontsize=7)
-            ax.set_xlabel("topic")
-            ax.set_title("Prevalence by class")
-            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            import matplotlib as mpl
+            levels, means = per_class  # means: (num_levels, K)
+            n_lv = len(levels)
+            if n_lv <= 5:
+                # Connected-dot ("dumbbell") plot: each topic is a row with one
+                # dot per class joined by a line, so the between-class gap -- the
+                # quantity of interest -- reads directly, which a few-row heatmap
+                # hides. Topics are ordered by that gap, putting the most
+                # class-differentiated topics on top.
+                spread = means.max(axis=0) - means.min(axis=0)
+                order = np.argsort(spread)
+                ypos = np.arange(K)
+                cmap = mpl.colormaps["tab10"]
+                for yi, t in enumerate(order):
+                    col = means[:, t]
+                    ax.plot([col.min(), col.max()], [yi, yi],
+                            color="#cccccc", lw=1.5, zorder=1)
+                for j, lv in enumerate(levels):
+                    ax.scatter(means[j, order], ypos, s=28, color=cmap(j),
+                               label=str(lv), zorder=2)
+                ax.set_yticks(ypos)
+                ax.set_yticklabels([captions[i] for i in order], fontsize=7)
+                ax.set_xlabel("Mean prevalence (θ)")
+                ax.set_title("Prevalence by class")
+                ax.legend(fontsize=6)
+            else:
+                im = ax.imshow(means, aspect="auto", cmap="viridis")
+                ax.set_yticks(range(n_lv))
+                ax.set_yticklabels([str(lv) for lv in levels], fontsize=7)
+                ax.set_xlabel("topic")
+                ax.set_title("Prevalence by class")
+                fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     fig.suptitle(title or f"{type(model).__name__} — {K} topics", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
