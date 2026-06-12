@@ -539,8 +539,8 @@ top-word Jaccard and cosine of $1.000$ on a planted-topic corpus
 \code{model\_fit} log-likelihood \citep{eshima2024keyatm}. \pkg{keyATM}
 initializes at random, so even two \proglang{R} runs differ; on the poliblog
 corpus the keyword topics, the ones the method pins, agree between \pkg{topica}
-and \proglang{R} at a cosine of $0.91$, as close as \proglang{R}'s two seeds agree
-with each other ($0.90$) (\code{parity/keyatm\_r\_compare.py}).
+and \proglang{R} at a cosine of $0.889$, about as close as \proglang{R}'s two seeds
+agree with each other ($0.902$) (\code{parity/keyatm\_r\_compare.py}).
 
 \paragraph{Structural topic model.} The structural topic model is non-convex, so
 the right question is not whether two engines produce identical matrices, which
@@ -750,7 +750,7 @@ model presents the same surface. Numbers reproduce from \code{paper/replication.
 \toprule
 Model & Family & Topics & Coherence ($c_v$) & Exclusivity & Diversity \\
 \midrule
-\code{LDA}      & count-based     & 15 & 0.358 & 0.514 & 0.683 \\
+\code{LDA}      & count-based     & 15 & 0.365 & 0.580 & 0.717 \\
 \code{CTM}      & count-based     & 15 & 0.351 & 0.446 & 0.579 \\
 \code{STM}      & count-based     & 15 & 0.350 & 0.435 & 0.565 \\
 \code{BERTopic} & embedding-based &  3 & 0.459 & 0.526 & 0.693 \\
@@ -941,7 +941,8 @@ estimands for the effect-estimation tools.
 
 \pkg{topica} is released under the Apache-2.0 license and installs from the
 Python Package Index with \code{pip install topica}; the core requires only
-\pkg{NumPy}. Source code, documentation, and worked examples are available at
+\pkg{NumPy}. The results reported in this article were produced with
+\pkg{topica} 0.16.0. Source code, documentation, and worked examples are available at
 \url{https://github.com/nealcaren/topica} and
 \url{https://nealcaren.github.io/topica/}. A single script,
 \code{paper/replication.py}, regenerates every quantitative artifact in this
