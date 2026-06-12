@@ -30,6 +30,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   `u_mass` coherence against an external reference corpus no longer rewards a
   top word absent from the reference with a large positive score (#103).
 
+### Performance
+
+- keyATM's multithreaded sweep reconciles the topic-word counts with a sparse,
+  parallel merge (`parallel_sweep_keyatm`), reducing the fixed per-sweep merge
+  cost on many-thread fits (#84, #97).
+
 ### Changed
 
 - **Breaking (save format):** model files now carry an 8-byte header (magic,
@@ -279,7 +285,7 @@ documented contract, checked in CI.
   wider or narrower depending on the corpus. Fit with `keep_theta_draws=False`
   to recover the prior approximation behavior.
 
-## [0.12.1] - 2026-06-08
+## [0.12.1] - unreleased (rolled into 0.13.0)
 
 ### Fixed
 

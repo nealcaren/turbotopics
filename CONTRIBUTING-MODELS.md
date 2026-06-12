@@ -3,8 +3,8 @@
 This is the deep guide for two tasks: **(A) adding a feature to an existing
 model** and **(B) adding a new model**. It is written to be followed
 step by step, including by an LLM coding agent. For general setup and PR
-mechanics see [`CONTRIBUTING.md`](CONTRIBUTING.md); for build commands and house
-conventions see [`CLAUDE.md`](CLAUDE.md). Read both first; this file assumes them.
+mechanics and build commands see [`CONTRIBUTING.md`](CONTRIBUTING.md). Read it
+first; this file assumes it.
 
 ## Architecture in sixty seconds
 
