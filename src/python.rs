@@ -206,7 +206,7 @@ fn model_tag_name(tag: u8) -> &'static str {
         MODEL_TAG_HDP      => "HDP",
         MODEL_TAG_DTM      => "DTM",
         MODEL_TAG_SLDA     => "SupervisedLDA",
-        MODEL_TAG_PT       => "ProdLDA (PT)",
+        MODEL_TAG_PT       => "PT",
         MODEL_TAG_GSDMM    => "GSDMM",
         MODEL_TAG_SEEDED   => "SeededLDA",
         MODEL_TAG_TOP2VEC  => "Top2Vec",
