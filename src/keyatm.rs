@@ -1129,6 +1129,176 @@ fn init_state<R: Rng>(
     (model, assignments, ki)
 }
 
+/// CVB0 (collapsed variational Bayes, zeroth-order) inference for the **base**
+/// keyATM model — a deterministic alternative to the Gibbs sampler.
+///
+/// Each (document, word-type) cell keeps a soft responsibility over the
+/// (topic, switch) states the Gibbs sampler draws from: `s=0` for every topic,
+/// plus `s=1` for each keyword topic that lists the word. The responsibilities
+/// are updated from the expected counts using the very same conditional as
+/// [`resample_token_inner`] (mass-weighted by the token weights), so it reuses
+/// keyATM's count tables and [`KeyAtmModel`] output methods unchanged.
+///
+/// This is **not** the R-keyATM estimator: it is a deterministic, non-sampling
+/// backend (optional `sampler="cvb0"`), so it does not preserve R-parity. It
+/// uses a fixed symmetric `alpha` (no slice sampling) and does not cover the
+/// covariate or dynamic variants.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_keyatm_cvb0<R: Rng>(
+    docs: &[Vec<u32>],
+    num_types: usize,
+    num_topics: usize,
+    keywords: &[Vec<usize>],
+    alpha: f64,
+    beta: f64,
+    beta_key: f64,
+    gamma1: f64,
+    gamma2: f64,
+    iters: usize,
+    weights: WeightScheme,
+    rng: &mut R,
+) -> KeyAtmModel {
+    assert_eq!(keywords.len(), num_topics, "keywords length must equal num_topics");
+    let (mut model, _assign, ki) = init_state(
+        docs, num_types, num_topics, keywords, alpha, beta, beta_key, gamma1, gamma2, weights, rng,
+    );
+    let k = num_topics;
+    let num_kw = model.num_keyword_topics;
+    let v_beta = num_types as f64 * beta;
+
+    // Cells: per doc, unique (word, weighted mass = Σ token weights of that word).
+    let cells: Vec<Vec<(u32, f64)>> = docs
+        .iter()
+        .map(|doc| {
+            let mut m: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+            for &w in doc {
+                *m.entry(w).or_insert(0.0) += model.vocab_weights[w as usize];
+            }
+            let mut c: Vec<(u32, f64)> = m.into_iter().collect();
+            c.sort_by_key(|&(w, _)| w);
+            c
+        })
+        .collect();
+
+    // γ per cell: g0[k] over s=0 (length K) and g1 over s=1 (parallel to
+    // ki.by_word[w]). Random init, normalized, then build the expected counts.
+    for row in model.ndk.iter_mut() {
+        row.iter_mut().for_each(|x| *x = 0.0);
+    }
+    model.nkw.iter_mut().for_each(|r| r.iter_mut().for_each(|x| *x = 0.0));
+    model.nkx.iter_mut().for_each(|r| r.iter_mut().for_each(|x| *x = 0.0));
+    model.nk0.iter_mut().for_each(|x| *x = 0.0);
+    model.nk1.iter_mut().for_each(|x| *x = 0.0);
+
+    let mut g0: Vec<Vec<Vec<f64>>> = Vec::with_capacity(docs.len());
+    let mut g1: Vec<Vec<Vec<f64>>> = Vec::with_capacity(docs.len());
+    for (d, dcells) in cells.iter().enumerate() {
+        let mut dg0 = Vec::with_capacity(dcells.len());
+        let mut dg1 = Vec::with_capacity(dcells.len());
+        for &(w, mass) in dcells {
+            let kw = &ki.by_word[w as usize];
+            let mut a0 = vec![0.0f64; k];
+            let mut a1 = vec![0.0f64; kw.len()];
+            let mut sum = 0.0;
+            for x in a0.iter_mut() {
+                *x = rng.gen::<f64>() + 1e-6;
+                sum += *x;
+            }
+            for x in a1.iter_mut() {
+                *x = rng.gen::<f64>() + 1e-6;
+                sum += *x;
+            }
+            for (t, x) in a0.iter_mut().enumerate() {
+                *x /= sum;
+                model.ndk[d][t] += mass * *x;
+                model.nkw[t][w as usize] += mass * *x;
+                model.nk0[t] += mass * *x;
+            }
+            for (idx, &(t, j)) in kw.iter().enumerate() {
+                a1[idx] /= sum;
+                model.ndk[d][t] += mass * a1[idx];
+                model.nkx[t][j] += mass * a1[idx];
+                model.nk1[t] += mass * a1[idx];
+            }
+            dg0.push(a0);
+            dg1.push(a1);
+        }
+        g0.push(dg0);
+        g1.push(dg1);
+    }
+
+    // Sweeps: mirror resample_token_inner softly per cell.
+    for _ in 0..iters {
+        for (d, dcells) in cells.iter().enumerate() {
+            for (ci, &(w, mass)) in dcells.iter().enumerate() {
+                let w = w as usize;
+                let kw = &ki.by_word[w];
+
+                // Remove this cell's mass (the `-dw` expected counts).
+                for t in 0..k {
+                    let c = mass * g0[d][ci][t];
+                    model.ndk[d][t] -= c;
+                    model.nkw[t][w] -= c;
+                    model.nk0[t] -= c;
+                }
+                for (idx, &(t, j)) in kw.iter().enumerate() {
+                    let c = mass * g1[d][ci][idx];
+                    model.ndk[d][t] -= c;
+                    model.nkx[t][j] -= c;
+                    model.nk1[t] -= c;
+                }
+
+                // Recompute the (topic, switch) responsibilities.
+                let mut sum = 0.0f64;
+                for t in 0..k {
+                    let ndk_val = model.ndk[d][t] + alpha;
+                    let reg = (model.nkw[t][w] + beta) / (v_beta + model.nk0[t]);
+                    let sw0 = if t < num_kw {
+                        (gamma2 + model.nk0[t]) / (gamma1 + gamma2 + model.nk0[t] + model.nk1[t])
+                    } else {
+                        1.0
+                    };
+                    let val = ndk_val * reg * sw0;
+                    let val = if val > 0.0 { val } else { 0.0 };
+                    g0[d][ci][t] = val;
+                    sum += val;
+                }
+                for (idx, &(t, j)) in kw.iter().enumerate() {
+                    let ndk_val = model.ndk[d][t] + alpha;
+                    let lk = model.l[t] as f64;
+                    let key = (model.nkx[t][j] + beta_key) / (lk * beta_key + model.nk1[t]);
+                    let sw1 = (gamma1 + model.nk1[t])
+                        / (gamma1 + gamma2 + model.nk0[t] + model.nk1[t]);
+                    let val = ndk_val * key * sw1;
+                    let val = if val > 0.0 { val } else { 0.0 };
+                    g1[d][ci][idx] = val;
+                    sum += val;
+                }
+
+                // Normalize and add the new mass back.
+                let inv = if sum > 0.0 { 1.0 / sum } else { 0.0 };
+                for t in 0..k {
+                    let g = g0[d][ci][t] * inv;
+                    g0[d][ci][t] = g;
+                    let c = mass * g;
+                    model.ndk[d][t] += c;
+                    model.nkw[t][w] += c;
+                    model.nk0[t] += c;
+                }
+                for (idx, &(t, j)) in kw.iter().enumerate() {
+                    let g = g1[d][ci][idx] * inv;
+                    g1[d][ci][idx] = g;
+                    let c = mass * g;
+                    model.ndk[d][t] += c;
+                    model.nkx[t][j] += c;
+                    model.nk1[t] += c;
+                }
+            }
+        }
+    }
+    model
+}
+
 /// Whether to record the predictive log-likelihood at 1-based sweep `iter`.
 /// Records every `interval` sweeps (and always the final one) so the trace
 /// ends at the model's returned state; `interval == 0` disables tracing.
@@ -1749,6 +1919,60 @@ mod tests {
             1,
             "topic 1 (keyword=block B) should be dominated by block B words"
         );
+    }
+
+    #[test]
+    fn cvb0_keywords_steer_topics() {
+        // The CVB0 backend must steer keyword topics the same way as Gibbs.
+        let block_size = 10usize;
+        let num_blocks = 3usize;
+        let v = num_blocks * block_size;
+        let mut docs: Vec<Vec<u32>> = Vec::new();
+        for b in 0..num_blocks {
+            let offset = b * block_size;
+            for d in 0..100usize {
+                let mut doc: Vec<u32> =
+                    (0..5).map(|i| (offset + (i + d) % block_size) as u32).collect();
+                doc.push(((b + 1) % num_blocks * block_size + d % block_size) as u32);
+                docs.push(doc);
+            }
+        }
+        let keywords: Vec<Vec<usize>> = vec![vec![0, 1], vec![10, 11], vec![]];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let model = fit_keyatm_cvb0(
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 100, WeightScheme::None, &mut rng,
+        );
+        let dominant_block = |k: usize| -> usize {
+            let phi = model.topic_word(k);
+            (0..num_blocks)
+                .max_by(|&ba, &bb| {
+                    let sa: f64 = (0..block_size).map(|i| phi[ba * block_size + i]).sum();
+                    let sb: f64 = (0..block_size).map(|i| phi[bb * block_size + i]).sum();
+                    sa.partial_cmp(&sb).unwrap()
+                })
+                .unwrap()
+        };
+        assert_eq!(dominant_block(0), 0, "cvb0 topic 0 should be block A");
+        assert_eq!(dominant_block(1), 1, "cvb0 topic 1 should be block B");
+    }
+
+    #[test]
+    fn cvb0_deterministic_for_seed() {
+        let docs: Vec<Vec<u32>> = (0..60)
+            .map(|d| (0..6).map(|i| ((i + d) % 12) as u32).collect())
+            .collect();
+        let keywords: Vec<Vec<usize>> = vec![vec![0], vec![6], vec![]];
+        let run = || {
+            let mut rng = ChaCha8Rng::seed_from_u64(7);
+            fit_keyatm_cvb0(&docs, 12, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, WeightScheme::None, &mut rng)
+                .doc_topic()
+        };
+        let (a, b) = (run(), run());
+        for (ra, rb) in a.iter().zip(b.iter()) {
+            for (x, y) in ra.iter().zip(rb.iter()) {
+                assert!((x - y).abs() < 1e-12);
+            }
+        }
     }
 
     /// Every `keyword_rate()` value must lie in [0, 1], and regular topics

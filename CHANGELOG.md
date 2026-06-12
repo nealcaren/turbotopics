@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `KeyATM(..., sampler="cvb0")` adds a CVB0 backend for the base keyATM model:
+  deterministic collapsed-variational inference over the (topic, keyword-switch)
+  states, with a soft responsibility per (document, word) cell that mirrors the
+  Gibbs conditional (token-weighting included). It is an **opt-in, non-R-parity**
+  estimator (a different inference method, so it does not reproduce R keyATM),
+  restricted to the base model — it errors with covariates, timestamps, or a
+  prior_offset, which stay Gibbs-only — and produces no MCMC `theta_draws`. Use
+  it when reproducibility/quality matters more than R-faithfulness. Default stays
+  `"sparse"`.
+
 - `LabeledLDA(..., sampler="cvb0")` runs the CVB0 backend with the per-document
   label set applied as a *mask* on the responsibilities (γ is zero off the
   allowed topics). This is the supervised model WarpLDA could not serve — its

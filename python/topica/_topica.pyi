@@ -2330,12 +2330,21 @@ class KeyATM:
         gamma2: float = 1.0,
         seed: int = 42,
         estimate_alpha: bool = True,
+        sampler: str = "sparse",
     ) -> None:
         """estimate_alpha (default True, matching R keyATM) slice-samples an
         asymmetric document-topic prior alpha each sweep. Set it False for a
         fixed symmetric alpha: a faster fit (it skips the dominant non-sweep
         cost) at the price of the R-matching asymmetric prior. The base model
-        only; the covariate and dynamic models always learn their priors."""
+        only; the covariate and dynamic models always learn their priors.
+
+        sampler selects inference: "sparse" (default) is the collapsed-Gibbs
+        sampler validated against R keyATM; "cvb0" is deterministic collapsed
+        variational Bayes over the (topic, keyword-switch) states. CVB0 is an
+        opt-in alternative for the base model only (it errors with covariates,
+        timestamps, or a prior_offset) and does NOT preserve R-parity -- it is a
+        different, deterministic estimator with no MCMC theta_draws, useful when
+        you want reproducibility/quality over R-faithfulness."""
         ...
     @staticmethod
     def weighted_lda(

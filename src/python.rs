@@ -11244,6 +11244,9 @@ pub struct KeyATM {
     gamma2: f64,
     seed: u64,
     estimate_alpha: bool,
+    // CVB0 deterministic collapsed-variational inference for the base model
+    // (optional, non-R-parity; covariate/dynamic variants stay Gibbs-only).
+    cvb0: bool,
     fitted: bool,
     topic_names: Vec<String>,
     keyword_rate: Vec<f64>,
@@ -11295,7 +11298,7 @@ impl KeyATM {
     /// `beta`/`beta_keyword` are the regular and keyword topic-word smoothing, and
     /// `gamma1`/`gamma2` the Beta prior on the keyword-vs-regular switch.
     #[new]
-    #[pyo3(signature = (keywords, *, num_topics=None, alpha=None, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true))]
+    #[pyo3(signature = (keywords, *, num_topics=None, alpha=None, beta=0.01, beta_keyword=0.1, gamma1=1.0, gamma2=1.0, seed=42, estimate_alpha=true, sampler="sparse"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         keywords: &Bound<'_, PyDict>,
@@ -11307,6 +11310,7 @@ impl KeyATM {
         gamma2: f64,
         seed: u64,
         estimate_alpha: bool,
+        sampler: &str,
     ) -> PyResult<Self> {
         let (names, words) = parse_seed_dict(keywords)?;
         let k = num_topics.unwrap_or(names.len());
@@ -11323,9 +11327,18 @@ impl KeyATM {
         if !finite_pos(alpha) || !finite_pos(beta) || !finite_pos(beta_keyword) || !finite_pos(gamma1) || !finite_pos(gamma2) {
             return Err(PyValueError::new_err("alpha, beta, beta_keyword, gamma1, gamma2 must be > 0"));
         }
+        let cvb0 = match sampler {
+            "sparse" => false,
+            "cvb0" | "cvb" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler {other:?}; expected \"sparse\" or \"cvb0\""
+                )))
+            }
+        };
         Ok(KeyATM {
             key_names: names, keywords: words, num_topics: k, alpha, beta, beta_keyword,
-            gamma1, gamma2, seed, estimate_alpha, fitted: false, topic_names: Vec::new(),
+            gamma1, gamma2, seed, estimate_alpha, cvb0, fitted: false, topic_names: Vec::new(),
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
@@ -11353,6 +11366,7 @@ impl KeyATM {
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics, alpha, beta,
             beta_keyword: 0.1, gamma1: 1.0, gamma2: 1.0, seed, estimate_alpha: true,
+            cvb0: false,
             fitted: false,
             topic_names: Vec::new(), keyword_rate: Vec::new(), phi: None, theta: None,
             corpus: None, feature_effects: None, feature_names: Vec::new(),
@@ -11469,6 +11483,14 @@ impl KeyATM {
         } else {
             report_interval
         };
+
+        // The CVB0 backend covers only the base model.
+        if self.cvb0 && (timestamps.is_some() || covariates.is_some() || prior_offset.is_some()) {
+            return Err(PyValueError::new_err(
+                "sampler=\"cvb0\" supports only the base keyATM (no timestamps, covariates, or prior_offset)",
+            ));
+        }
+        let cvb0 = self.cvb0;
 
         // --- Dynamic model: timestamps drive a change-point HMM on prevalence. ---
         if let Some(ts) = timestamps {
@@ -11619,6 +11641,10 @@ impl KeyATM {
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
                     prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads,
                     offset.as_deref(), draws_opts, &mut rng,
+                ),
+                None if cvb0 => keyatm::fit_keyatm_cvb0(
+                    &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
+                    iters, weight_scheme, &mut rng,
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
@@ -11875,7 +11901,7 @@ impl KeyATM {
         Ok(KeyATM {
             key_names: Vec::new(), keywords: Vec::new(), num_topics: s.num_topics,
             alpha: s.alpha, beta: s.beta, beta_keyword: s.beta_keyword, gamma1: s.gamma1,
-            gamma2: s.gamma2, seed: s.seed, estimate_alpha: true, fitted: s.fitted,
+            gamma2: s.gamma2, seed: s.seed, estimate_alpha: true, cvb0: false, fitted: s.fitted,
             topic_names: s.topic_names,
             keyword_rate: s.keyword_rate, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
