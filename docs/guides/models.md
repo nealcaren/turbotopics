@@ -122,6 +122,11 @@ model = topica.DMR(num_topics=20, seed=1)
 model.fit(docs, X, feature_names=names)
 ```
 
+Like `LDA`, `DMR` accepts `sampler="warp"` (the WarpLDA backend, here with a
+per-document-α doc phase) for fine-grained, large-`K` models — flat per-sweep
+cost in `K`, several times faster than the default `"sparse"` sweep at `K ≳ 500`.
+Use the default `"sparse"` up to a couple hundred topics.
+
 ## DTM
 
 The Dynamic Topic Model: a fixed number of topics whose word distributions
