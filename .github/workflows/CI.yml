@@ -1,4 +1,4 @@
-# CI for rustmallet — a PyO3/maturin package producing abi3 wheels.
+# CI for topica — a PyO3/maturin package producing abi3 wheels.
 #
 # Jobs:
 #   test        — build in dev mode & run pytest on Linux, macOS, Windows
@@ -65,15 +65,62 @@ jobs:
       # build, and the suite is dominated by model fits, so an optimized build
       # turns a ~20-minute debug run into a few minutes. The extra compile time is
       # repaid many times over (and cached by rust-cache above).
+      # Rust unit tests. Run without the `python` feature: pyo3's
+      # extension-module mode does not link libpython into a standalone test
+      # binary, so the bindings crate cannot be unit-tested that way. This
+      # covers the core/model/saveformat tests. Cheap and cached; part of the
+      # test contract in CONTRIBUTING.md, so it gates PRs here too.
+      - name: cargo test
+        run: cargo test --lib
+
       - name: Build extension and run tests
         shell: bash
         run: |
           python -m venv .venv
           if [ -f .venv/bin/activate ]; then source .venv/bin/activate; else source .venv/Scripts/activate; fi
           python -m pip install --upgrade pip
-          pip install maturin numpy pytest pandas formulaic matplotlib
+          # Install the full test extra (scipy/plotly) plus polars so the viz
+          # and DataFrame surfaces are exercised, not silently importorskip-ed.
+          pip install maturin numpy pytest pandas formulaic matplotlib scipy plotly polars
           maturin develop --release --features python
           pytest -q
+
+  # ---------------------------------------------------------------------------
+  # Job: docs
+  # Builds the mkdocs site with --strict on Linux, so a broken nav entry, a dead
+  # cross-reference, or a mkdocstrings import failure fails the PR instead of
+  # silently deploying. (Deploy itself happens in docs.yml on push to main.)
+  # ---------------------------------------------------------------------------
+  docs:
+    name: docs (mkdocs --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # mkdocstrings imports topica to render the API reference, so the
+      # extension must be built into the environment before the docs build.
+      # maturin develop needs an active virtualenv, so create and activate one.
+      - name: Build extension and docs
+        shell: bash
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install maturin
+          pip install -r docs/requirements.txt
+          maturin develop --release --features python
+          mkdocs build --strict
 
   # ---------------------------------------------------------------------------
   # Job: build-wheels
