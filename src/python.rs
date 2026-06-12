@@ -2969,6 +2969,8 @@ pub struct DMR {
     // WarpLDA cache-efficient sampler (per-document-α doc phase) instead of the
     // default SparseLDA DMR sweep. Recommended for large K.
     warp: bool,
+    // CVB0 deterministic collapsed-variational inference (per-document α).
+    cvb0: bool,
 
     fitted: bool,
     topic_names: Vec<String>,
@@ -3022,12 +3024,13 @@ impl DMR {
         if !finite_pos(prior_variance) {
             return Err(PyValueError::new_err("prior_variance must be > 0"));
         }
-        let warp = match sampler {
-            "sparse" => false,
-            "warp" | "warplda" => true,
+        let (warp, cvb0) = match sampler {
+            "sparse" => (false, false),
+            "warp" | "warplda" => (true, false),
+            "cvb0" | "cvb" => (false, true),
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler {other:?}; expected \"sparse\" or \"warp\""
+                    "unknown sampler {other:?}; expected \"sparse\", \"warp\", or \"cvb0\""
                 )))
             }
         };
@@ -3040,6 +3043,7 @@ impl DMR {
             prior_variance,
             lbfgs_iters,
             warp,
+            cvb0,
             fitted: false,
             topic_names: Vec::new(),
             phi: None,
@@ -3149,8 +3153,34 @@ impl DMR {
 
         let beta = self.beta;
         let warp = self.warp;
+        let cvb0_flag = self.cvb0;
         let (acc_phi, acc_theta, theta_draw_buf, feat_eff, ll_history, converged_flag, model, corpus) =
-          if warp {
+          if cvb0_flag {
+            // CVB0 DMR: deterministic; per-document α is fed to the CVB0 sweep,
+            // and the soft expected counts E[n_dk] feed the λ optimizer directly.
+            // No MCMC, so no θ-draws and no convergence trace.
+            py.allow_threads(move || {
+                let alpha0 = vec![1.0f64; k];
+                let mut cv = cvb0::Cvb0::new(&corpus, k, &alpha0, beta, &mut rng);
+                for iter in 1..=iters {
+                    let doc_alpha = dmr::compute_doc_alpha(&lambda, &feats, None);
+                    cv.set_doc_alpha(doc_alpha);
+                    cv.sweep();
+                    if optimize_interval > 0 && iter > burn_in && iter % optimize_interval == 0 {
+                        dmr::optimize_lambda(
+                            &mut lambda, &feats, cv.doc_topic_expected(), k, nf,
+                            prior_variance, lbfgs_iters, None,
+                        );
+                    }
+                }
+                let mut acc_phi = vec![vec![0.0f64; k]; num_types];
+                let mut acc_theta = vec![vec![0.0f64; k]; num_docs];
+                cv.phi_into(&mut acc_phi);
+                cv.theta_into(&mut acc_theta);
+                let model = cv.to_topic_model(&corpus);
+                (acc_phi, acc_theta, Vec::new(), lambda, Vec::new(), false, model, corpus)
+            })
+          } else if warp {
             // WarpLDA DMR path: same λ-optimization loop, but the per-document
             // prior α is fed to the WarpLDA per-doc doc phase each sweep. Like the
             // LDA WarpLDA path it computes no inline log_likelihood, so the
@@ -3671,7 +3701,7 @@ impl DMR {
         Ok(DMR {
             num_topics: s.num_topics, beta: s.beta, optimize_interval: s.optimize_interval,
             burn_in: s.burn_in, seed: s.seed, prior_variance: s.prior_variance,
-            lbfgs_iters: s.lbfgs_iters, warp: false, fitted: s.fitted,
+            lbfgs_iters: s.lbfgs_iters, warp: false, cvb0: false, fitted: s.fitted,
             topic_names,
             phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             feature_effects: arr2_back(s.feature_effects),
@@ -8483,6 +8513,8 @@ pub struct SeededLDA {
     // WarpLDA cache-efficient sampler (seeded word phase) instead of the default
     // SparseLDA seeded sweep. Recommended for large K.
     warp: bool,
+    // CVB0 deterministic collapsed-variational inference (seeded β).
+    cvb0: bool,
     fitted: bool,
     topic_names: Vec<String>,
     phi: Option<Array2<f64>>,
@@ -8533,17 +8565,18 @@ impl SeededLDA {
         if names.len() + residual < 2 {
             return Err(PyValueError::new_err("need at least 2 topics (seeded + residual)"));
         }
-        let warp = match sampler {
-            "sparse" => false,
-            "warp" | "warplda" => true,
+        let (warp, cvb0) = match sampler {
+            "sparse" => (false, false),
+            "warp" | "warplda" => (true, false),
+            "cvb0" | "cvb" => (false, true),
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler {other:?}; expected \"sparse\" or \"warp\""
+                    "unknown sampler {other:?}; expected \"sparse\", \"warp\", or \"cvb0\""
                 )))
             }
         };
         Ok(SeededLDA {
-            seed_names: names, seed_words: words, residual, alpha, beta, weight, seed, warp,
+            seed_names: names, seed_words: words, residual, alpha, beta, weight, seed, warp, cvb0,
             fitted: false, topic_names: Vec::new(), phi: None, theta: None,
             theta_draws: None, corpus: None,
             log_likelihood_history: Vec::new(), converged: false,
@@ -8621,6 +8654,38 @@ impl SeededLDA {
         let draws_opts = keyatm::ThetaDrawOpts::new(keep_theta_draws, num_theta_draws, iters);
         warn_theta_draw_memory(py, keep_theta_draws, num_theta_draws, corpus.num_docs(), num_topics)?;
         let mut rng = Pcg64Mcg::seed_from_u64(self.seed);
+
+        if self.cvb0 {
+            // CVB0 seeded path: deterministic, asymmetric β via set_seeds. The
+            // per-document prior is not threaded through CVB0's θ output yet.
+            if doc_alpha.is_some() {
+                return Err(PyValueError::new_err(
+                    "sampler=\"cvb0\" does not support doc_topic_prior yet; use sampler=\"sparse\"",
+                ));
+            }
+            let (phi_tw, theta_dk, corpus) = py.allow_threads(move || {
+                let alpha0 = vec![alpha; num_topics];
+                let mut cv = cvb0::Cvb0::new(&corpus, num_topics, &alpha0, beta, &mut rng);
+                cv.set_seeds(&seeds, seed_weight);
+                for _ in 0..iters {
+                    cv.sweep();
+                }
+                (cv.topic_word(), cv.doc_topic(), corpus)
+            });
+            self.phi = Some(vecs_to_arr2(&phi_tw));
+            self.theta = Some(vecs_to_arr2(&theta_dk));
+            self.theta_draws = None;
+            let mut names = self.seed_names.clone();
+            for i in 0..self.residual {
+                names.push(format!("residual_{}", i + 1));
+            }
+            self.topic_names = names;
+            self.corpus = Some(corpus);
+            self.log_likelihood_history = Vec::new();
+            self.converged = false;
+            self.fitted = true;
+            return Ok(());
+        }
 
         if self.warp {
             // WarpLDA seeded path. The per-document prior (doc_topic_prior) is not
@@ -8806,7 +8871,7 @@ impl SeededLDA {
         Ok(SeededLDA {
             seed_names: Vec::new(), seed_words: Vec::new(),
             residual: s.num_topics.saturating_sub(s.topic_names.iter().filter(|n| !n.starts_with("residual_")).count()),
-            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, warp: false, fitted: s.fitted,
+            alpha: s.alpha, beta: s.beta, weight: s.weight, seed: s.seed, warp: false, cvb0: false, fitted: s.fitted,
             topic_names: s.topic_names, phi: arr2_back(s.phi), theta: arr2_back(s.theta),
             theta_draws: None, corpus: s.corpus,
             log_likelihood_history: s.log_likelihood_history,

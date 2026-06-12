@@ -509,3 +509,27 @@ class TestDmrWarp:
             m = DMR(num_topics=2, seed=1, sampler=name)
             m.fit(docs, feats, iters=50)
             assert m.topic_word.shape[0] == 2
+
+
+class TestDmrCvb0:
+    def test_recovers_and_valid(self):
+        docs, _, feats = _make_corpus(seed=2)
+        m = _fit_dmr(docs, feats, sampler="cvb0")
+        a = _identify_A_topic(m)
+        assert {w for w, _ in m.top_words(5, topic=a)} == set(_VOCAB_A)
+        npt.assert_allclose(m.topic_word.sum(axis=1), 1.0)
+        npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0)
+
+    def test_deterministic_and_no_draws(self):
+        docs, _, feats = _make_corpus(seed=2)
+        a = _fit_dmr(docs, feats, seed=4, sampler="cvb0")
+        b = _fit_dmr(docs, feats, seed=4, sampler="cvb0")
+        npt.assert_array_equal(a.topic_word, b.topic_word)
+        assert a.theta_draws is None
+
+    def test_feature_effect_sign_matches_sparse(self):
+        docs, _, feats = _make_corpus(seed=2)
+        sparse = _fit_dmr(docs, feats, sampler="sparse")
+        cvb = _fit_dmr(docs, feats, sampler="cvb0")
+        assert sparse.feature_effects[_identify_A_topic(sparse), 1] > 0
+        assert cvb.feature_effects[_identify_A_topic(cvb), 1] > 0

@@ -47,6 +47,18 @@ pub struct Cvb0 {
     n_k: Vec<f64>,
     /// Document lengths (token counts), for θ.
     doc_len: Vec<f64>,
+
+    /// Per-document prior `α_{d,k}` (DMR). When `Some`, replaces the uniform α.
+    doc_alpha: Option<Vec<Vec<f64>>>,
+    /// Asymmetric β for SeededLDA (`β_{k,w}` and per-topic `β_sum_k`).
+    seed: Option<CvbSeedBeta>,
+}
+
+/// SeededLDA's asymmetric-β bookkeeping for CVB0 (mirrors the WarpLDA one).
+struct CvbSeedBeta {
+    seed_weight: f64,
+    beta_sum_k: Vec<f64>,
+    inv_seeds: Vec<Vec<u32>>,
 }
 
 impl Cvb0 {
@@ -116,7 +128,42 @@ impl Cvb0 {
             n_wk,
             n_k,
             doc_len,
+            doc_alpha: None,
+            seed: None,
         }
+    }
+
+    /// Use a per-document prior `α_{d,k}` (DMR); called each outer iteration
+    /// after recomputing α from the current λ.
+    pub fn set_doc_alpha(&mut self, doc_alpha: Vec<Vec<f64>>) {
+        self.doc_alpha = Some(doc_alpha);
+    }
+
+    /// Enable SeededLDA's asymmetric β. `seeds[k]` are the seed word-ids for
+    /// topic `k`, each gaining `seed_weight` in topic `k`.
+    pub fn set_seeds(&mut self, seeds: &[Vec<usize>], seed_weight: f64) {
+        let k = self.num_topics;
+        let v = self.num_types;
+        let mut beta_sum_k = vec![self.beta * v as f64; k];
+        let mut inv_seeds: Vec<Vec<u32>> = vec![Vec::new(); v];
+        for (t, ws) in seeds.iter().enumerate().take(k) {
+            beta_sum_k[t] += ws.len() as f64 * seed_weight;
+            for &w in ws {
+                if w < v {
+                    inv_seeds[w].push(t as u32);
+                }
+            }
+        }
+        for row in inv_seeds.iter_mut() {
+            row.sort_unstable();
+        }
+        self.seed = Some(CvbSeedBeta { seed_weight, beta_sum_k, inv_seeds });
+    }
+
+    /// Expected document-topic counts `E[n_dk]` — the soft input the DMR λ
+    /// optimizer consumes directly (it already takes `&[Vec<f64>]`).
+    pub fn doc_topic_expected(&self) -> &[Vec<f64>] {
+        &self.n_dk
     }
 
     /// One deterministic CVB0 sweep over every cell. Returns the mean absolute
@@ -145,13 +192,29 @@ impl Cvb0 {
                     self.n_k[t] -= cf * g;
                 }
 
-                // Recompute γ ∝ (n_dk+α)(n_wk+β)/(n_k+β̄).
+                // Recompute γ ∝ (n_dk+α_{d,k})(n_wk+β_{k,w})/(n_k+β_sum_k), with
+                // the per-document α (DMR) and asymmetric β (SeededLDA) folded in.
                 let mut sum = 0.0f64;
                 for t in 0..k {
-                    let val = (self.n_dk[d][t] + self.alpha[t]) * (self.n_wk[w][t] + beta)
-                        / (self.n_k[t] + beta_sum);
-                    self.gamma[d][i][t] = if val > 0.0 { val } else { 0.0 };
-                    sum += self.gamma[d][i][t];
+                    let a = match &self.doc_alpha {
+                        Some(da) => da[d][t],
+                        None => self.alpha[t],
+                    };
+                    let (bt, bsum) = match &self.seed {
+                        Some(s) => (
+                            if s.inv_seeds[w].binary_search(&(t as u32)).is_ok() {
+                                beta + s.seed_weight
+                            } else {
+                                beta
+                            },
+                            s.beta_sum_k[t],
+                        ),
+                        None => (beta, beta_sum),
+                    };
+                    let val = (self.n_dk[d][t] + a) * (self.n_wk[w][t] + bt) / (self.n_k[t] + bsum);
+                    let g = if val > 0.0 { val } else { 0.0 };
+                    self.gamma[d][i][t] = g;
+                    sum += g;
                 }
 
                 // Normalize, accumulate |Δγ|, and add the new mass back.
@@ -176,20 +239,67 @@ impl Cvb0 {
     /// Smoothed topic-word φ `(E[n_wk]+β)/(E[n_k]+β̄)`, accumulated into
     /// `acc[word][topic]` (matches the MH samplers' orientation).
     pub fn phi_into(&self, acc: &mut [Vec<f64>]) {
+        let beta = self.beta;
         for w in 0..self.num_types {
             for t in 0..self.num_topics {
-                let denom = self.n_k[t] + self.beta_sum;
-                acc[w][t] += (self.n_wk[w][t] + self.beta) / denom;
+                let (bt, bsum) = match &self.seed {
+                    Some(s) => (
+                        if s.inv_seeds[w].binary_search(&(t as u32)).is_ok() {
+                            beta + s.seed_weight
+                        } else {
+                            beta
+                        },
+                        s.beta_sum_k[t],
+                    ),
+                    None => (beta, self.beta_sum),
+                };
+                acc[w][t] += (self.n_wk[w][t] + bt) / (self.n_k[t] + bsum);
             }
         }
     }
 
-    /// Smoothed doc-topic θ `(E[n_dk]+α)/(n_d+α_sum)`, into `acc[doc][topic]`.
+    /// Smoothed topic-word matrix, shape `[topic][word]` (seeded-β aware) — the
+    /// topic-major orientation the SeededLDA output expects.
+    pub fn topic_word(&self) -> Vec<Vec<f64>> {
+        let beta = self.beta;
+        let mut phi = vec![vec![0.0f64; self.num_types]; self.num_topics];
+        for w in 0..self.num_types {
+            for t in 0..self.num_topics {
+                let (bt, bsum) = match &self.seed {
+                    Some(s) => (
+                        if s.inv_seeds[w].binary_search(&(t as u32)).is_ok() {
+                            beta + s.seed_weight
+                        } else {
+                            beta
+                        },
+                        s.beta_sum_k[t],
+                    ),
+                    None => (beta, self.beta_sum),
+                };
+                phi[t][w] = (self.n_wk[w][t] + bt) / (self.n_k[t] + bsum);
+            }
+        }
+        phi
+    }
+
+    /// Smoothed doc-topic θ matrix, shape `[doc][topic]` (per-document α).
+    pub fn doc_topic(&self) -> Vec<Vec<f64>> {
+        let mut th = vec![vec![0.0f64; self.num_topics]; self.cells.len()];
+        self.theta_into(&mut th);
+        th
+    }
+
+    /// Smoothed doc-topic θ `(E[n_dk]+α_{d,k})/(n_d+α_sum_d)`, into
+    /// `acc[doc][topic]` (per-document α for DMR).
     pub fn theta_into(&self, acc: &mut [Vec<f64>]) {
         for d in 0..self.cells.len() {
-            let denom = self.doc_len[d] + self.alpha_sum;
+            let (a_row, a_sum): (&[f64], f64) = match &self.doc_alpha {
+                Some(da) => (&da[d], da[d].iter().sum()),
+                None => (&self.alpha, self.alpha_sum),
+            };
+            let denom = self.doc_len[d] + a_sum;
             for t in 0..self.num_topics {
-                acc[d][t] += (self.n_dk[d][t] + self.alpha[t]) / denom;
+                acc[d][t] += (self.n_dk[d][t] + a_row[t]) / denom;
             }
         }
     }

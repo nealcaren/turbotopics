@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `DMR(..., sampler="cvb0")` and `SeededLDA(..., sampler="cvb0")` extend the CVB0
+  backend to those models — DMR with a per-document α (and the soft expected
+  counts `E[n_dk]` feeding the λ optimizer directly, a cleaner fit than the
+  hard-count sparse/warp paths), SeededLDA with the asymmetric seed β. Same
+  deterministic, higher-coherence-at-larger-K, no-`theta_draws` trade as LDA's
+  CVB0. Default stays `"sparse"`; the CVB0 SeededLDA path does not yet support
+  `doc_topic_prior`.
+
 - `LDA(..., sampler="cvb0")` adds collapsed variational Bayes, zeroth-order
   (Asuncion et al. 2009) as a deterministic, non-MCMC inference backend for the
   same LDA model. Each (document, word-type) cell keeps a soft topic
