@@ -110,8 +110,12 @@ jobs:
 
       # mkdocstrings imports topica to render the API reference, so the
       # extension must be built into the environment before the docs build.
+      # maturin develop needs an active virtualenv, so create and activate one.
       - name: Build extension and docs
+        shell: bash
         run: |
+          python -m venv .venv
+          source .venv/bin/activate
           python -m pip install --upgrade pip
           pip install maturin
           pip install -r docs/requirements.txt
