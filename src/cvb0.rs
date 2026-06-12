@@ -52,6 +52,10 @@ pub struct Cvb0 {
     doc_alpha: Option<Vec<Vec<f64>>>,
     /// Asymmetric β for SeededLDA (`β_{k,w}` and per-topic `β_sum_k`).
     seed: Option<CvbSeedBeta>,
+    /// Per-document allowed-topic sets (LabeledLDA). When `Some`, a document's
+    /// responsibilities are confined to `allowed[d]` (an empty set = all topics).
+    /// Masking is free in CVB0: γ is simply zero off the allowed set.
+    allowed: Option<Vec<Vec<usize>>>,
 }
 
 /// SeededLDA's asymmetric-β bookkeeping for CVB0 (mirrors the WarpLDA one).
@@ -130,7 +134,71 @@ impl Cvb0 {
             doc_len,
             doc_alpha: None,
             seed: None,
+            allowed: None,
         }
+    }
+
+    /// Recompute all expected counts from the current γ (used after a structural
+    /// change such as applying a topic mask).
+    fn rebuild_counts(&mut self) {
+        let k = self.num_topics;
+        for row in self.n_dk.iter_mut() {
+            for x in row.iter_mut() {
+                *x = 0.0;
+            }
+        }
+        for row in self.n_wk.iter_mut() {
+            for x in row.iter_mut() {
+                *x = 0.0;
+            }
+        }
+        for x in self.n_k.iter_mut() {
+            *x = 0.0;
+        }
+        for d in 0..self.cells.len() {
+            for (i, &(w, c)) in self.cells[d].iter().enumerate() {
+                let (w, cf) = (w as usize, c as f64);
+                for t in 0..k {
+                    let g = self.gamma[d][i][t];
+                    self.n_dk[d][t] += cf * g;
+                    self.n_wk[w][t] += cf * g;
+                    self.n_k[t] += cf * g;
+                }
+            }
+        }
+    }
+
+    /// Confine each document to its allowed topics (LabeledLDA). An empty
+    /// `allowed[d]` leaves that document unconstrained. Zeroes γ off the allowed
+    /// set, renormalizes, and rebuilds the expected counts.
+    pub fn set_allowed(&mut self, allowed: Vec<Vec<usize>>) {
+        let k = self.num_topics;
+        for d in 0..self.cells.len() {
+            if allowed[d].is_empty() {
+                continue;
+            }
+            for i in 0..self.cells[d].len() {
+                let g = &mut self.gamma[d][i];
+                for t in 0..k {
+                    if allowed[d].binary_search(&t).is_err() {
+                        g[t] = 0.0;
+                    }
+                }
+                let sum: f64 = g.iter().sum();
+                if sum > 0.0 {
+                    for x in g.iter_mut() {
+                        *x /= sum;
+                    }
+                } else {
+                    let u = 1.0 / allowed[d].len() as f64;
+                    for &t in &allowed[d] {
+                        g[t] = u;
+                    }
+                }
+            }
+        }
+        self.allowed = Some(allowed);
+        self.rebuild_counts();
     }
 
     /// Use a per-document prior `α_{d,k}` (DMR); called each outer iteration
@@ -173,18 +241,27 @@ impl Cvb0 {
         let k = self.num_topics;
         let beta = self.beta;
         let beta_sum = self.beta_sum;
-        let uniform = 1.0 / k as f64;
         let mut total_change = 0.0f64;
         let mut n_cells = 0usize;
         let mut old = vec![0.0f64; k];
+        let all_topics: Vec<usize> = (0..k).collect();
 
         for d in 0..self.cells.len() {
+            // The topic support for this document: its allowed set (LabeledLDA)
+            // or all topics. γ stays 0 off the support, so the loops touch only
+            // the supported topics.
+            let topics: &[usize] = match &self.allowed {
+                Some(al) if !al[d].is_empty() => al[d].as_slice(),
+                _ => all_topics.as_slice(),
+            };
+            let uniform = 1.0 / topics.len() as f64;
+
             for i in 0..self.cells[d].len() {
                 let (w, c) = self.cells[d][i];
                 let (w, cf) = (w as usize, c as f64);
 
                 // Snapshot the old γ and remove this cell's mass (`-dw` counts).
-                for t in 0..k {
+                for &t in topics {
                     let g = self.gamma[d][i][t];
                     old[t] = g;
                     self.n_dk[d][t] -= cf * g;
@@ -195,7 +272,7 @@ impl Cvb0 {
                 // Recompute γ ∝ (n_dk+α_{d,k})(n_wk+β_{k,w})/(n_k+β_sum_k), with
                 // the per-document α (DMR) and asymmetric β (SeededLDA) folded in.
                 let mut sum = 0.0f64;
-                for t in 0..k {
+                for &t in topics {
                     let a = match &self.doc_alpha {
                         Some(da) => da[d][t],
                         None => self.alpha[t],
@@ -218,7 +295,7 @@ impl Cvb0 {
                 }
 
                 // Normalize, accumulate |Δγ|, and add the new mass back.
-                for t in 0..k {
+                for &t in topics {
                     let new = if sum > 0.0 { self.gamma[d][i][t] / sum } else { uniform };
                     self.gamma[d][i][t] = new;
                     total_change += (new - old[t]).abs();
@@ -292,13 +369,21 @@ impl Cvb0 {
     /// Smoothed doc-topic θ `(E[n_dk]+α_{d,k})/(n_d+α_sum_d)`, into
     /// `acc[doc][topic]` (per-document α for DMR).
     pub fn theta_into(&self, acc: &mut [Vec<f64>]) {
+        let all_topics: Vec<usize> = (0..self.num_topics).collect();
         for d in 0..self.cells.len() {
-            let (a_row, a_sum): (&[f64], f64) = match &self.doc_alpha {
-                Some(da) => (&da[d], da[d].iter().sum()),
-                None => (&self.alpha, self.alpha_sum),
+            let a_row: &[f64] = match &self.doc_alpha {
+                Some(da) => &da[d],
+                None => &self.alpha,
             };
+            // Confine θ to the allowed topics (LabeledLDA): off the set it is 0,
+            // and the normalizer sums α over the allowed topics only.
+            let topics: &[usize] = match &self.allowed {
+                Some(al) if !al[d].is_empty() => al[d].as_slice(),
+                _ => all_topics.as_slice(),
+            };
+            let a_sum: f64 = topics.iter().map(|&t| a_row[t]).sum();
             let denom = self.doc_len[d] + a_sum;
-            for t in 0..self.num_topics {
+            for &t in topics {
                 acc[d][t] += (self.n_dk[d][t] + a_row[t]) / denom;
             }
         }
@@ -400,6 +485,37 @@ mod tests {
             }
         }
         assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
+    }
+
+    #[test]
+    fn masked_path_respects_labels() {
+        // LabeledLDA-style: each doc may only use its own block's topic. After
+        // fitting, θ must put zero mass on disallowed topics, and each block's
+        // words must top its own topic.
+        let wpb = 5;
+        let (corpus, n_blocks) = planted(4, wpb, 200);
+        let k = n_blocks;
+        let alpha = vec![0.1f64; k];
+        let mut rng = Pcg64Mcg::seed_from_u64(1);
+        let mut m = Cvb0::new(&corpus, k, &alpha, 0.01, &mut rng);
+        // doc d (block d % n_blocks) is allowed only topic (d % n_blocks).
+        let allowed: Vec<Vec<usize>> =
+            (0..corpus.docs.len()).map(|d| vec![d % n_blocks]).collect();
+        m.set_allowed(allowed.clone());
+        for _ in 0..60 {
+            m.sweep();
+        }
+        let mut th = vec![vec![0.0f64; k]; corpus.docs.len()];
+        m.theta_into(&mut th);
+        for d in 0..corpus.docs.len() {
+            let b = d % n_blocks;
+            for t in 0..k {
+                if t != b {
+                    assert!(th[d][t].abs() < 1e-12, "doc {d} leaked mass to topic {t}");
+                }
+            }
+            assert!(th[d][b] > 0.5, "doc {d} not concentrated on its label");
+        }
     }
 
     #[test]

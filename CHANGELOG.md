@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `LabeledLDA(..., sampler="cvb0")` runs the CVB0 backend with the per-document
+  label set applied as a *mask* on the responsibilities (γ is zero off the
+  allowed topics). This is the supervised model WarpLDA could not serve — its
+  masked proposals would mix at a fraction of a percent — whereas masking is
+  free in CVB0: it enforces the supervised constraint exactly (zero θ off the
+  label set), deterministically, and tends to higher coherence. No MCMC
+  `theta_draws`. Default stays `"sparse"`.
+
 - `DMR(..., sampler="cvb0")` and `SeededLDA(..., sampler="cvb0")` extend the CVB0
   backend to those models — DMR with a per-document α (and the soft expected
   counts `E[n_dk]` feeding the λ optimizer directly, a cleaner fit than the
