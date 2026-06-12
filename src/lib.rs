@@ -13,6 +13,7 @@ pub mod hdp;
 pub mod hlda;
 pub mod keyatm;
 pub mod labeled;
+pub mod cvb0;
 pub mod lightlda;
 pub mod mh;
 pub mod linalg;

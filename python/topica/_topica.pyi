@@ -1262,12 +1262,14 @@ class LDA:
         SparseLDA collapsed Gibbs sampler; "lightlda" is the alias-table
         Metropolis-Hastings sampler of Yuan et al. (2015); "warp" is the
         cache-efficient two-pass MH sampler of Chen et al. (2016, WarpLDA),
-        whose per-sweep cost is flat in K. "sparse" is the best choice at the
-        topic counts typical of social-science work (K up to ~200). For
-        large-K, fine-grained models (K >= ~500) "warp" is the recommended
-        sampler: it is several times faster than "sparse" and both faster and
-        higher-coherence than "lightlda" there. mh_steps is the number of MH
-        proposals per token (lightlda only).
+        whose per-sweep cost is flat in K; "cvb0" is collapsed variational
+        Bayes, zeroth-order (Asuncion et al. 2009) -- deterministic, non-MCMC
+        inference that tends to give higher topic coherence at moderate-to-large
+        K, at the cost of O(K)-per-token compute (slower, not faster). "sparse"
+        is the best speed/quality default up to ~K=200; "warp" is the speed
+        choice for large K; "cvb0" is the quality choice when fit time is not the
+        constraint. CVB0 produces no MCMC theta draws (theta_draws is None).
+        mh_steps is the number of MH proposals per token (lightlda only).
 
         init selects the initial token-topic assignment: "random" (default,
         MALLET-compatible) draws each token's topic uniformly; "spectral" seeds

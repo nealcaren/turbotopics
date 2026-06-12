@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `LDA(..., sampler="cvb0")` adds collapsed variational Bayes, zeroth-order
+  (Asuncion et al. 2009) as a deterministic, non-MCMC inference backend for the
+  same LDA model. Each (document, word-type) cell keeps a soft topic
+  responsibility updated from expected counts, so a fit is exactly reproducible
+  for a seed and has no burn-in. It tends to give higher topic coherence than
+  the samplers, increasingly so at larger K (on a 2,000-document poliblog
+  subsample at K=100, mean c_v -68.5 vs -79.1 for `"sparse"`), at the cost of
+  O(K)-per-token compute, so it is slower, not faster (~47s vs ~10s at K=100).
+  Use it when topic quality matters more than fit time; it produces no MCMC
+  theta draws (`theta_draws` is None). Default stays `"sparse"`.
+
 - `SeededLDA(..., sampler="warp")` runs the WarpLDA backend (a seeded word phase:
   the word-proposal and its acceptance carry the asymmetric seed β
   `β_{k,w} = β + seed_weight·[w ∈ seeds_k]` and the per-topic normalizer
