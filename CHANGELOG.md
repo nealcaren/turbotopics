@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-06-12
+
+### Fixed
+
+- `plot_report`'s topic-correlation panel now masks the always-1.0 diagonal and
+  scales to the off-diagonal range, instead of drawing the raw matrix on a
+  saturated +/-1 scale where the diagonal swamped the real structure. (The
+  original 0.12.1 fix had only reached the standalone `viz.TopicCorrelation`.)
+- Save/load now round-trips the retained MCMC `theta_draws` for the remaining
+  collapsed-Gibbs models (DMR, LabeledLDA, SAGE, KeyATM), so method-of-composition
+  standard errors survive a save/load round-trip for every model, not just LDA and
+  SeededLDA (#102).
+
+### Changed
+
+- `plot_report`'s "Prevalence by class" panel is now a connected-dot (dumbbell)
+  plot for up to five classes: one dot per class per topic joined by a line, with
+  topics ordered by the between-class gap, so the class differences read directly.
+  It falls back to the heatmap for more than five classes.
+
 ## [0.16.0] - 2026-06-12
 
 ### Fixed
@@ -25,17 +45,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   `save`/`load`, `log_likelihood_history`, `doc_names`, several `fit()` keywords,
   and `Corpus.from_documents` parameters added; a bogus `HLDA.coherence` removed),
   and a parametrized test now guards against future drift (#108).
-- `plot_report`'s topic-correlation panel now masks the always-1.0 diagonal and
-  scales to the off-diagonal range, instead of drawing the raw matrix on a
-  saturated +/-1 scale where the diagonal swamped the real structure. (The
-  original fix had only reached the standalone `viz.TopicCorrelation`.)
 
 ### Changed
 
-- `plot_report`'s "Prevalence by class" panel is now a connected-dot (dumbbell)
-  plot for up to five classes: one dot per class per topic joined by a line, with
-  topics ordered by the between-class gap, so the class differences read directly.
-  It falls back to the heatmap for more than five classes.
 - Covariate, feature, embedding, and timestamp matrices are now checked for
   non-finite values (NaN/inf) at the boundary and raise a clear `ValueError`
   naming the parameter, instead of panicking (KeyATM) or silently producing
@@ -80,10 +92,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   format version, model tag). Loading a file saved by an earlier version, or
   loading a file saved as the wrong model, now raises a clear error instead of
   panicking or silently misreading. Models saved before this release must be
-  re-fit and re-saved. Save/load now also round-trips the retained MCMC
-  `theta_draws` (so method-of-composition standard errors survive a round-trip)
-  for every collapsed-Gibbs model: LDA and SeededLDA plus DMR, LabeledLDA, SAGE,
-  and KeyATM, and the LDA sampler-backend flags (#102).
+  re-fit and re-saved. `LDA` and `SeededLDA` save/load also round-trip the
+  retained MCMC `theta_draws` (so method-of-composition standard errors survive a
+  round-trip) and the LDA sampler-backend flags (#98, #102).
 
 ### Added
 
