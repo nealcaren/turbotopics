@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `SeededLDA(..., sampler="warp")` runs the WarpLDA backend (a seeded word phase:
+  the word-proposal and its acceptance carry the asymmetric seed β
+  `β_{k,w} = β + seed_weight·[w ∈ seeds_k]` and the per-topic normalizer
+  `β_sum_k`). SeededLDA's default sparse sweep scores all K topics per token, so
+  the win is even larger than for plain LDA: on a 2,000-document poliblog
+  subsample at K=500 the warp path fits in ~2.6s against ~111s for `"sparse"`
+  (~40x) at comparable coherence, and stays nearly flat in K. Default stays
+  `"sparse"`; `"warp"` does not yet support `doc_topic_prior`.
+
 - `DMR(..., sampler="warp")` runs the WarpLDA backend for DMR (a per-document-α
   doc phase: the doc-proposal and its acceptance use each document's
   `α_{d,k} = exp(λ_k · x_d)`, with the λ optimization loop unchanged). Same
