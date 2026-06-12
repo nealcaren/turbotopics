@@ -107,16 +107,21 @@ class TestNeuralConvergenceTol:
         docs = _tiny_docs(n=60)
         vocab = sorted({w for d in docs for w in d})
         emb = self._word_embeddings(vocab)
+        # Constructor sets a loose (never-stop) tol; the fit() override sets a
+        # tight one, so the fit() value must take effect: the run stops early.
         m = topica.ETM(num_topics=2, convergence_tol=0.0, seed=1)
-        # Override via fit(); tight tol should stop early (or at minimum not error)
         m.fit(docs, emb, vocab, iters=50, convergence_tol=1.0)
         assert m.topic_word.shape[0] == 2
+        assert m.converged is True
+        assert len(m.fit_history) < 50
 
     def test_prodlda_convergence_tol_fit_override(self):
         docs = _tiny_docs(n=60)
         m = topica.ProdLDA(num_topics=2, convergence_tol=0.0, seed=1)
         m.fit(docs, iters=30, convergence_tol=1.0)
         assert m.topic_word.shape[0] == 2
+        assert m.converged is True
+        assert len(m.fit_history) < 30
 
     def test_fastopic_convergence_tol_fit_override(self):
         docs = _tiny_docs(n=60)
@@ -124,6 +129,8 @@ class TestNeuralConvergenceTol:
         m = topica.FASTopic(num_topics=2, convergence_tol=0.0, seed=1)
         m.fit(docs, emb, iters=30, convergence_tol=1.0)
         assert m.topic_word.shape[0] == 2
+        assert m.converged is True
+        assert len(m.fit_history) < 30
 
     def test_etm_em_tol_constructor_warns(self):
         docs = _tiny_docs(n=60)

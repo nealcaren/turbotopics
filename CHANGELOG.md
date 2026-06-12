@@ -38,6 +38,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Changed
 
+- API naming consistency (with backward-compatible aliases): the convergence
+  tolerance is now `convergence_tol` in `fit()` for every iterative model
+  (`em_tol` still works and warns; for the neural models `convergence_tol` is
+  also accepted in `fit()` and overrides the constructor value). The topic-word
+  prior is `beta` everywhere (`eta` kept as a deprecated alias on HDP/HLDA). A
+  `covariates=` keyword is now accepted on every covariate model as an alias of
+  the domain name (`prevalence=` for STM/STS, `features=` for DMR, which keep
+  working; passing both raises a clear error). Verbosity is `progress_interval`
+  (`report_interval` deprecated on HDP/GSDMM/KeyATM). `num_threads` is accepted
+  in both the constructor and `fit()` (fit overrides) on LDA and KeyATM. SAGE's
+  `burn_in` default is now 200, matching LDA/DMR. `alpha_sum` is unchanged (it
+  is the sum over topics, intentionally distinct from a per-topic `alpha`). (#107)
 - API consistency: `transform()` now takes `iters` (the canonical name used by
   `fit()`); the old `iterations=` keyword still works but raises a
   `DeprecationWarning` (#104). `SAGE.top_words` now matches every other model's
