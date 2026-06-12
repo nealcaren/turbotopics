@@ -27,6 +27,7 @@ pub mod seeded;
 pub mod slda;
 pub mod spectral;
 pub mod variational;
+pub mod warplda;
 
 // Embedding-native model branch (Top2Vec/BERTopic/...): clustering pipeline over
 // user-supplied embeddings. Behind the `embeddings` feature (implied by `python`).

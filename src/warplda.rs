@@ -1,0 +1,425 @@
+//! WarpLDA: a cache-efficient O(1) MH sampler for LDA
+//! (Chen, Li, Zhu & Chen, *PVLDB* 9(10), 2016).
+//!
+//! Like LightLDA ([`crate::lightlda`]) this is a Metropolis-Hastings sampler that
+//! draws from cheap proposal distributions and corrects the bias with an accept/
+//! reject step, so each token costs O(1) amortized work. What WarpLDA adds is a
+//! **reordering** that makes the random memory access cache-resident, which is
+//! where LightLDA bottlenecks (its per-token access to the K×V word-topic matrix
+//! misses the cache). The trick is a Monte-Carlo EM (MCEM) formulation in which
+//! the count tables are held **fixed while every token is sampled** (a *delayed
+//! update*), and the observation that the two MH acceptance ratios decouple:
+//!
+//! * **Doc-proposal** `q_d(k) ∝ C_dk + α_k`, accepted with (Eq. 7, word phase)
+//!   `π_d = min(1, (C_wk' + β)/(C_wk + β) · (C_k + β̄)/(C_k' + β̄))` — needs only
+//!   the word counts `C_w` and the global `C_k`.
+//! * **Word-proposal** `q_w(k) ∝ C_wk + β`, accepted with (Eq. 7, doc phase)
+//!   `π_w = min(1, (C_dk' + α_k')/(C_dk + α_k) · (C_k + β̄)/(C_k' + β̄))` — needs
+//!   only the doc counts `C_d` and `C_k`.
+//!
+//! The `C_d` terms cancel in `π_d` and the `C_w` terms cancel in `π_w`. So one
+//! iteration runs as two passes, each touching a single count matrix:
+//!
+//! * **Doc phase** — visit tokens document-by-document. Build `C_d` for the
+//!   document on the fly (one row, cache-resident), *accept the word-proposals*
+//!   pending from the last word phase (uses `C_d`), then *draw fresh
+//!   doc-proposals* (uses `C_d`).
+//! * **Word phase** — visit tokens word-by-word. Build `C_w` for the word on the
+//!   fly, *accept the doc-proposals* (uses `C_w`), then *draw fresh
+//!   word-proposals* (uses `C_w`).
+//!
+//! `C_k` is snapshotted at the start of each phase and recomputed between phases.
+//! Neither `C_d` nor `C_w` is ever stored as a matrix — both are rebuilt per
+//! document / per word from the contiguous run of token topics, so the only
+//! random-accessed state is the small `C_k` vector. WarpLDA targets the MCEM/MAP
+//! solution, which Asuncion et al. (2009) show is almost identical to the
+//! collapsed-Gibbs posterior at matched hyperparameters; the proposal forms are
+//! exactly LightLDA's, so the same `to_topic_model` packing is reused unchanged.
+//!
+//! Stage 1 (this file) implements the algorithm for correctness on the dense
+//! per-document / per-word histograms; the word phase still gathers each word's
+//! tokens through an index (one `O(N)` scatter), which the physical token
+//! reordering of stage 2 removes.
+
+use rand::Rng;
+
+use crate::corpus::Corpus;
+use crate::lightlda::Alias;
+use crate::model::TopicModel;
+
+/// A WarpLDA sampler. The only persistent per-token state is the current topic
+/// `z` and one pending proposal `prop`, both stored document-major; a word→token
+/// index lets the word phase visit the same tokens word-major.
+pub struct WarpLda {
+    pub num_topics: usize,
+    pub num_types: usize,
+    pub alpha: Vec<f64>,
+    pub alpha_sum: f64,
+    pub beta: f64,
+    pub beta_sum: f64,
+
+    /// Global topic counts `C_k`, held fixed within a phase.
+    n_k: Vec<i64>,
+    /// Current topic assignment per token, document-major (parallel to docs).
+    z: Vec<Vec<u32>>,
+    /// Pending MH proposal per token, document-major. The doc phase fills these
+    /// with doc-proposals (consumed by the word phase) and the word phase fills
+    /// them with word-proposals (consumed by the next doc phase).
+    prop: Vec<Vec<u32>>,
+    /// Word → list of (doc, position) for every occurrence of the word.
+    word_index: Vec<Vec<(u32, u32)>>,
+
+    /// Alias table over α, for the smoothing branch of the doc-proposal.
+    alpha_alias: Alias,
+}
+
+impl WarpLda {
+    /// Random-initialise the sampler over `corpus` (same scheme as
+    /// [`TopicModel::initialize`]). Each token's pending proposal starts equal to
+    /// its topic, so the first doc-phase accept step is a no-op.
+    pub fn new<R: Rng>(
+        corpus: &Corpus,
+        num_topics: usize,
+        alpha: &[f64],
+        beta: f64,
+        rng: &mut R,
+    ) -> WarpLda {
+        let num_types = corpus.num_types();
+        let beta_sum = beta * num_types as f64;
+        let alpha_sum: f64 = alpha.iter().sum();
+
+        let mut n_k = vec![0i64; num_topics];
+        let mut z: Vec<Vec<u32>> = Vec::with_capacity(corpus.docs.len());
+        let mut word_index: Vec<Vec<(u32, u32)>> = vec![Vec::new(); num_types];
+
+        for (d, doc) in corpus.docs.iter().enumerate() {
+            let mut zd = Vec::with_capacity(doc.len());
+            for (pos, &w) in doc.iter().enumerate() {
+                let t = rng.gen_range(0..num_topics);
+                n_k[t] += 1;
+                zd.push(t as u32);
+                word_index[w as usize].push((d as u32, pos as u32));
+            }
+            z.push(zd);
+        }
+        let prop = z.clone();
+        let alpha_alias = Alias::build(alpha);
+
+        WarpLda {
+            num_topics,
+            num_types,
+            alpha: alpha.to_vec(),
+            alpha_sum,
+            beta,
+            beta_sum,
+            n_k,
+            z,
+            prop,
+            word_index,
+            alpha_alias,
+        }
+    }
+
+    /// Replace the hyperparameters (after an optimisation step) and rebuild the
+    /// α alias.
+    pub fn set_hyper(&mut self, alpha: &[f64], beta: f64) {
+        self.alpha.copy_from_slice(alpha);
+        self.alpha_sum = alpha.iter().sum();
+        self.beta = beta;
+        self.beta_sum = beta * self.num_types as f64;
+        self.alpha_alias = Alias::build(alpha);
+    }
+
+    /// Recompute the global topic counts from the current assignments.
+    fn recount_n_k(&mut self) {
+        for v in self.n_k.iter_mut() {
+            *v = 0;
+        }
+        for zd in &self.z {
+            for &t in zd {
+                self.n_k[t as usize] += 1;
+            }
+        }
+    }
+
+    /// One WarpLDA iteration: a document phase then a word phase. `C_k` is fixed
+    /// during each phase (delayed update) and recomputed in between.
+    pub fn sweep<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
+        self.doc_phase(corpus, rng);
+        self.recount_n_k();
+        self.word_phase(rng);
+        self.recount_n_k();
+    }
+
+    /// Document phase: accept the pending **word**-proposals (ratio uses `C_d`),
+    /// then draw fresh **doc**-proposals. Visits tokens document-by-document, so
+    /// only the current document's `C_d` row is randomly accessed.
+    fn doc_phase<R: Rng>(&mut self, corpus: &Corpus, rng: &mut R) {
+        let k = self.num_topics;
+        let beta_sum = self.beta_sum;
+        let mut c_d = vec![0i64; k];
+
+        for (d, doc) in corpus.docs.iter().enumerate() {
+            let doc_len = doc.len();
+            if doc_len == 0 {
+                continue;
+            }
+            // C_d snapshot for this document, held fixed while its tokens sample.
+            for v in c_d.iter_mut() {
+                *v = 0;
+            }
+            for &t in &self.z[d] {
+                c_d[t as usize] += 1;
+            }
+            let doc_len_f = doc_len as f64;
+
+            for pos in 0..doc_len {
+                let cur = self.z[d][pos] as usize;
+                let prop = self.prop[d][pos] as usize;
+
+                // (a) Accept the pending word-proposal against `cur` using C_d/C_k.
+                // The counts are the phase-start (delayed) snapshot, so `cur` is
+                // this token's `originalk`: exclude its own contribution with a
+                // -1 on the `cur` side (the standard collapsed -di term).
+                let mut new = cur;
+                if prop != cur {
+                    let num = (c_d[prop] as f64 + self.alpha[prop])
+                        * (self.n_k[cur] as f64 - 1.0 + beta_sum);
+                    let den = (c_d[cur] as f64 - 1.0 + self.alpha[cur])
+                        * (self.n_k[prop] as f64 + beta_sum);
+                    if num >= den || rng.gen::<f64>() * den < num {
+                        new = prop;
+                    }
+                }
+                self.z[d][pos] = new as u32;
+
+                // (b) Draw a fresh doc-proposal q_d(k) ∝ C_dk + α_k in O(1): with
+                // prob ∝ doc length copy a random token's topic (∝ C_dk), else
+                // draw from the α alias.
+                let r = rng.gen::<f64>() * (doc_len_f + self.alpha_sum);
+                let dp = if r < doc_len_f {
+                    self.z[d][rng.gen_range(0..doc_len)] as usize
+                } else {
+                    self.alpha_alias.sample(rng)
+                };
+                self.prop[d][pos] = dp as u32;
+            }
+        }
+    }
+
+    /// Word phase: accept the pending **doc**-proposals (ratio uses `C_w`), then
+    /// draw fresh **word**-proposals. Visits tokens word-by-word, so only the
+    /// current word's `C_w` row is randomly accessed.
+    fn word_phase<R: Rng>(&mut self, rng: &mut R) {
+        let k = self.num_topics;
+        let beta = self.beta;
+        let beta_sum = self.beta_sum;
+        let mut c_w = vec![0i64; k];
+
+        for w in 0..self.num_types {
+            let toks = &self.word_index[w];
+            let n_w = toks.len();
+            if n_w == 0 {
+                continue;
+            }
+            // C_w snapshot for this word, held fixed while its tokens sample.
+            for v in c_w.iter_mut() {
+                *v = 0;
+            }
+            for &(d, pos) in toks {
+                c_w[self.z[d as usize][pos as usize] as usize] += 1;
+            }
+            let n_w_f = n_w as f64;
+            // Normaliser of q_w over topics is Σ_k (C_wk + β) = n_w + Kβ.
+            let kbeta = k as f64 * beta;
+
+            for &(d, pos) in toks {
+                let (d, pos) = (d as usize, pos as usize);
+                let cur = self.z[d][pos] as usize;
+                let prop = self.prop[d][pos] as usize;
+
+                // (a) Accept the pending doc-proposal against `cur` using C_w/C_k.
+                // As in the doc phase, `cur` is this token's `originalk` under the
+                // delayed snapshot, so exclude it with a -1 on the `cur` side.
+                let mut new = cur;
+                if prop != cur {
+                    let num = (c_w[prop] as f64 + beta)
+                        * (self.n_k[cur] as f64 - 1.0 + beta_sum);
+                    let den = (c_w[cur] as f64 - 1.0 + beta)
+                        * (self.n_k[prop] as f64 + beta_sum);
+                    if num >= den || rng.gen::<f64>() * den < num {
+                        new = prop;
+                    }
+                }
+                self.z[d][pos] = new as u32;
+
+                // (b) Draw a fresh word-proposal q_w(k) ∝ C_wk + β in O(1): with
+                // prob ∝ n_w copy a random token-of-w's topic (∝ C_wk), else draw
+                // a uniform topic (the symmetric β smoothing term).
+                let r = rng.gen::<f64>() * (n_w_f + kbeta);
+                let wp = if r < n_w_f {
+                    let (rd, rp) = toks[rng.gen_range(0..n_w)];
+                    self.z[rd as usize][rp as usize] as usize
+                } else {
+                    rng.gen_range(0..k)
+                };
+                self.prop[d][pos] = wp as u32;
+            }
+        }
+    }
+
+    /// Accumulate a smoothed φ snapshot `(C_wk+β)/(C_k+β̄)` into `acc[word][topic]`.
+    pub fn phi_into(&self, acc: &mut [Vec<f64>]) {
+        // Rebuild the word-topic counts from the assignments (not stored densely).
+        let k = self.num_topics;
+        let mut c_w = vec![0i64; k];
+        for w in 0..self.num_types {
+            for v in c_w.iter_mut() {
+                *v = 0;
+            }
+            for &(d, pos) in &self.word_index[w] {
+                c_w[self.z[d as usize][pos as usize] as usize] += 1;
+            }
+            for t in 0..k {
+                let denom = self.n_k[t] as f64 + self.beta_sum;
+                acc[w][t] += (c_w[t] as f64 + self.beta) / denom;
+            }
+        }
+    }
+
+    /// Accumulate a smoothed θ snapshot `(C_dk+α)/(len+α_sum)` into `acc[doc][topic]`.
+    pub fn theta_into(&self, corpus: &Corpus, acc: &mut [Vec<f64>]) {
+        let mut counts = vec![0u32; self.num_topics];
+        for d in 0..corpus.docs.len() {
+            for c in counts.iter_mut() {
+                *c = 0;
+            }
+            for &t in &self.z[d] {
+                counts[t as usize] += 1;
+            }
+            let denom = corpus.docs[d].len() as f64 + self.alpha_sum;
+            for t in 0..self.num_topics {
+                acc[d][t] += (counts[t] as f64 + self.alpha[t]) / denom;
+            }
+        }
+    }
+
+    /// Pack the state into a [`TopicModel`] so the rest of the codebase
+    /// (optimisation, save/load, log-likelihood, held-out inference) is reused
+    /// unchanged. Mirrors [`crate::lightlda::LightLda::to_topic_model`].
+    pub fn to_topic_model(&self) -> TopicModel {
+        let mut model =
+            TopicModel::new(self.num_topics, self.alpha_sum, self.beta, self.num_types);
+        model.alpha.copy_from_slice(&self.alpha);
+        model.alpha_sum = self.alpha_sum;
+        model.beta = self.beta;
+        model.beta_sum = self.beta_sum;
+        model.tokens_per_topic = self.n_k.iter().map(|&c| c as u32).collect();
+        model.doc_topics = self.z.clone();
+
+        let bits = model.topic_bits;
+        let k = self.num_topics;
+        let mut c_w = vec![0i64; k];
+        let mut ttc: Vec<Vec<u32>> = Vec::with_capacity(self.num_types);
+        for w in 0..self.num_types {
+            for v in c_w.iter_mut() {
+                *v = 0;
+            }
+            for &(d, pos) in &self.word_index[w] {
+                c_w[self.z[d as usize][pos as usize] as usize] += 1;
+            }
+            let mut entries: Vec<u32> = (0..k)
+                .filter_map(|t| {
+                    let c = c_w[t];
+                    if c > 0 {
+                        Some(((c as u32) << bits) | t as u32)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            entries.sort_unstable_by(|a, b| b.cmp(a));
+            ttc.push(entries);
+        }
+        model.type_topic_counts = ttc;
+        model
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::corpus::Corpus;
+    use rand::SeedableRng;
+    use rand_pcg::Pcg64Mcg;
+
+    /// Disjoint-vocabulary planted topics over integer word ids: block `b` owns
+    /// ids `[b*wpb, b*wpb+wpb)`, and each document draws (twice) from one block.
+    /// WarpLDA should place each block's words on a single topic.
+    fn planted(n_blocks: usize, wpb: usize, n_docs: usize) -> (Corpus, usize) {
+        let v = n_blocks * wpb;
+        let docs: Vec<Vec<u32>> = (0..n_docs)
+            .map(|d| {
+                let b = d % n_blocks;
+                let block: Vec<u32> = (b * wpb..(b + 1) * wpb).map(|w| w as u32).collect();
+                let mut doc = block.clone();
+                doc.extend(block);
+                doc
+            })
+            .collect();
+        let corpus = Corpus {
+            id_to_word: (0..v).map(|i| format!("w{i}")).collect(),
+            doc_names: (0..n_docs).map(|i| format!("d{i}")).collect(),
+            doc_labels: vec![String::new(); n_docs],
+            doc_freqs: vec![0u32; v],
+            total_freqs: vec![0u32; v],
+            docs,
+        };
+        (corpus, n_blocks)
+    }
+
+    #[test]
+    fn recovers_planted_blocks() {
+        let wpb = 5;
+        let (corpus, n_blocks) = planted(4, wpb, 200);
+        let k = n_blocks;
+        let v = corpus.num_types();
+        let alpha = vec![0.1f64; k];
+        let mut rng = Pcg64Mcg::seed_from_u64(1);
+        let mut s = WarpLda::new(&corpus, k, &alpha, 0.01, &mut rng);
+        for _ in 0..200 {
+            s.sweep(&corpus, &mut rng);
+        }
+        let phi = s.to_topic_model().topic_word(); // (k, v) smoothed
+
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..k {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| phi[t][b].partial_cmp(&phi[t][a]).unwrap());
+            let top: std::collections::HashSet<usize> = idx[..wpb].iter().copied().collect();
+            for b in 0..n_blocks {
+                let block: std::collections::HashSet<usize> =
+                    (b * wpb..(b + 1) * wpb).collect();
+                if block.is_subset(&top) {
+                    covered.insert(b);
+                }
+            }
+        }
+        assert_eq!(covered.len(), n_blocks, "only recovered {covered:?}");
+    }
+
+    #[test]
+    fn deterministic_for_seed() {
+        let (corpus, _) = planted(3, 4, 90);
+        let alpha = vec![0.1f64; 3];
+        let run = || {
+            let mut rng = Pcg64Mcg::seed_from_u64(7);
+            let mut s = WarpLda::new(&corpus, 3, &alpha, 0.01, &mut rng);
+            for _ in 0..40 {
+                s.sweep(&corpus, &mut rng);
+            }
+            s.to_topic_model().doc_topics
+        };
+        assert_eq!(run(), run());
+    }
+}
