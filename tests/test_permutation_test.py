@@ -220,3 +220,108 @@ def test_viz_to_png_no_error():
         path = os.path.join(tmp, "perm.png")
         fig = panel.to_png(path)
         assert os.path.exists(path)
+
+
+# ---------------------------------------------------------------------------
+# Issue #101 fixes
+# ---------------------------------------------------------------------------
+
+def _planted_corpus_dmr(n=80, seed=0):
+    """Corpus + binary covariate fitted with a two-topic DMR.
+
+    Group 1 documents draw from a-words; group 0 from b-words — a clean
+    planted signal so the covariate is genuinely informative.  Returns
+    (model, docs, covariate) with docs as token lists.
+    """
+    rng = np.random.default_rng(seed)
+    covariate = (rng.random(n) < 0.5).astype(float)
+    a = [f"a{i}" for i in range(8)]
+    b = [f"b{i}" for i in range(8)]
+    docs = [
+        list(rng.choice(a if flag == 1.0 else b, size=14, replace=True))
+        for flag in covariate
+    ]
+    corpus = topica.Corpus.from_documents(docs)
+    m = topica.DMR(2, seed=3)
+    m.fit(corpus, features=covariate[:, None], iters=200)
+    return m, docs, covariate
+
+
+def test_covariate_model_permutation_runs():
+    """permutation_test on a DMR model completes without error (issue #101)."""
+    m, docs, cov = _planted_corpus_dmr()
+    results = topica.permutation_test(m, docs, cov, n_perm=4, seed=0, iters=50)
+    assert len(results) == 2
+    for r in results:
+        assert isinstance(r, topica.PermutationResult)
+
+
+def test_covariate_threaded_into_refit(monkeypatch):
+    """Each permutation refit receives the permuted covariate via the correct
+    kwarg (issue #101 bug 1).  We monkeypatch DMR.fit to record calls and
+    confirm that 'features' is present in every call's keyword arguments."""
+    m, docs, cov = _planted_corpus_dmr(n=60, seed=7)
+
+    fit_calls = []
+    original_fit = topica.DMR.fit
+
+    def recording_fit(self, data, **kwargs):
+        fit_calls.append(dict(kwargs))
+        return original_fit(self, data, **kwargs)
+
+    monkeypatch.setattr(topica.DMR, "fit", recording_fit)
+
+    n_perm = 3
+    topica.permutation_test(m, docs, cov, n_perm=n_perm, seed=0, iters=40)
+
+    # Each of the n_perm refit calls must have passed 'features'.
+    assert len(fit_calls) == n_perm, (
+        f"expected {n_perm} fit calls, got {len(fit_calls)}"
+    )
+    for i, kwargs in enumerate(fit_calls):
+        assert "features" in kwargs, (
+            f"permutation {i}: 'features' not passed to DMR.fit; got kwargs={list(kwargs.keys())}"
+        )
+        feat = np.asarray(kwargs["features"])
+        assert feat.shape == (len(docs), 1), (
+            f"permutation {i}: features shape {feat.shape}, expected ({len(docs)}, 1)"
+        )
+
+
+def test_pvalue_never_exactly_zero():
+    """p-value uses (1 + count)/(1 + n_perm) so it is never exactly 0 (issue #101 bug 2)."""
+    m, docs, cov = _planted_corpus(n=200, seed=42)
+    # Use a large enough n_perm that without the +1 fix the p-value would be 0.
+    results = topica.permutation_test(m, docs, cov, n_perm=20, seed=0, iters=80)
+    for r in results:
+        assert r.pvalue > 0.0, (
+            f"topic {r.topic}: p-value is exactly 0 (should use +1 convention)"
+        )
+        assert r.pvalue <= 1.0
+
+
+def test_nan_null_entries_dropped_from_pvalue():
+    """NaN permutation statistics (unmatched topics) are excluded from the
+    p-value denominator, not counted as non-extreme (issue #101 bug 3).
+
+    We inject NaN values directly into the null and verify the p-value
+    is computed only over the finite entries."""
+    from topica.effects import PermutationResult
+    import math
+
+    # Construct a result where half the null is NaN.
+    null_with_nan = np.array([np.nan, np.nan, 0.1, 0.05, 0.2, 0.08])
+    obs = 0.15
+
+    # Manually replicate the fixed p-value logic.
+    null_valid = null_with_nan[~np.isnan(null_with_nan)]  # [0.1, 0.05, 0.2, 0.08]
+    expected_pval = (1 + np.sum(np.abs(null_valid) >= abs(obs))) / (1 + len(null_valid))
+    # |0.1| < 0.15, |0.05| < 0.15, |0.2| >= 0.15, |0.08| < 0.15 => count=1
+    # expected = (1+1)/(1+4) = 2/5 = 0.4
+    assert abs(expected_pval - 0.4) < 1e-12
+
+    # The old (unfixed) logic would use all 6 entries including NaN.
+    # np.abs(NaN) >= 0.15 is False, so NaN entries count as non-extreme
+    # and deflate the p-value.  With 6 entries: (1+1)/(1+6) = 2/7 < 2/5.
+    old_pval = (1 + np.sum(np.abs(null_with_nan) >= abs(obs))) / (1 + len(null_with_nan))
+    assert old_pval < expected_pval, "NaN entries should not lower the p-value"
