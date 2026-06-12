@@ -64,7 +64,7 @@ def test_transform_held_out():
     m.fit(docs, doc_emb, iters=200)
     # One clean embedding per block; each should land on a distinct topic.
     new = np.array([np.eye(8)[b] * 3.0 for b in range(3)])
-    theta = m.transform(new)
+    theta = m.transform(doc_embeddings=new)
     assert theta.shape == (3, 3)
     assert np.allclose(theta.sum(axis=1), 1.0)
     assert len(set(theta.argmax(axis=1))) == 3

@@ -2016,18 +2016,20 @@ impl LDA {
     /// string (OOV dropped). A document with no in-vocabulary tokens gets the
     /// prior θ. Returns an array of shape ``(num_new_docs, num_topics)`` whose
     /// rows sum to 1.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iterations = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let (docs, _n, _oov) = self.map_heldout(data)?;
         let model = self.model.as_ref().unwrap();
@@ -2889,6 +2891,37 @@ fn infer_theta_gibbs<R: Rng>(
     theta
 }
 
+/// Resolve the `iters`/`iterations` deprecation for `transform()`: if the
+/// caller passed the old `iterations` keyword, emit a `DeprecationWarning` and
+/// use that value; otherwise use `iters`. When both are supplied `iters` wins
+/// (the caller is already using the new name) but the warning still fires.
+fn resolve_iters_deprecated(
+    py: Python<'_>,
+    iters: usize,
+    iterations: Option<usize>,
+) -> PyResult<usize> {
+    if let Some(old_val) = iterations {
+        let warnings = py.import_bound("warnings")?;
+        warnings.call_method1(
+            "warn",
+            (
+                "transform(iterations=) is deprecated; use iters= instead",
+                py.get_type_bound::<pyo3::exceptions::PyDeprecationWarning>(),
+                2_i32,
+            ),
+        )?;
+        // iters wins when both are supplied (caller already migrated), but we
+        // still fire the warning because `iterations` was passed explicitly.
+        if iters != 100 {
+            Ok(iters)
+        } else {
+            Ok(old_val)
+        }
+    } else {
+        Ok(iters)
+    }
+}
+
 /// Batch wrapper for [`infer_theta_gibbs`]: maps new docs to ids, runs the
 /// sampler per document (parallel, seeded deterministically per doc), and
 /// returns a ``(num_docs, K)`` array. `alpha` is the length-K prior.
@@ -3736,20 +3769,22 @@ impl DMR {
     /// ``(num_docs, F)`` covariate array matching training, no intercept) sets
     /// each document's Dirichlet prior `α_d = exp(Xγ)`; if omitted the
     /// intercept-only baseline prior is used. Returns ``(num_docs, num_topics)``.
-    #[pyo3(signature = (data, features=None, *, iterations=100, burn_in=10,
-                        num_samples=10, sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, features=None, *, iters=100, burn_in=10,
+                        num_samples=10, sample_interval=5, seed=None, iterations=None))]
     #[allow(clippy::too_many_arguments)]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
         features: Option<PyReadonlyArray2<f64>>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iterations = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let k = self.num_topics;
         let eff = self.feature_effects.as_ref().unwrap(); // (K, F) incl. intercept at col 0
@@ -4345,23 +4380,25 @@ impl LabeledLDA {
     /// (unsupervised inference). `data` is a :class:`Corpus` or
     /// `list[list[str]]`; OOV tokens are dropped. Returns ``(num_docs,
     /// num_topics)``; columns align with :attr:`labels`.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let alpha = vec![self.alpha; self.num_topics];
         transform_gibbs(
             py, data, &self.corpus.as_ref().unwrap().id_to_word, self.phi.as_ref().unwrap(),
-            &alpha, iterations, burn_in, num_samples, sample_interval,
+            &alpha, iters, burn_in, num_samples, sample_interval,
             seed.unwrap_or(self.seed),
         )
     }
@@ -4835,42 +4872,59 @@ impl SAGE {
         Ok(self.num_groups)
     }
 
-    /// Top `n` words for a topic. With `group` (name or index) given, uses that
-    /// group's word distribution; otherwise the group-averaged distribution.
-    #[pyo3(signature = (topic, *, group=None, n=10))]
+    /// Top `n` words per topic. `topic=None` (default) returns a list of lists
+    /// (one per topic); `topic=k` returns the list for topic k. With `group`
+    /// (name or index) given, uses that group's word distribution; otherwise the
+    /// group-averaged distribution is used.
+    #[pyo3(signature = (n=10, *, topic=None, group=None))]
     fn top_words<'py>(
         &self,
         py: Python<'py>,
-        topic: usize,
-        group: Option<&Bound<'py, PyAny>>,
         n: usize,
-    ) -> PyResult<Bound<'py, PyList>> {
+        topic: Option<usize>,
+        group: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         self.require_fitted()?;
-        if topic >= self.num_topics {
-            return Err(PyValueError::new_err(format!(
-                "topic {} out of range (num_topics={})",
-                topic, self.num_topics
-            )));
-        }
         let vocab = &self.corpus.as_ref().unwrap().id_to_word;
-        let dist: Vec<f64> = match group {
-            Some(gobj) => {
-                let gi = self.resolve_group(gobj)?;
-                self.beta[topic * self.num_groups + gi].clone()
+
+        // Helper: top-n words for a single topic index.
+        let top_for = |t: usize| -> PyResult<Bound<'py, PyList>> {
+            if t >= self.num_topics {
+                return Err(PyValueError::new_err(format!(
+                    "topic {} out of range (num_topics={})",
+                    t, self.num_topics
+                )));
             }
-            None => {
-                let m = self.topic_marginal();
-                (0..vocab.len()).map(|v| m[[topic, v]]).collect()
-            }
+            let dist: Vec<f64> = match group {
+                Some(gobj) => {
+                    let gi = self.resolve_group(gobj)?;
+                    self.beta[t * self.num_groups + gi].clone()
+                }
+                None => {
+                    let m = self.topic_marginal();
+                    (0..vocab.len()).map(|v| m[[t, v]]).collect()
+                }
+            };
+            let mut idx: Vec<usize> = (0..vocab.len()).collect();
+            idx.sort_by(|&a, &b| f64::total_cmp(&dist[b], &dist[a]));
+            let items: Vec<Bound<'py, PyTuple>> = idx
+                .iter()
+                .take(n)
+                .map(|&v| {
+                    PyTuple::new_bound(py, &[vocab[v].clone().into_py(py), dist[v].into_py(py)])
+                })
+                .collect();
+            Ok(PyList::new_bound(py, items))
         };
-        let mut idx: Vec<usize> = (0..vocab.len()).collect();
-        idx.sort_by(|&a, &b| f64::total_cmp(&dist[b], &dist[a]));
-        let items: Vec<Bound<'py, PyTuple>> = idx
-            .iter()
-            .take(n)
-            .map(|&v| PyTuple::new_bound(py, &[vocab[v].clone().into_py(py), dist[v].into_py(py)]))
-            .collect();
-        Ok(PyList::new_bound(py, items))
+
+        match topic {
+            Some(t) => Ok(top_for(t)?.into_any()),
+            None => {
+                let all: Vec<Bound<'py, PyList>> =
+                    (0..self.num_topics).map(top_for).collect::<PyResult<_>>()?;
+                Ok(PyList::new_bound(py, all).into_any())
+            }
+        }
     }
 
     /// Words that most distinguish how `topic` is worded in `group_a` vs
@@ -4963,23 +5017,25 @@ impl SAGE {
     /// a group covariate for new documents. This is a baseline projection;
     /// the group-specific word distributions are a training-time device and
     /// cannot be recovered for documents whose group label is unknown.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
         let phi = self.topic_marginal();
         let alpha = vec![self.alpha; self.num_topics];
-        transform_gibbs(py, data, id_to_word, &phi, &alpha, iterations, burn_in,
+        transform_gibbs(py, data, id_to_word, &phi, &alpha, iters, burn_in,
                         num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
@@ -7286,24 +7342,26 @@ impl HDP {
     /// :class:`Corpus` or `list[list[str]]`; OOV tokens are dropped. The
     /// document-level prior is symmetric with total mass equal to the learned
     /// concentration α. Returns a ``(num_docs, num_topics)`` array.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let k = self.num_topics;
         let alpha = vec![self.learned_alpha / k as f64; k];
         transform_gibbs(
             py, data, &self.corpus.as_ref().unwrap().id_to_word, self.beta.as_ref().unwrap(),
-            &alpha, iterations, burn_in, num_samples, sample_interval,
+            &alpha, iters, burn_in, num_samples, sample_interval,
             seed.unwrap_or(self.seed),
         )
     }
@@ -8081,23 +8139,25 @@ impl SupervisedLDA {
     /// unsupervised E-step). `data` is a :class:`Corpus` or `list[list[str]]`;
     /// OOV tokens are dropped. Returns ``(num_docs, num_topics)``. To predict the
     /// response for new documents, take ``transform(data) @ eta``.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let alpha = vec![self.alpha; self.num_topics];
         transform_gibbs(
             py, data, &self.corpus.as_ref().unwrap().id_to_word, self.beta.as_ref().unwrap(),
-            &alpha, iterations, burn_in, num_samples, sample_interval,
+            &alpha, iters, burn_in, num_samples, sample_interval,
             seed.unwrap_or(self.seed),
         )
     }
@@ -8406,23 +8466,25 @@ impl PT {
     /// aggregation device. Held-out documents infer θ over the K topics
     /// directly under the fitted topic-word matrix, without pseudo-document
     /// assignment.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
         let phi = self.phi.as_ref().unwrap();
         let alpha = vec![self.alpha; self.num_topics];
-        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iters, burn_in,
                         num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
@@ -9130,24 +9192,26 @@ impl SeededLDA {
     /// **Approximation:** the seed-word boost is baked into the fitted
     /// topic-word matrix. New documents infer θ under those distributions
     /// without re-estimating the seed prior.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
         let phi = self.phi.as_ref().unwrap();
         let k = self.num_topics_val();
         let alpha = vec![self.alpha; k];
-        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iters, burn_in,
                         num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
@@ -9600,12 +9664,12 @@ impl Top2Vec {
         Ok(Array1::from(umass_coherence(&corpus, &tops)).to_pyarray_bound(py))
     }
 
-    #[pyo3(signature = (data, doc_embeddings))]
+    #[pyo3(signature = (data, doc_embeddings=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        doc_embeddings: &Bound<'py, PyAny>,
+        doc_embeddings: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let m = self.fitted_model()?;
         if m.num_topics == 0 {
@@ -9614,8 +9678,11 @@ impl Top2Vec {
                  min_cluster_size or more data",
             ));
         }
+        let de_obj = doc_embeddings.ok_or_else(|| {
+            PyValueError::new_err("Top2Vec.transform requires doc_embeddings")
+        })?;
         let _ = data;
-        let de = parse_features(doc_embeddings)?;
+        let de = parse_features(de_obj)?;
         Ok(vecs_to_arr2(&m.assign(&de)).to_pyarray_bound(py))
     }
 
@@ -10038,13 +10105,17 @@ impl BERTopic {
     }
 
     /// Soft topic distribution for new documents (the approximate distribution
-    /// over their words). BERTopic reads topics from text, so no new embeddings
-    /// are needed. Returns `(num_docs, num_topics)`.
+    /// over their words). BERTopic reads topics from text; `doc_embeddings` is
+    /// accepted but not used (for API consistency with the other embedding
+    /// models). Returns `(num_docs, num_topics)`.
+    #[pyo3(signature = (data, doc_embeddings=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
-        data: &Bound<'_, PyAny>,
+        data: &Bound<'py, PyAny>,
+        doc_embeddings: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let _ = doc_embeddings;
         self.approximate_distribution(py, data, None, None)
     }
 
@@ -10686,12 +10757,17 @@ impl ETM {
     /// Held-out topic proportions for new documents. For the EM path this is the
     /// logistic-normal E-step with the fitted `beta` and prior held fixed; for the
     /// VAE path it is a single encoder forward pass (`theta = softmax(mu)`). Tokens
-    /// outside the vocabulary are dropped. Returns `(num_docs, num_topics)`.
+    /// outside the vocabulary are dropped. `doc_embeddings` is accepted but not
+    /// used (for API consistency with the other embedding models). Returns
+    /// `(num_docs, num_topics)`.
+    #[pyo3(signature = (data, doc_embeddings=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
+        doc_embeddings: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let _ = doc_embeddings;
         self.ensure_fitted()?;
         let docs = docs_to_ids(data, &self.id_to_word)?;
         if let Some(m) = &self.vae {
@@ -11347,14 +11423,22 @@ impl FASTopic {
 
     /// Held-out topic proportions for new documents from their embeddings
     /// (`(n, E)`): the reference's distance-softmax over the fitted topic
-    /// embeddings, normalized by the training documents. Returns `(n, num_topics)`.
+    /// embeddings, normalized by the training documents. `data` is accepted but
+    /// not used (for API consistency with the other embedding models);
+    /// `doc_embeddings` is required. Returns `(n, num_topics)`.
+    #[pyo3(signature = (data=None, doc_embeddings=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
-        doc_embeddings: &Bound<'py, PyAny>,
+        data: Option<&Bound<'py, PyAny>>,
+        doc_embeddings: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let _ = data;
+        let de_obj = doc_embeddings.ok_or_else(|| {
+            PyValueError::new_err("FASTopic.transform requires doc_embeddings")
+        })?;
         let m = self.fitted_model()?;
-        let doc_emb = parse_features(doc_embeddings)?;
+        let doc_emb = parse_features(de_obj)?;
         Ok(vecs_to_arr2(&m.transform(&doc_emb)).to_pyarray_bound(py))
     }
 
@@ -12152,18 +12236,20 @@ impl KeyATM {
     /// estimated asymmetric document-topic prior α (falling back to the
     /// symmetric base value when α was not estimated). The keyword switch
     /// variable is not re-estimated for new tokens.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
         let phi = self.phi.as_ref().unwrap();
@@ -12171,7 +12257,7 @@ impl KeyATM {
             Some(v) => v.clone(),
             None => vec![self.alpha; self.num_topics],
         };
-        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iters, burn_in,
                         num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 
@@ -12440,23 +12526,25 @@ impl PA {
     /// fitted sub-topics, marginalizing the super-topic layer. The
     /// super-topic assignments are a training-time device and are not
     /// re-estimated for new documents.
-    #[pyo3(signature = (data, *, iterations=100, burn_in=10, num_samples=10,
-                        sample_interval=5, seed=None))]
+    #[pyo3(signature = (data, *, iters=100, burn_in=10, num_samples=10,
+                        sample_interval=5, seed=None, iterations=None))]
     fn transform<'py>(
         &self,
         py: Python<'py>,
         data: &Bound<'py, PyAny>,
-        iterations: usize,
+        iters: usize,
         burn_in: usize,
         num_samples: usize,
         sample_interval: usize,
         seed: Option<u64>,
+        iterations: Option<usize>,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let iters = resolve_iters_deprecated(py, iters, iterations)?;
         self.require_fitted()?;
         let id_to_word = &self.corpus.as_ref().unwrap().id_to_word;
         let phi = self.phi.as_ref().unwrap();
         let alpha = vec![self.alpha; self.num_sub];
-        transform_gibbs(py, data, id_to_word, phi, &alpha, iterations, burn_in,
+        transform_gibbs(py, data, id_to_word, phi, &alpha, iters, burn_in,
                         num_samples, sample_interval, seed.unwrap_or(self.seed))
     }
 

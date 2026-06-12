@@ -38,6 +38,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Changed
 
+- API consistency: `transform()` now takes `iters` (the canonical name used by
+  `fit()`); the old `iterations=` keyword still works but raises a
+  `DeprecationWarning` (#104). `SAGE.top_words` now matches every other model's
+  shape, `top_words(n=10, *, topic=None, group=None)`, so `n` is the first
+  positional argument and `topic=None` returns all topics; **breaking** for code
+  that passed the topic index positionally (#105). The embedding models share one
+  `transform(data, doc_embeddings=None)` signature and raise a clear `ValueError`
+  when a required input is missing; **breaking** for `FASTopic.transform(emb)`
+  called positionally, which now needs `transform(doc_embeddings=emb)` (#106).
 - **Breaking (save format):** model files now carry an 8-byte header (magic,
   format version, model tag). Loading a file saved by an earlier version, or
   loading a file saved as the wrong model, now raises a clear error instead of

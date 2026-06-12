@@ -284,16 +284,18 @@ class DMR:
         data: Corpus | Sequence[Sequence[str]],
         features: numpy.typing.NDArray[numpy.float64] | None = None,
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs
         against the fitted topic-word matrix. `features` (optional, no intercept)
         sets each document's Dirichlet prior alpha_d = exp(Xgamma); if omitted
-        the intercept-only baseline is used. Shape (num_new_docs, num_topics)."""
+        the intercept-only baseline is used. Shape (num_new_docs, num_topics).
+        `iterations` is deprecated; use `iters` instead."""
         ...
 
     @property
@@ -806,15 +808,16 @@ class HDP:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer theta over the discovered topics for new documents by collapsed
         Gibbs against the fixed topic-word matrix. Shape (num_new_docs,
-        num_topics)."""
+        num_topics). `iterations` is deprecated; use `iters` instead."""
         ...
     def __repr__(self) -> str: ...
 
@@ -981,15 +984,17 @@ class SupervisedLDA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs
         against the fitted topic-word matrix (the response is not used). Shape
-        (num_new_docs, num_topics). Predict the response with transform @ eta."""
+        (num_new_docs, num_topics). Predict the response with transform @ eta.
+        `iterations` is deprecated; use `iters` instead."""
         ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
@@ -1091,11 +1096,17 @@ class SAGE:
     @topic_names.setter
     def topic_names(self, value: list[str]) -> None: ...
 
+    @overload
+    def top_words(self, n: int = ..., *, topic: int, group: str | int | None = ...) -> list[tuple[str, float]]: ...
+    @overload
+    def top_words(self, n: int = ..., *, topic: None = ..., group: str | int | None = ...) -> list[list[tuple[str, float]]]: ...
     def top_words(
-        self, topic: int, *, group: str | int | None = None, n: int = 10
-    ) -> list[tuple[str, float]]:
-        """Top n (word, prob) for a topic; for a given group (name/index) or the
-        group-averaged distribution when group is None."""
+        self, n: int = 10, *, topic: int | None = None, group: str | int | None = None
+    ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]:
+        """Top n (word, prob) pairs. `topic=None` (default) returns a list of
+        lists, one per topic. `topic=k` returns that topic's list. `group`
+        (name or index) selects a group-specific distribution; None uses the
+        group-averaged distribution."""
         ...
 
     def word_contrast(
@@ -1111,16 +1122,18 @@ class SAGE:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs against
         the fitted group-averaged topic-word matrix. The group-specific word
         distributions are held fixed and averaged; no group covariate is needed for
-        held-out documents. Shape (num_new_docs, num_topics); rows sum to 1."""
+        held-out documents. Shape (num_new_docs, num_topics); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
 
     def save(self, path: str) -> None: ...
@@ -1241,15 +1254,17 @@ class LabeledLDA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer label (topic) proportions theta for new documents by collapsed
         Gibbs against the fitted topic-word matrix, treating every label as
-        available. Shape (num_new_docs, num_topics); columns align with labels."""
+        available. Shape (num_new_docs, num_topics); columns align with labels.
+        `iterations` is deprecated; use `iters` instead."""
         ...
 
     @property
@@ -1475,14 +1490,16 @@ class LDA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic distributions for new, unseen documents under
-        the fitted model. Returns shape (num_new_docs, num_topics); rows sum to 1."""
+        the fitted model. Returns shape (num_new_docs, num_topics); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
 
     def top_documents(self, topic: int, n: int = 10) -> list[tuple[str, float]]:
@@ -1599,16 +1616,18 @@ class PT:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs against the
         fitted topic-word matrix. The pseudo-document layer is a training-time device;
         held-out documents infer theta over the K topics directly under the fitted phi.
-        Shape (num_new_docs, num_topics); rows sum to 1."""
+        Shape (num_new_docs, num_topics); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
     def save(self, path: str) -> None: ...
     @staticmethod
@@ -1766,15 +1785,17 @@ class PA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer sub-topic proportions for new documents by collapsed Gibbs against the
         fitted sub-topic-word matrix. Projects onto the num_sub sub-topics, marginalizing
-        the super-topic layer. Shape (num_new_docs, num_sub); rows sum to 1."""
+        the super-topic layer. Shape (num_new_docs, num_sub); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
     def save(self, path: str) -> None: ...
     @staticmethod
@@ -1934,16 +1955,18 @@ class SeededLDA:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs against the
         fitted topic-word matrix. The seed-word boost is baked into the fitted phi;
         new documents infer theta under those distributions without re-estimating the
-        seed prior. Shape (num_new_docs, num_topics); rows sum to 1."""
+        seed prior. Shape (num_new_docs, num_topics); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
     def save(self, path: str) -> None: ...
     @staticmethod
@@ -2018,8 +2041,12 @@ class Top2Vec:
     def transform(
         self,
         data: Corpus | Sequence[Sequence[str]],
-        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]],
-    ) -> numpy.typing.NDArray[numpy.float64]: ...
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Assign new documents to topics from their embeddings. `doc_embeddings`
+        is required (raises ValueError if omitted); `data` is accepted for API
+        consistency but not used in assignment. Shape (num_docs, num_topics)."""
+        ...
     def fit_transform(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -2102,8 +2129,14 @@ class BERTopic:
         stride: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
-        self, data: Corpus | Sequence[Sequence[str]]
-    ) -> numpy.typing.NDArray[numpy.float64]: ...
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Soft topic distribution for new documents. BERTopic reads topics from
+        text; `doc_embeddings` is accepted for API consistency but not used.
+        Shape (num_docs, num_topics)."""
+        ...
     def fit_transform(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -2193,8 +2226,14 @@ class ETM:
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
-        self, data: Corpus | Sequence[Sequence[str]]
-    ) -> numpy.typing.NDArray[numpy.float64]: ...
+        self,
+        data: Corpus | Sequence[Sequence[str]],
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Held-out topic proportions for new documents. ETM reads topics from
+        text; `doc_embeddings` is accepted for API consistency but not used.
+        Shape (num_docs, num_topics)."""
+        ...
     def fit_transform(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -2340,8 +2379,14 @@ class FASTopic:
     ) -> list[tuple[str, float]] | list[list[tuple[str, float]]]: ...
     def coherence(self, n: int = 10) -> numpy.typing.NDArray[numpy.float64]: ...
     def transform(
-        self, doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]]
-    ) -> numpy.typing.NDArray[numpy.float64]: ...
+        self,
+        data: Corpus | Sequence[Sequence[str]] | None = None,
+        doc_embeddings: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
+    ) -> numpy.typing.NDArray[numpy.float64]:
+        """Held-out topic proportions from document embeddings. `doc_embeddings`
+        is required (raises ValueError if omitted); `data` is accepted for API
+        consistency but not used. Shape (num_docs, num_topics)."""
+        ...
     def fit_transform(
         self,
         data: Corpus | Sequence[Sequence[str]],
@@ -2542,17 +2587,19 @@ class KeyATM:
         self,
         data: Corpus | Sequence[Sequence[str]],
         *,
-        iterations: int = 100,
+        iters: int = 100,
         burn_in: int = 10,
         num_samples: int = 10,
         sample_interval: int = 5,
         seed: int | None = None,
+        iterations: int | None = None,
     ) -> numpy.typing.NDArray[numpy.float64]:
         """Infer document-topic theta for new documents by collapsed Gibbs against the
         fitted effective topic-word matrix. The effective P(w|topic) already marginalizes
         over the keyword switch; held-out inference does not re-estimate the switch for
         new tokens. Uses the estimated asymmetric alpha when available. Shape
-        (num_new_docs, num_topics); rows sum to 1."""
+        (num_new_docs, num_topics); rows sum to 1.
+        `iterations` is deprecated; use `iters` instead."""
         ...
     def save(self, path: str) -> None: ...
     @staticmethod

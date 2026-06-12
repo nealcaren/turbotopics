@@ -55,24 +55,24 @@ class TestKeyATMTransform:
         return m
 
     def test_shape(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert out.shape == (len(HELD_OUT), model.num_topics)
 
     def test_rows_sum_to_one(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert _rows_sum_to_one(out)
 
     def test_oov_only_doc_is_valid(self, model):
         """A document with no in-vocabulary tokens gets the prior row (sums to 1)."""
-        out = model.transform([["unknown_xyz"]], iterations=20, burn_in=5,
+        out = model.transform([["unknown_xyz"]], iters=20, burn_in=5,
                               num_samples=5, sample_interval=2, seed=0)
         assert out.shape == (1, model.num_topics)
         assert _rows_sum_to_one(out)
 
     def test_deterministic(self, model):
-        kw = dict(iterations=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
+        kw = dict(iters=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
         a = model.transform(HELD_OUT, **kw)
         b = model.transform(HELD_OUT, **kw)
         np.testing.assert_array_equal(a, b)
@@ -103,23 +103,23 @@ class TestSeededLDATransform:
         return m
 
     def test_shape(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert out.shape == (len(HELD_OUT), model.num_topics)
 
     def test_rows_sum_to_one(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert _rows_sum_to_one(out)
 
     def test_oov_only_doc_is_valid(self, model):
-        out = model.transform([["unknown_xyz"]], iterations=20, burn_in=5,
+        out = model.transform([["unknown_xyz"]], iters=20, burn_in=5,
                               num_samples=5, sample_interval=2, seed=0)
         assert out.shape == (1, model.num_topics)
         assert _rows_sum_to_one(out)
 
     def test_deterministic(self, model):
-        kw = dict(iterations=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
+        kw = dict(iters=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
         a = model.transform(HELD_OUT, **kw)
         b = model.transform(HELD_OUT, **kw)
         np.testing.assert_array_equal(a, b)
@@ -150,23 +150,23 @@ class TestSAGETransform:
         return m
 
     def test_shape(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert out.shape == (len(HELD_OUT), model.num_topics)
 
     def test_rows_sum_to_one(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert _rows_sum_to_one(out)
 
     def test_oov_only_doc_is_valid(self, model):
-        out = model.transform([["unknown_xyz"]], iterations=20, burn_in=5,
+        out = model.transform([["unknown_xyz"]], iters=20, burn_in=5,
                               num_samples=5, sample_interval=2, seed=0)
         assert out.shape == (1, model.num_topics)
         assert _rows_sum_to_one(out)
 
     def test_deterministic(self, model):
-        kw = dict(iterations=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
+        kw = dict(iters=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
         a = model.transform(HELD_OUT, **kw)
         b = model.transform(HELD_OUT, **kw)
         np.testing.assert_array_equal(a, b)
@@ -185,23 +185,23 @@ class TestPATransform:
 
     def test_shape_is_num_sub(self, model):
         """PA transform returns (n, num_sub), not (n, num_super)."""
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert out.shape == (len(HELD_OUT), model.num_sub)
 
     def test_rows_sum_to_one(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert _rows_sum_to_one(out)
 
     def test_oov_only_doc_is_valid(self, model):
-        out = model.transform([["unknown_xyz"]], iterations=20, burn_in=5,
+        out = model.transform([["unknown_xyz"]], iters=20, burn_in=5,
                               num_samples=5, sample_interval=2, seed=0)
         assert out.shape == (1, model.num_sub)
         assert _rows_sum_to_one(out)
 
     def test_deterministic(self, model):
-        kw = dict(iterations=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
+        kw = dict(iters=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
         a = model.transform(HELD_OUT, **kw)
         b = model.transform(HELD_OUT, **kw)
         np.testing.assert_array_equal(a, b)
@@ -219,23 +219,23 @@ class TestPTTransform:
         return m
 
     def test_shape(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert out.shape == (len(HELD_OUT), model.num_topics)
 
     def test_rows_sum_to_one(self, model):
-        out = model.transform(HELD_OUT, iterations=20, burn_in=5, num_samples=5,
+        out = model.transform(HELD_OUT, iters=20, burn_in=5, num_samples=5,
                               sample_interval=2, seed=0)
         assert _rows_sum_to_one(out)
 
     def test_oov_only_doc_is_valid(self, model):
-        out = model.transform([["unknown_xyz"]], iterations=20, burn_in=5,
+        out = model.transform([["unknown_xyz"]], iters=20, burn_in=5,
                               num_samples=5, sample_interval=2, seed=0)
         assert out.shape == (1, model.num_topics)
         assert _rows_sum_to_one(out)
 
     def test_deterministic(self, model):
-        kw = dict(iterations=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
+        kw = dict(iters=20, burn_in=5, num_samples=5, sample_interval=2, seed=42)
         a = model.transform(HELD_OUT, **kw)
         b = model.transform(HELD_OUT, **kw)
         np.testing.assert_array_equal(a, b)
