@@ -837,25 +837,22 @@ def render_thread_figure(records: list[dict] | None = None) -> None:
 
     fig, ax = plt.subplots(figsize=(6, 4))
 
-    ylabel = "Speedup vs single-thread reference"
+    ylabel = "Thread speedup (single-thread / n-thread topica)"
     for model, label, color in [
-        ("lda", "LDA vs MALLET", "steelblue"),
-        ("keyatm", "keyATM vs R keyATM", "firebrick"),
+        ("lda", "LDA", "steelblue"),
+        ("keyatm", "keyATM", "firebrick"),
     ]:
         recs = [r for r in records if r["model"] == model and r["n_docs"] == max_size]
         if not recs:
             continue
         recs_sorted = sorted(recs, key=lambda r: r["threads"])
         threads = [r["threads"] for r in recs_sorted]
-        # Speedup = ref_time / topica_time (using ref from single-thread entry).
-        ref_t = next((r["ref_time"] for r in recs_sorted if r["ref_time"] is not None), None)
-        if ref_t is None:
-            # No reference available; use 1-thread topica as baseline.
-            base = recs_sorted[0]["topica_time"]
-            speedups = [base / r["topica_time"] for r in recs_sorted]
-            ylabel = "Thread speedup (vs 1-thread topica)"
-        else:
-            speedups = [ref_t / r["topica_time"] for r in recs_sorted]
+        # Thread-scaling speedup = topica single-thread time / topica n-thread
+        # time. This is topica's own parallel scaling (what the paper figure
+        # caption describes), not a comparison against the reference.
+        base = next((r["topica_time"] for r in recs_sorted if r["threads"] == 1),
+                    recs_sorted[0]["topica_time"])
+        speedups = [base / r["topica_time"] for r in recs_sorted]
 
         ax.plot(threads, speedups, marker="o", label=label, color=color)
 
