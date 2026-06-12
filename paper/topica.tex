@@ -627,7 +627,7 @@ two make opposite algorithmic bets. \pkg{tomotopy} computes a dense topic
 distribution for every token and vectorizes it with \pkg{Eigen}, which is fastest
 when $K$ is small; \pkg{topica}, like \pkg{MALLET}, uses a sparse sampler that
 visits only the topics a word actually occupies, which wins when $K$ is large. On
-a 2{,}600-word, 3{,}500-document corpus the two cross between $K=50$ and $K=100$:
+a 2{,}600-word, 2{,}000-document corpus the two cross between $K=50$ and $K=100$:
 \pkg{tomotopy} is about $1.5\times$ faster at $K=20$, the gap closes by $K=50$, and
 \pkg{topica} is faster from $K=100$ on, by about $2.3\times$ at $K=400$, where its
 time has barely grown while \pkg{tomotopy}'s has risen with $K$. The fine-grained models
