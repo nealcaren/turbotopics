@@ -27,9 +27,11 @@ _TOY    = [list(_ANIMAL) for _ in range(15)] + [list(_SPACE) for _ in range(15)]
 # Cluster models: fit_history == [] and converged is None by design (not a gap).
 _CLUSTER_MODELS = {"BERTopic", "Top2Vec"}
 
-# Models whose converged is always False (no early-stop logic yet).
-# HDP and GSDMM stochastic Gibbs models return False (no tol criterion).
-_CONVERGED_FALSE_ALWAYS = {"HDP", "GSDMM", "KeyATM", "DTM", "HLDA"}
+# Models that intentionally never early-stop, so converged is always False.
+# HDP and GSDMM discover their topic/cluster counts, so a log-likelihood plateau
+# is not a convergence signal; DTM and HLDA expose no flat per-iteration objective.
+# (keyATM is NOT here: it supports opt-in convergence_tol early-stopping.)
+_CONVERGED_FALSE_ALWAYS = {"HDP", "GSDMM", "DTM", "HLDA"}
 
 # ---------------------------------------------------------------------------
 # Helpers to build a minimal fitted instance for any registry model
@@ -376,6 +378,69 @@ class TestLDAConvergenceInterface:
         path = str(tmp_path / "lda_converged.bin")
         model.save(path)
         loaded = topica.LDA.load(path)
+        assert loaded.converged is True
+
+
+# ---------------------------------------------------------------------------
+# keyATM opt-in convergence (issue #95): base, covariate, and dynamic Gibbs
+# variants early-stop on convergence_tol; CVB0 never does.
+# ---------------------------------------------------------------------------
+
+class TestKeyATMConvergence:
+    """keyATM mirrors the LDA-family convergence contract on its Gibbs backends."""
+
+    def _base(self, iters=400, convergence_tol=0.0, seed=42):
+        m = topica.KeyATM({"a": ["cat"]}, num_topics=2, seed=seed)
+        m.fit(_TOY, iters=iters, convergence_tol=convergence_tol)
+        return m
+
+    def test_default_converged_false_and_trace_nonempty(self):
+        """Default fit (no tol) runs to the cap: converged False, trace recorded."""
+        m = self._base(iters=400)
+        assert m.converged is False
+        assert len(m.fit_history) > 0
+
+    def test_tol_triggers_early_stop(self):
+        """A loose tolerance stops the base sampler well before the cap."""
+        m = self._base(iters=400, convergence_tol=1.0)
+        assert m.converged is True
+        assert m.fit_history[-1][0] < 400
+
+    def test_covariate_variant_early_stops(self):
+        """The covariate (DMR-prior) keyATM honors convergence_tol."""
+        import numpy as np
+        m = topica.KeyATM({"a": ["cat"]}, num_topics=2, seed=42)
+        cov = np.array([[1.0, 0.0]] * 15 + [[0.0, 1.0]] * 15)
+        m.fit(_TOY, covariates=cov, iters=400, convergence_tol=1.0)
+        assert m.converged is True
+
+    def test_dynamic_variant_early_stops(self):
+        """The dynamic (change-point HMM) keyATM honors convergence_tol."""
+        m = topica.KeyATM({"a": ["cat"]}, num_topics=2, seed=42)
+        ts = [0] * 15 + [1] * 15
+        m.fit(_TOY, timestamps=ts, num_states=2, iters=400, convergence_tol=1.0)
+        assert m.converged is True
+
+    def test_cvb0_ignores_tol(self):
+        """The CVB0 backend keeps no trace and never early-stops."""
+        m = topica.KeyATM({"a": ["cat"]}, num_topics=2, seed=42, sampler="cvb0")
+        m.fit(_TOY, iters=50, convergence_tol=1.0)
+        assert m.converged is False
+
+    def test_default_behavior_bit_for_bit(self):
+        """Passing convergence_tol=0.0 must not change the default fit."""
+        import numpy as np
+        a = self._base(iters=200, convergence_tol=0.0, seed=7)
+        b = topica.KeyATM({"a": ["cat"]}, num_topics=2, seed=7)
+        b.fit(_TOY, iters=200)
+        np.testing.assert_array_equal(a.topic_word, b.topic_word)
+
+    def test_converged_persists_across_save_load(self, tmp_path):
+        m = self._base(iters=400, convergence_tol=1.0)
+        assert m.converged is True  # precondition
+        path = str(tmp_path / "keyatm_converged.bin")
+        m.save(path)
+        loaded = topica.KeyATM.load(path)
         assert loaded.converged is True
 
 

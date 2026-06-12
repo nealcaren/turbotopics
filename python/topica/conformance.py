@@ -177,12 +177,15 @@ EXEMPT: dict[tuple[str, str], str] = {
 # ---------------------------------------------------------------------------
 # Key: (model_name, requirement)   Value: phase note
 #
-# Issue #46 Part B: DMR, SeededLDA, LabeledLDA, SAGE, SupervisedLDA, PA, PT
-# return an empty fit_history (no per-iteration trace wired yet) and
-# converged=False (no early-stop).  The conformance check here is class-level
-# (hasattr), which passes because the attribute exists.  The per-iteration
-# trace quality is verified in tests/test_convergence_interface.py, which
-# marks those seven models xfail until part B ships.
+# Issue #46 (both parts) and #95 have shipped: every iterative model records a
+# real per-iteration fit_history and exposes a converged flag, and the whole
+# collapsed-Gibbs family (LDA, DMR, SeededLDA, LabeledLDA, SAGE, SupervisedLDA,
+# PA, PT, keyATM) supports opt-in convergence_tol early-stopping.  Per-iteration
+# trace quality and early-stop semantics are verified in
+# tests/test_convergence_interface.py.  No known convergence gaps remain; HDP and
+# GSDMM intentionally never early-stop (they discover topic/cluster counts, so a
+# log-likelihood plateau is not a convergence signal — see that test's
+# _CONVERGED_FALSE_ALWAYS set).
 
 KNOWN_GAPS: dict[tuple[str, str], str] = {}
 

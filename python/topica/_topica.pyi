@@ -298,11 +298,14 @@ class DMR:
 
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -990,11 +993,14 @@ class SupervisedLDA:
         ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -1124,11 +1130,14 @@ class SAGE:
     def doc_names(self) -> list[str]: ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -1245,11 +1254,14 @@ class LabeledLDA:
 
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -1603,11 +1615,14 @@ class PT:
     def load(path: str) -> "PT": ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -1766,11 +1781,14 @@ class PA:
     def load(path: str) -> "PA": ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -1866,9 +1884,18 @@ class SeededLDA:
         data: Corpus | Sequence[Sequence[str]],
         *,
         iters: int = 2000,
+        doc_topic_prior: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
-    ) -> None: ...
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
+    ) -> None:
+        """Fit the seeded model. `convergence_tol` (default 0.0, disabled) enables
+        opt-in log-likelihood early stopping on the default ("sparse") sampler,
+        recording the `fit_history` trace every `check_every` sweeps; the "cvb0"
+        and "warp" backends ignore both (no per-iteration trace, `converged`
+        stays False)."""
+        ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
     @property
@@ -1923,11 +1950,14 @@ class SeededLDA:
     def load(path: str) -> "SeededLDA": ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
-        """Per-iteration trace. Empty until issue #46 part B wires the trace."""
+        """Per-iteration ``(iteration, objective)`` trace recorded every
+        ``check_every`` sweeps during :meth:`fit` (empty when ``check_every=0``)."""
         ...
     @property
     def converged(self) -> bool:
-        """Always False; no early-stop criterion yet."""
+        """True if fit early-stopped because the relative change in the objective
+        fell below ``convergence_tol``; False when the full ``iters`` ran (the
+        default, opt-in early stopping)."""
         ...
     def __repr__(self) -> str: ...
 
@@ -2388,6 +2418,7 @@ class KeyATM:
         report_interval: int = 0,
         keep_theta_draws: bool = True,
         num_theta_draws: int = 25,
+        convergence_tol: float = 0.0,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -2408,7 +2439,15 @@ class KeyATM:
         `report_interval` sets how often model_fit is recorded for
         `log_likelihood_history` (keyATM's model_fit / plot_modelfit): 0
         (default) records ~50 evenly spaced points across the run; a positive
-        value records every that-many sweeps."""
+        value records every that-many sweeps.
+
+        `convergence_tol` (default 0.0, disabled) enables opt-in early stopping
+        on the recorded model_fit trace: the Gibbs sweep stops once the relative
+        change in the log-likelihood between two recorded points falls below the
+        tolerance, setting `converged` to True (the relative-bound criterion R
+        stm uses; 0.0 runs the full `iters`, the field convention for collapsed
+        samplers). Applies to the base/covariate/dynamic Gibbs backends; ignored
+        by the CVB0 backend, which keeps no trace."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
@@ -2524,6 +2563,8 @@ class KeyATM:
         ...
     @property
     def converged(self) -> bool:
-        """Always False; KeyATM has no early-stop criterion."""
+        """True if the Gibbs run early-stopped because the relative change in the
+        recorded model_fit log-likelihood fell below `convergence_tol`; False when
+        the full `iters` ran (the default; always False for the CVB0 backend)."""
         ...
     def __repr__(self) -> str: ...

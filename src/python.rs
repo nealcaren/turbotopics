@@ -289,6 +289,7 @@ struct KeyAtmState {
     seed: u64, fitted: bool, topic_names: Vec<String>, keyword_rate: Vec<f64>,
     phi: Option<Arr2>, theta: Option<Arr2>, corpus: Option<corpus::Corpus>,
     #[serde(default)] log_likelihood_history: Vec<(usize, f64, f64)>,
+    #[serde(default)] converged: bool,
     #[serde(default)] alpha_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] pi_history: Vec<(usize, Vec<f64>)>,
     #[serde(default)] alpha_vec: Option<Vec<f64>>,
@@ -11293,6 +11294,8 @@ pub struct KeyATM {
     transition_matrix: Option<Array2<f64>>,
     // Convergence trace: (iteration, log-likelihood, perplexity) — keyATM's model_fit.
     log_likelihood_history: Vec<(usize, f64, f64)>,
+    // Whether the Gibbs run early-stopped on convergence_tol (opt-in; false by default).
+    converged: bool,
     // (iteration, alpha vector) and (iteration, pi vector) — plot_alpha / plot_pi.
     alpha_history: Vec<(usize, Vec<f64>)>,
     pi_history: Vec<(usize, Vec<f64>)>,
@@ -11370,7 +11373,7 @@ impl KeyATM {
             keyword_rate: Vec::new(), phi: None, theta: None, corpus: None,
             feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
-            transition_matrix: None, log_likelihood_history: Vec::new(),
+            transition_matrix: None, log_likelihood_history: Vec::new(), converged: false,
             alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
             theta_draws: None,
         })
@@ -11399,7 +11402,7 @@ impl KeyATM {
             topic_names: Vec::new(), keyword_rate: Vec::new(), phi: None, theta: None,
             corpus: None, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
-            transition_matrix: None, log_likelihood_history: Vec::new(),
+            transition_matrix: None, log_likelihood_history: Vec::new(), converged: false,
             alpha_history: Vec::new(), pi_history: Vec::new(), alpha_vec: None,
             theta_draws: None,
         })
@@ -11425,7 +11428,7 @@ impl KeyATM {
                         timestamps=None, num_states=5, weights="information-theory",
                         num_threads=1, optimize_interval=50, burn_in=200, prior_variance=1.0,
                         lbfgs_iters=20, report_interval=0, prior_offset=None,
-                        keep_theta_draws=true, num_theta_draws=25))]
+                        keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -11446,6 +11449,7 @@ impl KeyATM {
         prior_offset: Option<&Bound<'_, PyAny>>,
         keep_theta_draws: bool,
         num_theta_draws: usize,
+        convergence_tol: f64,
     ) -> PyResult<()> {
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
             c.inner
@@ -11553,7 +11557,7 @@ impl KeyATM {
                     &sorted_docs, num_types, num_topics, &keys, &sorted_time, num_states,
                     beta, beta_key, g1, g2,
                     1.0, 1.0, 2.0, 1.0, // keyATM α-prior defaults: eta_1, eta_2, eta_1_reg, eta_2_reg
-                    iters, ll_interval, weight_scheme, nthreads, draws_opts, &mut rng,
+                    iters, ll_interval, weight_scheme, nthreads, draws_opts, convergence_tol, &mut rng,
                 )
             });
 
@@ -11575,6 +11579,7 @@ impl KeyATM {
                 self.transition_matrix = Some(vecs_to_arr2(&d.p_est));
             }
             self.log_likelihood_history = model.log_likelihood_history.clone();
+            self.converged = model.converged;
             self.alpha_history = model.alpha_history.clone();
             self.pi_history = model.pi_history.clone();
             self.alpha_vec = model.alpha_vec.clone();
@@ -11668,7 +11673,7 @@ impl KeyATM {
                     &corpus.docs, num_types, num_topics, &keys, f, f[0].len(),
                     beta, beta_key, g1, g2, iters, optimize_interval, burn_in,
                     prior_variance, lbfgs_iters, ll_interval, weight_scheme, nthreads,
-                    offset.as_deref(), draws_opts, &mut rng,
+                    offset.as_deref(), draws_opts, convergence_tol, &mut rng,
                 ),
                 None if cvb0 => keyatm::fit_keyatm_cvb0(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
@@ -11676,7 +11681,7 @@ impl KeyATM {
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, &mut rng,
+                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, convergence_tol, &mut rng,
                 ),
             };
             (m, corpus)
@@ -11687,6 +11692,7 @@ impl KeyATM {
             draws_to_array3(&model.theta_draws, corpus.num_docs(), num_topics, None);
         self.keyword_rate = model.keyword_rate();
         self.log_likelihood_history = model.log_likelihood_history.clone();
+        self.converged = model.converged;
         self.alpha_history = model.alpha_history.clone();
         self.pi_history = model.pi_history.clone();
         self.alpha_vec = model.alpha_vec.clone();
@@ -11835,11 +11841,14 @@ impl KeyATM {
             .collect())
     }
 
-    /// KeyATM does not implement an early-stop criterion; always ``False``.
+    /// ``True`` if the Gibbs run early-stopped because the relative change in the
+    /// recorded ``model_fit`` log-likelihood fell below ``convergence_tol``;
+    /// ``False`` when the full ``iters`` sweeps ran (the default, and always for
+    /// the CVB0 backend, which keeps no trace).
     #[getter]
     fn converged(&self) -> PyResult<bool> {
         self.require_fitted()?;
-        Ok(false)
+        Ok(self.converged)
     }
 
     /// Trace of the estimated document-topic prior α as ``(iteration, alpha)``
@@ -11917,6 +11926,7 @@ impl KeyATM {
             keyword_rate: self.keyword_rate.clone(), phi: arr2_opt(&self.phi),
             theta: arr2_opt(&self.theta), corpus: self.corpus.clone(),
             log_likelihood_history: self.log_likelihood_history.clone(),
+            converged: self.converged,
             alpha_history: self.alpha_history.clone(),
             pi_history: self.pi_history.clone(),
             alpha_vec: self.alpha_vec.clone(),
@@ -11935,6 +11945,7 @@ impl KeyATM {
             corpus: s.corpus, feature_effects: None, feature_names: Vec::new(),
             time_state: Vec::new(), time_prevalence: None, time_labels: Vec::new(),
             transition_matrix: None, log_likelihood_history: s.log_likelihood_history,
+            converged: s.converged,
             alpha_history: s.alpha_history, pi_history: s.pi_history,
             alpha_vec: s.alpha_vec, theta_draws: None,
         })
