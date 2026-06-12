@@ -86,3 +86,32 @@ def test_doc_topic_prior_rejected_for_warp():
     m = topica.SeededLDA(_SEEDS, seed=1, sampler="warp")
     with pytest.raises(ValueError):
         m.fit(docs, iters=20, doc_topic_prior=prior)
+
+
+def _fit_cvb0(docs, iters=200, **kw):
+    m = topica.SeededLDA(_SEEDS, seed=1, sampler="cvb0", **kw)
+    m.fit(docs, iters=iters)
+    return m
+
+
+def test_cvb0_recovers_and_valid():
+    m = _fit_cvb0(_docs())
+    assert _recovered(m) == {0, 1, 2}
+    npt.assert_allclose(m.topic_word.sum(axis=1), 1.0)
+    npt.assert_allclose(m.doc_topic.sum(axis=1), 1.0)
+    assert m.topic_word.shape == (3, 12)
+
+
+def test_cvb0_deterministic_no_draws():
+    a = _fit_cvb0(_docs(), iters=120)
+    b = _fit_cvb0(_docs(), iters=120)
+    npt.assert_array_equal(a.topic_word, b.topic_word)
+    assert a.theta_draws is None
+
+
+def test_cvb0_rejects_doc_topic_prior():
+    docs = _docs(60)
+    prior = np.full((len(docs), 3), 0.1)
+    m = topica.SeededLDA(_SEEDS, seed=1, sampler="cvb0")
+    with pytest.raises(ValueError):
+        m.fit(docs, iters=20, doc_topic_prior=prior)

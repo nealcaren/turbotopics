@@ -185,9 +185,12 @@ class DMR:
         sampler selects the inference backend: "sparse" (default) is the
         SparseLDA collapsed-Gibbs sweep with the per-document DMR prior; "warp"
         is the WarpLDA cache-efficient sampler (per-document-α doc phase), whose
-        per-sweep cost is flat in K. As with plain LDA, prefer "sparse" up to
-        ~K=200 and "warp" for large-K (K >= ~500) models; "warp" does not record
-        the convergence trace, so convergence_tol has no effect there."""
+        per-sweep cost is flat in K; "cvb0" is deterministic collapsed
+        variational Bayes (per-document α; the soft expected counts feed the λ
+        optimizer directly), the quality choice at the cost of O(K)-per-token
+        compute. As with plain LDA, prefer "sparse" up to ~K=200, "warp" for
+        large-K (K >= ~500); the "warp"/"cvb0" paths record no convergence
+        trace, so convergence_tol has no effect there."""
         ...
 
     def fit(
@@ -1828,10 +1831,12 @@ class SeededLDA:
     ) -> None:
         """sampler selects the backend: "sparse" (default) is the seeded
         collapsed-Gibbs sweep; "warp" is the WarpLDA cache-efficient sampler
-        (seeded word phase), whose per-sweep cost is flat in K. SeededLDA's
-        sparse sweep scores all K topics per token, so "warp" is dramatically
-        faster at large K (e.g. ~40x at K=500 on a 2,000-document corpus) at
-        comparable coherence. "warp" does not yet support doc_topic_prior."""
+        (seeded word phase), whose per-sweep cost is flat in K; "cvb0" is
+        deterministic collapsed variational Bayes (seeded β), the quality choice.
+        SeededLDA's sparse sweep scores all K topics per token, so "warp" is
+        dramatically faster at large K (e.g. ~40x at K=500 on a 2,000-document
+        corpus) at comparable coherence. The "warp" and "cvb0" paths do not yet
+        support doc_topic_prior."""
         ...
     def fit(
         self,
