@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "topica"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "bhtsne",
  "bincode",

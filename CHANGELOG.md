@@ -6,12 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-06-13
+
 ### Fixed
 
 - `BERTopic`/`Top2Vec` no longer panic when `min_cluster_size` (or `min_samples`)
   exceeds the number of documents: the degenerate regime now resolves to a clean
   `num_topics=0` with the usual "lower min_cluster_size / add data" warning,
   instead of letting a `petal-clustering` MST panic escape into Python (#122).
+- `term_topic_browser(...).to_html(path)` now writes the interactive figure to the
+  given path (via an `_InteractiveFigure` wrapper that also delegates the Plotly
+  figure's own methods), instead of silently doing nothing (#135).
 
 ### Documentation
 
