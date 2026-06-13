@@ -8,8 +8,9 @@
 #   3. Compiles the assembled submission in isolation to prove it is
 #      self-contained, then tars it.
 #
-# Prereq: run `replication.py` first to produce fig_poliblog_effect.pdf
-# (e.g. `python paper/replication.py --quick`).
+# Prereq: generate the figures first --
+#   python paper/replication.py --quick   # fig_poliblog_effect.pdf, fig_poliblog_report.pdf
+#   python benchmarks/bench.py            # fig_thread_scaling.pdf (needs R/MALLET; quiet machine)
 # Usage:  bash paper/make_arxiv.sh
 set -euo pipefail
 
@@ -20,6 +21,8 @@ trap 'rm -rf "$STAGE"' EXIT
 
 # --- locate jss.cls / jss.bst (kpsewhich, else R's bundled texmf) -----------
 find_tex() {
+  # Prefer a copy bundled in paper/ (the README tells users to put jss.cls here).
+  [ -f "$HERE/$1" ] && { echo "$HERE/$1"; return; }
   local f; f="$(kpsewhich "$1" 2>/dev/null || true)"
   [ -n "$f" ] || f="$(find /Library/Frameworks/R.framework /usr/local/texlive \
                         -name "$1" 2>/dev/null | head -1)"
@@ -31,7 +34,7 @@ JSS_BST="$(find_tex jss.bst)"
 
 for fig in fig_poliblog_effect.pdf fig_poliblog_report.pdf fig_thread_scaling.pdf; do
   [ -f "$HERE/$fig" ] || {
-    echo "ERROR: $fig missing. Run: python paper/replication.py --quick"; exit 1; }
+    echo "ERROR: $fig missing. Generate it (replication.py --quick / benchmarks/bench.py)"; exit 1; }
 done
 
 # --- build the .bbl ---------------------------------------------------------
@@ -40,15 +43,17 @@ cp "$HERE/topica.tex" "$HERE/topica.bib" "$JSS_CLS" "$JSS_BST" \
    "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$HERE/fig_thread_scaling.pdf" "$BUILD/"
 ( cd "$BUILD"
   export TEXINPUTS=".:" BSTINPUTS=".:" BIBINPUTS=".:"
-  pdflatex -interaction=nonstopmode topica.tex >/dev/null
-  bibtex topica >/dev/null
-  pdflatex -interaction=nonstopmode topica.tex >/dev/null
-  pdflatex -interaction=nonstopmode topica.tex >/dev/null )
+  pdflatex -interaction=nonstopmode topica.tex >build.log 2>&1
+  bibtex topica >>build.log 2>&1
+  pdflatex -interaction=nonstopmode topica.tex >>build.log 2>&1
+  pdflatex -interaction=nonstopmode topica.tex >>build.log 2>&1 ) || {
+    echo "ERROR: .bbl build failed; tail of $BUILD/build.log:"; tail -30 "$BUILD/build.log"; exit 1; }
 
 # --- assemble the submission (tex + bbl + class/style + figure) -------------
 SUB="$STAGE/submission"; mkdir -p "$SUB"
 cp "$BUILD/topica.tex" "$BUILD/topica.bbl" "$JSS_CLS" "$JSS_BST" \
-   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" "$SUB/"
+   "$HERE/fig_poliblog_effect.pdf" "$HERE/fig_poliblog_report.pdf" \
+   "$HERE/fig_thread_scaling.pdf" "$SUB/"
 
 # --- prove it compiles in isolation (no .bib, bibtex not run) ---------------
 ( cd "$SUB"
@@ -60,7 +65,7 @@ if grep -qiE "Citation .* undefined|LaTeX Error|Undefined control" /tmp/arxiv_co
 fi
 
 tar czf "$OUT" -C "$SUB" topica.tex topica.bbl jss.cls jss.bst \
-  fig_poliblog_effect.pdf fig_poliblog_report.pdf
+  fig_poliblog_effect.pdf fig_poliblog_report.pdf fig_thread_scaling.pdf
 echo "wrote $OUT"
 echo "contents:"; tar tzf "$OUT" | sed 's/^/  /'
 echo "pages: $(pdfinfo "$SUB/topica.pdf" 2>/dev/null | awk '/Pages/{print $2}')"

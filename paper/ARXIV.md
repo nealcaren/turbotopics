@@ -3,7 +3,8 @@
 Build the self-contained tarball:
 
 ```bash
-VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python paper/replication.py --quick  # the figure
+VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python paper/replication.py --quick  # poliblog figures
+VIRTUAL_ENV="$PWD/.venv-dev" .venv-dev/bin/python benchmarks/bench.py            # fig_thread_scaling
 bash paper/make_arxiv.sh                                                         # the tarball
 ```
 
@@ -14,15 +15,16 @@ This produces `paper/arxiv-submission.tar.gz` containing exactly:
 - `topica.bbl` — the compiled bibliography, so arXiv does not run BibTeX
 - `jss.cls`, `jss.bst` — bundled so the build does not depend on arXiv carrying
   the `jss` package (it does, but bundling is belt-and-suspenders)
-- `fig_poliblog_effect.pdf` — the worked-example figure
+- `fig_poliblog_report.pdf`, `fig_poliblog_effect.pdf`, `fig_thread_scaling.pdf`
+  — the three figures the manuscript includes
 
 The script compiles the assembled tarball in isolation before packing it, so what
 ships is what was verified. Upload the tarball directly to arXiv (do not unpack).
 
 ## Submission form metadata
 
-**Title:** topica: Fast, Reproducible, Reference-Validated Topic Modeling for the
-Social Sciences in Python
+**Title:** topica: A Unified Python Framework for Topic Modeling in the Social
+Sciences  (must match the `\title` in topica.tex)
 
 **Authors:** Neal Caren (University of North Carolina at Chapel Hill)
 
@@ -37,7 +39,7 @@ Social Sciences in Python
 **License:** CC BY 4.0 (recommended; permissive, matches the Apache-2.0 software).
 The arXiv non-exclusive license is the fallback if a target journal forbids CC BY.
 
-**Comments field:** 13 pages, 1 figure. Software: https://github.com/nealcaren/topica
+**Comments field:** 21 pages, 3 figures. Software: https://github.com/nealcaren/topica
 
 **Abstract (plain text for the web form):**
 
@@ -54,8 +56,9 @@ embedding-based models can be compared on one corpus without leaving the session
 The variational models are deterministic to the bit, including when multithreaded,
 and the sampling models are reproducible from a fixed seed, which makes "refit and
 check that the result holds" a real test rather than a hope. Each model is validated
-against its reference implementation: the collapsed-Gibbs sampler reproduces
-MALLET's output bit-for-bit, the keyword-assisted model matches the R keyATM
+against its reference implementation: the collapsed-Gibbs sampler reproduces a
+Rust MALLET port byte-for-byte and recovers Java MALLET's topics, the
+keyword-assisted model matches the R keyATM
 package, and the structural topic model recovers the substantive conclusions of the
 stm vignettes with honest uncertainty from the method of composition. On matched
 iterations topica fits these models from three to twenty-two times faster than the
