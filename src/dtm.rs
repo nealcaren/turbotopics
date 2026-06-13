@@ -269,6 +269,12 @@ impl Sslm {
         }
         self.update_zeta();
         let mut val: f64 = (0..v).map(|w| self.variance[w][0] - self.variance[w][t]).sum();
+        // (val / 2) * cv, matching gensim's sslm.compute_bound verbatim:
+        //   val = sum(variance[w][0] - variance[w][t]) / 2 * chain_variance
+        // (ldaseqmodel.py; `/ 2 * cv` is left-associative, i.e. a *multiply* by cv).
+        // This leading term multiplies by cv; the per-time-slice term below divides
+        // by (2*cv), exactly as gensim does -- the two are deliberately different.
+        // Do not "fix" this to / (2*cv): that would diverge from gensim by ~1/cv^2.
         val = val / 2.0 * cv;
         for ti in 1..=t {
             let mut term1 = 0.0;

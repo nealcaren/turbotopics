@@ -16,6 +16,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Documentation
 
+- Added `parity/coherence_gensim_compare.py`, a cross-implementation check of c_v
+  against gensim's `CoherenceModel`. topica's c_v ranks topics as gensim does
+  (Spearman ρ ≈ 0.998 on long-document corpora, ≈ 0.98 on short ones) with a small,
+  documented offset that grows for documents shorter than the c_v window; absolute
+  c_v is not comparable across implementations, but within-corpus ranking is
+  (design-review #04.1). Confirmed the DTM variational bound (`src/dtm.rs`) is a
+  verbatim transcription of gensim's `sslm.compute_bound` and added a citation
+  comment so the formula is not mistakenly "corrected" into divergence
+  (design-review #04.2, not a bug).
 - Corrected the LDA/MALLET attribution in the README, docs, and paper. `LDA` is a
   port of David Mimno's RustMallet that uses its own RNG (PCG, vs RustMallet's
   ChaCha8), so it is **not** byte-identical to RustMallet, contrary to the previous
