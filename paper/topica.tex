@@ -563,16 +563,22 @@ The parameters replicate, and so does the conclusion: on the canonical vignettes
 standard errors from the method of composition.
 
 \paragraph{Sentiment-discourse model.} \code{STS} is validated against the
-authors' published immigration fit (Application~1, $K=3$) from the
+authors' published political-blog fit ($K=5$, the same 13{,}246-document poliblog
+corpus the worked example of Section~\ref{sec:example} runs on) from the
 \citet{chen2024sts} replication package, on the corpus their \proglang{R} code
-regenerates (\code{parity/sts\_r\_compare.py}). The check is calibrated rather
-than absolute: on this small three-topic corpus two independent implementations
-partition 341 short documents slightly differently, so the cross-implementation
-gap is irreducible. We therefore ask that \pkg{topica}'s \code{STS} sit about as
-close to the reference \code{STS} (a topic-word cosine near $0.48$) as the
-already-validated \code{STM} sits to \proglang{R} \pkg{stm} on the same corpus,
-and that \pkg{topica}'s \code{STS} agree with its own \code{STM}, confirming that
-\code{STS} correctly extends \code{STM}. The script reads the (non-redistributable)
+regenerates (\code{parity/sts\_r\_compare.py}). \pkg{topica}'s \code{STS} recovers
+the published topics at a topic-word cosine of $0.93$, against $0.08$ for a
+vocabulary-permuted control, with the recovered topics matching word for word
+(campaign, Iraq and the war, the Obama--Clinton primary, energy and taxes). The
+representative topic is read at the mean sentiment rather than at zero, because
+\code{STS} parks the topic signal in the sentiment direction $\kappa^{(s)}$ when
+the sentiment seed correlates with content, exactly as the reference's
+\code{print.topWords} does. We benchmark the agreement rather than assert a
+threshold: $0.93$ sits just below the $0.97$ at which \pkg{topica}'s already
+validated \code{STM} matches \proglang{R} \pkg{stm} on this corpus and the $0.96$
+at which the reference's own \code{STS} and \code{STM} agree, and \pkg{topica}'s
+\code{STS} agrees with its own \code{STM} at $0.94$, confirming that \code{STS}
+correctly extends \code{STM}. The script reads the (non-redistributable)
 replication package via the \code{STS\_REPL\_DIR} environment variable and skips
 cleanly when it, \proglang{R}, or \pkg{stm} is unavailable.
 

@@ -18,10 +18,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - Paper: the validation and availability sections now credit each artifact to the
   script that produces it. The Section 6 speed numbers point to the actual
   `benchmarks/` timing scripts (`bench_stm.py`, `bench.py`, `k_crossover.py`)
-  rather than `speed_vs_r.py` alone, the K-selection and clustered-SE discussion is
-  credited to the worked example in the docs (not `replication.py`), and the
-  Sentiment-discourse validation paragraph describes the committed calibrated check
-  (#110, #111).
+  rather than `speed_vs_r.py` alone, and the K-selection and clustered-SE
+  discussion is credited to the worked example in the docs (not `replication.py`)
+  (#111).
+- Paper: the Sentiment-discourse (`STS`) validation now runs on the published
+  political-blog fit (`Poliblogs_results.RDS`, K=5, the worked example's own
+  corpus) instead of the small gadarian K=3 corpus. `parity/sts_r_compare.py`
+  recovers the reference topics at a topic-word cosine of 0.93 (read at the mean
+  sentiment, where `STS` parks the topic signal), against a 0.97 STM baseline and a
+  0.96 same-ecosystem ceiling (#110).
 - `paper/replication.py` now drives the STM content-covariate and STS parity
   checks, probes for the R packages each check needs so a missing `quanteda`/
   `jsonlite` reports a clean SKIP, guards the effect-figure step behind its
