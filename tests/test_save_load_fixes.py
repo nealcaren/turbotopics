@@ -228,7 +228,15 @@ def _fit_keyatm():
     return m
 
 
-@pytest.mark.parametrize("fit_fn", [_fit_dmr, _fit_labeled, _fit_sage, _fit_keyatm])
+def _fit_seeded():
+    m = topica.SeededLDA({"k0": ["a", "b"], "k1": ["c", "d"]}, residual=1, seed=1)
+    m.fit(_TD_DOCS, iters=30)
+    return m
+
+
+@pytest.mark.parametrize(
+    "fit_fn", [_fit_dmr, _fit_labeled, _fit_sage, _fit_keyatm, _fit_seeded]
+)
 def test_theta_draws_survive_save_load(fit_fn, tmp_path):
     m = fit_fn()
     before = m.theta_draws
