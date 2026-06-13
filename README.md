@@ -1,6 +1,11 @@
 # Topica: fast, all-purpose topic modeling for Python
 
-`topica` is a fast topic-modeling library for Python with more than a dozen models, built for social scientists who want to move from text data to publishable results in a single workflow. It brings together models and tools usually split across JVM software like MALLET and R packages like `stm`, and runs them on a parallel Rust core competitive with the standard implementations, with every fit reproducible from a fixed seed. Each model comes with the validation, covariate-effect, and reporting tools to meet the standards reviewers expect.
+[![PyPI](https://img.shields.io/pypi/v/topica.svg)](https://pypi.org/project/topica/)
+[![CI](https://github.com/nealcaren/topica/actions/workflows/CI.yml/badge.svg)](https://github.com/nealcaren/topica/actions/workflows/CI.yml)
+[![Docs](https://img.shields.io/badge/docs-mkdocs--material-blue.svg)](https://nealcaren.github.io/topica/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+`topica` is a fast topic-modeling library for Python with more than a dozen models, built for social scientists who want to move from text data to publishable results in a single workflow. It brings together models and tools usually split across JVM software like MALLET and R packages like `stm`, and runs them on a parallel Rust core competitive with the standard implementations, with reproducible fits: the variational models are identical to the bit, and the samplers reproduce from a fixed seed and thread count. Each model comes with the validation, covariate-effect, and reporting tools to meet the standards reviewers expect.
 
 ```bash
 pip install topica

@@ -26,6 +26,8 @@ dependencies = ["numpy>=1.21"]
 Homepage = "https://nealcaren.github.io/topica/"
 Repository = "https://github.com/nealcaren/topica"
 Documentation = "https://nealcaren.github.io/topica/"
+Changelog = "https://github.com/nealcaren/topica/blob/main/CHANGELOG.md"
+Issues = "https://github.com/nealcaren/topica/issues"
 
 [project.optional-dependencies]
 # R-style formula interface (topica.design_matrix, estimate_effect(formula=...)).
