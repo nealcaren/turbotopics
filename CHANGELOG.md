@@ -14,6 +14,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   covariate model (DMR, STM, STS, KeyATM), not only STM. The `topica.stm.spline` /
   `topica.stm.interaction` paths still work (#137 follow-up).
 
+### Documentation
+
+- Corrected the LDA/MALLET attribution in the README, docs, and paper. `LDA` is a
+  port of David Mimno's RustMallet that uses its own RNG (PCG, vs RustMallet's
+  ChaCha8), so it is **not** byte-identical to RustMallet, contrary to the previous
+  "binds RustMallet … byte-for-byte" claim. The byte-for-byte guarantee that
+  `tests/test_cli_parity.py` verifies is internal — the Python binding versus
+  topica's own bundled `train` CLI. The Java MALLET cosine-1.000 result is a
+  planted-corpus sanity check, now labeled as such (design-review #01).
+- Corrected two model descriptions: `ETM` is a logistic-normal topic model (not
+  "Generative LDA," which implies a Dirichlet prior), and `HDP` learns the topic
+  count with concentrations held fixed by default (steered by `gamma`), rather than
+  freely "inferring" it (design-review #03).
+
 ## [0.16.2] - 2026-06-13
 
 ### Fixed

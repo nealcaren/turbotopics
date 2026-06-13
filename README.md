@@ -40,7 +40,7 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 | **`CTM`** | Correlated topics (logistic-normal) |
 | **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
 | **`DTM`** | Dynamic topics that evolve across time slices |
-| **`HDP`** | Nonparametric LDA that *infers* the number of topics |
+| **`HDP`** | Nonparametric LDA that learns the number of topics from the data; by default fits with fixed concentrations (topic count steered by `gamma`), with optional concentration resampling |
 | **`keyATM` / `seededlda`** | Guided topics steered by seed words |
 | **`ProdLDA`** | Sharper, more coherent topics via a product-of-experts word model, fit as an amortized VAE (no PyTorch) |
 | **`PT` / `GSDMM`** | Short-text models for tweets, survey answers, headlines |
@@ -55,7 +55,7 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 |-------|---------------|
 | **`BERTopic`** | Cluster document embeddings, label topics by class-TF-IDF; topic reduction and a soft per-document distribution |
 | **`Top2Vec`** | Topics as points in the embedding space; topic words are the nearest word vectors |
-| **`ETM`** | Generative LDA with the topic-word distribution factored through embeddings (`β = softmax(ρ·α)`); per-document EM or an amortized VAE (`inference="vae"`) |
+| **`ETM`** | Embedded Topic Model: a logistic-normal topic model with the topic-word distribution factored through embeddings (`β = softmax(ρ·α)`); per-document EM or an amortized VAE (`inference="vae"`) |
 | **`FASTopic`** | Topics read off two optimal-transport plans between document, topic, and word embeddings |
 
 Every model exposes the same shape: `fit(docs, …)`, then `topic_word` (φ), `doc_topic` (θ), `top_words(n)`, and `save`/`load`. The count-based variational models (`CTM`/`STM`/`STS`/`SupervisedLDA`/`DTM`) parallelize across cores while staying bit-for-bit deterministic. The embedding models split into two kinds: `BERTopic` and `Top2Vec` run the `reduce → cluster → represent` pipeline, while `ETM` and `FASTopic` are generative and mixed-membership; all of them take vectors from any embedder (sentence-transformers, an API, a local model such as ollama). Full guides: [the models](https://nealcaren.github.io/topica/guides/models/) and [embedding topics](https://nealcaren.github.io/topica/guides/embedding/).
@@ -103,7 +103,7 @@ Requires `numpy >= 1.21`. Use `--release` (the debug build is much slower).
 
 Topica stands on a generation of open topic-modeling research and code. Each entry below lists the reference, its authors and year, and the topica class(es) it underlies; the other models are Rust ports or reimplementations, validated against these reference implementations.
 
-- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` binds David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) (Apache-2.0), reproducing its `train` CLI byte-for-byte; against Java MALLET (a different RNG) it recovers the same topics (cosine 1.000)
+- [**MALLET**](https://github.com/mimno/Mallet) (McCallum, 2002) — `LDA`, `DMR`, `LabeledLDA`: the SparseLDA sampler, Dirichlet-multinomial regression, and hyperparameter optimization. `LDA` began as a port of David Mimno's [**RustMallet**](https://github.com/mimno/RustMallet) (Apache-2.0) and follows its SparseLDA sampler and fixed-point optimizer closely, but uses its own RNG (PCG), so it is not byte-identical to RustMallet. Against Java MALLET (also a different RNG) it recovers the same topics on a planted corpus (cosine 1.000)
 - [**stm**](https://github.com/bstewart/stm) (Roberts, Stewart & Tingley, 2019) — `STM`, `CTM`, `SAGE`: variational EM, `estimateEffect`, `searchK`, FREX, spectral initialization, and the method of composition
 - [**sts**](https://cran.r-project.org/package=sts) (Chen & Mankad, 2024) — `STS`: the Structural Topic and Sentiment-Discourse model — the joint prevalence/sentiment Laplace E-step and the Poisson topic-word M-step, validated against the package
 - [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab, 2006–2007) — `CTM`, `DTM`, `HDP`: the CTM, Dynamic Topic Model, and HDP samplers

@@ -914,8 +914,9 @@ pub struct LDA {
     // keeping every alpha[t] equal, instead of learning the per-topic shape.
     use_symmetric_alpha: bool,
     // Seed the initial token→topic assignment from a spectral anchor-word β
-    // instead of a uniform random draw. Opt-in (default random) so the MALLET
-    // byte-parity guarantee and existing determinism baselines are unchanged.
+    // instead of a uniform random draw. Opt-in (default random) so the CLI
+    // byte-parity (binding == bundled train CLI) and existing determinism
+    // baselines are unchanged.
     init_spectral: bool,
 
     // Populated after fit().
@@ -1279,7 +1280,7 @@ impl LDA {
         // difference. Unlike the SparseLDA path below, these compute no inline
         // log_likelihood, so convergence_tol is unsupported (full iters, empty
         // trace, converged=false). The SparseLDA path stays separate to keep its
-        // convergence trace, parallel sweep, and MALLET byte-parity untouched.
+        // convergence trace, parallel sweep, and CLI byte-parity untouched.
         if warp || light {
             let (acc_phi, acc_theta, theta_draw_buf, model, corpus) =
                 py.allow_threads(move || {

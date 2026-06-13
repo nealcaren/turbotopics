@@ -1,10 +1,12 @@
 """CLI-parity regression test.
 
-The Python binding ports `src/bin/train.rs` verbatim — same ChaCha8Rng seed,
-same initialize/sample/optimize/average order, same TSV writers. So for an
-identical corpus and identical parameters it must reproduce the upstream
-`train` CLI **byte-for-byte**. This test pins that guarantee so it can't
-silently drift.
+The Python binding and the bundled `train` CLI (`src/bin/train.rs`) share one
+sampler — same PCG (`Pcg64Mcg`) seed, same initialize/sample/optimize/average
+order, same TSV writers. So for an identical corpus and identical parameters the
+binding must reproduce topica's own `train` CLI **byte-for-byte**. This test pins
+that internal guarantee so the library and the CLI can't silently drift. (It is
+not a parity check against MALLET or RustMallet, which use different RNGs and so
+are not byte-identical to topica.)
 
 It builds the release binaries once, runs `preprocess` + `train`, runs the
 binding on the same corpus with matched parameters, and asserts the output
