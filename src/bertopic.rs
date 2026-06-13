@@ -168,6 +168,10 @@ pub fn fit_bertopic(
     // document-topic distribution.
     let ctfidf_raw = represent::ctfidf_weighted(docs, &labels, vocab_size, bm25, reduce_frequent);
     let idf = idf_weights(docs, &labels, vocab_size);
+    // Row-normalize c-TF-IDF to sum to one so topic_word has the same surface as
+    // the probability models' (top_words, topic_table, coherence all read it).
+    // This is for cross-model compatibility, not a probability claim: c-TF-IDF is
+    // not P(w|topic), and the viz layer labels it "c-TF-IDF weight" accordingly.
     let mut topic_word = ctfidf_raw.clone();
     for row in topic_word.iter_mut() {
         let sum: f64 = row.iter().sum();

@@ -320,7 +320,9 @@ For statistically-selected phrases instead of every bigram, use
 
 !!! note "Faithful to the references"
     On a shared task with shared document embeddings, topica's `Top2Vec` and
-    `BERTopic` recover the same clusters as the Python `BERTopic` package (same
-    topics, matching assignments). The difference is the dependency footprint:
-    topica runs the pipeline in Rust with none of `torch`, `umap-learn`, or
-    `hdbscan` installed.
+    `BERTopic` recover comparable topic structure to the Python `BERTopic`
+    package. Because topica uses its own PCA/UMAP reducer and a different HDBSCAN
+    implementation, exact cluster assignments will differ from the `umap-learn` +
+    `hdbscan` reference; what matches is the kind of topics recovered. The payoff
+    is the dependency footprint: topica runs the pipeline in Rust with none of
+    `torch`, `umap-learn`, or `hdbscan` installed.

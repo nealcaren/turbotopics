@@ -16,6 +16,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Documentation
 
+- Softened several cross-implementation claims to match what the artifacts show
+  (design-review #02/#05/#06): keyATM/seededlda "verified word-for-word" → topic
+  agreement via the reproducible `parity/` harness; BERTopic/Top2Vec "matching
+  assignments" → "comparable structure; exact cluster assignments differ" (own
+  PCA/UMAP + HDBSCAN); gensim credited for the coherence-pipeline conventions (the
+  measures are Röder et al. and Mimno et al.) and "computed in the Rust core" →
+  "co-occurrence counting in the core." `estimate_effect` now states it propagates
+  per-document θ posterior uncertainty but not global-parameter (β/Σ/γ)
+  uncertainty, so its SEs run slightly smaller than R `stm`'s `estimateEffect`; the
+  Gadarian vignette is hedged as a single fit (confirm with `searchK`,
+  `select_model`, `permutation_test`). `topic_correlation`'s docstring notes it is
+  the raw/simple estimate (matching `stm`'s `topicCorr` default) and points to the
+  closure-corrected `viz.topic_correlation(method="clr")`; the c-TF-IDF
+  row-normalization is labeled a surface-compatibility convenience, not a
+  probability claim.
 - Added `parity/coherence_gensim_compare.py`, a cross-implementation check of c_v
   against gensim's `CoherenceModel`. topica's c_v ranks topics as gensim does
   (Spearman ρ ≈ 0.998 on long-document corpora, ≈ 0.98 on short ones) with a small,

@@ -24,7 +24,11 @@ A naive regression of point topic proportions on covariates treats θ as if it
 were observed exactly. It isn't. R's `stm` uses the **method of composition**
 (Treier & Jackman 2008): draw θ from the model's posterior, regress each draw,
 and pool by Rubin's rules so the standard errors include topic-estimation
-uncertainty. topica does the same:
+uncertainty. topica does the same, drawing θ from each document's variational
+posterior. (It propagates that per-document θ uncertainty; it does not also
+simulate the global parameters β, Σ, and γ, so its pooled standard errors run a
+touch smaller than `stm`'s. The inflation over naive point-θ OLS is the part that
+matters, and it is there.)
 
 ```python
 from topica import stm
