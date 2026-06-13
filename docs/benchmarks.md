@@ -47,9 +47,11 @@ RAYON_NUM_THREADS=1 python benchmarks/bench_stm.py  # single core
 
 ## LDA: MALLET's algorithm without the JVM
 
-topica's LDA binds RustMallet, David Mimno's Rust port of MALLET's SparseLDA
-collapsed-Gibbs sampler, and reproduces its `train` CLI byte-for-byte; against
-Java MALLET (a different RNG) it recovers the same topics (cosine 1.000). On fit
+topica's LDA began as a port of RustMallet, David Mimno's Rust port of MALLET's
+SparseLDA collapsed-Gibbs sampler, and follows its sampler and fixed-point
+optimizer closely. It uses its own RNG (PCG) rather than RustMallet's, so it is
+not byte-identical to RustMallet; against Java MALLET (also a different RNG) it
+recovers the same topics on a planted corpus (cosine 1.000). On fit
 time it is roughly at parity with Java MALLET — and adds no JVM startup, unlike
 the JVM samplers or pure-Python gensim.
 

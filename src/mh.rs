@@ -7,8 +7,9 @@
 //!
 //! The default SparseLDA sampler is deliberately *not* behind this trait: it
 //! mutates a [`TopicModel`] in place, supports the convergence-tol trace and the
-//! document-partitioned parallel sweep, and carries the MALLET byte-parity
-//! guarantee, so it keeps its dedicated path.
+//! document-partitioned parallel sweep, and carries the CLI byte-parity
+//! guarantee (the Python binding matches the bundled `train` CLI byte-for-byte),
+//! so it keeps its dedicated path.
 
 use rand_pcg::Pcg64Mcg;
 

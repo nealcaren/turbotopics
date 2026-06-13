@@ -335,7 +335,7 @@ Model & What it is for & Reference \\
 \code{STM}          & Prevalence \emph{and} content covariates             & \citet{roberts2016model} \\
 \code{STS}          & Covariate-driven topic sentiment-discourse on STM    & \citet{chen2024sts} \\
 \code{SAGE}         & A topic worded differently across groups             & \citet{eisenstein2011sage} \\
-\code{HDP}          & Infers the number of topics                          & \citet{teh2006hdp} \\
+\code{HDP}          & Learns the number of topics (\code{gamma}-steered)   & \citet{teh2006hdp} \\
 \code{DTM}          & Topics that evolve across time slices                & \citet{blei2006dtm} \\
 \code{SupervisedLDA}& Topics shaped to predict a response                  & \citet{blei2008slda} \\
 \code{PT}, \code{GSDMM} & Short-text models                                & \citet{zuo2016pt, yin2014gsdmm} \\
@@ -345,7 +345,7 @@ Model & What it is for & Reference \\
 \multicolumn{3}{l}{\emph{Embedding-based}}\\
 \code{BERTopic}     & Cluster embeddings, label by class-TF-IDF            & \citet{grootendorst2022bertopic} \\
 \code{Top2Vec}      & Topics as points in the embedding space              & \citet{angelov2020top2vec} \\
-\code{ETM}          & Generative LDA factored through embeddings           & \citet{dieng2020etm} \\
+\code{ETM}          & Logistic-normal topic model factored through embeddings & \citet{dieng2020etm} \\
 \code{FASTopic}     & Topics from optimal-transport plans                  & \citet{wu2024fastopic} \\
 \bottomrule
 \end{tabularx}
@@ -528,16 +528,22 @@ generator, ``agreement'' means \emph{statistical} agreement on the fitted topics
 benchmarked against each reference's own run-to-run reproducibility, arguably the
 fairest yardstick for stochastic inference. We report it without inflating it.
 
-\paragraph{Collapsed-Gibbs LDA.} \pkg{topica}'s LDA binds \pkg{RustMallet}, David
-Mimno's \proglang{Rust} port of \pkg{MALLET}'s SparseLDA sampler
-\citep{yao2009sparselda}, and reproduces its \code{train} command-line output
-byte-for-byte: the topic-word and document-topic matrices are bit-identical to the
-reference binary's (\code{tests/test\_cli\_parity.py}). Against the original
-\proglang{Java} \pkg{MALLET}, whose independent random number generator rules out
-byte equality, \pkg{topica} instead recovers the \emph{same} topics, aligning at a
-top-word Jaccard and cosine of $1.000$ on a planted-topic corpus
-(\code{parity/mallet\_parity.py}); \code{LabeledLDA} and \code{DMR} likewise match
-\pkg{MALLET} at a topic cosine of $1.000$.
+\paragraph{Collapsed-Gibbs LDA.} \pkg{topica}'s LDA began as a port of
+\pkg{RustMallet}, David Mimno's \proglang{Rust} port of \pkg{MALLET}'s SparseLDA
+sampler \citep{yao2009sparselda}, and follows its sampler and fixed-point
+hyperparameter optimizer closely. It uses its own random number generator (PCG)
+rather than \pkg{RustMallet}'s, so it is not byte-identical to \pkg{RustMallet}.
+What is byte-identical is \pkg{topica}'s own pairing of library and command-line
+tool: the Python binding and the bundled \code{train} CLI share one sampler and
+produce bit-identical topic-word and document-topic matrices for matched
+parameters (\code{tests/test\_cli\_parity.py}), so the library and the CLI cannot
+silently diverge. Against the original \proglang{Java} \pkg{MALLET}, whose
+independent random number generator likewise rules out byte equality, \pkg{topica}
+recovers the \emph{same} topics, aligning at a top-word Jaccard and cosine of
+$1.000$ on a planted, disjoint-vocabulary corpus (\code{parity/mallet\_parity.py}),
+with \code{LabeledLDA} and \code{DMR} likewise matching \pkg{MALLET} at a topic
+cosine of $1.000$ on planted corpora. These are checks of correct topic recovery,
+not claims of byte-equivalence on real text.
 
 \paragraph{Keyword-assisted topics.} \pkg{topica}'s \code{KeyATM} shares the
 \proglang{R} \pkg{keyATM} package's per-sweep asymmetric-$\alpha$ estimation and
