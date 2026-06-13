@@ -355,3 +355,6 @@ if __name__ == "__main__":
         rd = dmr_parity()
         print(f"DMR        vs MALLET: topic cosine={rd['topic_cosine']:.3f} "
               f"effect MALLET={rd['mallet_effect']:+.2f} ours={rd['topica_effect']:+.2f}")
+    else:
+        print("LabeledLDA / DMR vs MALLET: SKIPPED (needs a JDK with javac to "
+              "compile the Java drivers)")
