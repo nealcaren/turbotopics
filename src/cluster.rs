@@ -28,12 +28,24 @@ pub fn hdbscan_labels(points: &[Vec<f64>], min_cluster_size: usize, min_samples:
         points.iter().all(|r| r.len() == dim),
         "all points must share the same dimensionality"
     );
+    let mcs = min_cluster_size.max(2);
+    let ms = min_samples.max(1);
+    // petal-clustering's MST / core-distance step panics when the corpus is too
+    // small for the requested density parameters: it tries to read `min_samples`
+    // nearest neighbours from fewer points (e.g. min_cluster_size=100 on 2 docs).
+    // No cluster can form in that regime, so report all-noise (num_topics=0) and
+    // let the caller's "lower min_cluster_size / add data" warning fire, rather
+    // than letting a Rust panic escape into Python.
+    if n < mcs || n <= ms {
+        return vec![-1i64; n];
+    }
+
     let flat: Vec<f64> = points.iter().flat_map(|r| r.iter().copied()).collect();
     let array = Array2::from_shape_vec((n, dim), flat).expect("point matrix shape");
 
     let mut model: HDbscan<f64, _> = HDbscan::default();
-    model.min_cluster_size = min_cluster_size.max(2);
-    model.min_samples = min_samples.max(1);
+    model.min_cluster_size = mcs;
+    model.min_samples = ms;
     let (clusters, _outliers, _scores) = model.fit(&array, None);
 
     // Map petal's arbitrary cluster keys to a dense, deterministic 0..k.
@@ -282,6 +294,16 @@ mod tests {
         assert!(hdbscan_labels(&[], 4, 2).is_empty());
         assert!(kmeans_labels(&[], 4, 0).is_empty());
         assert!(agglomerative_labels(&[], 4).is_empty());
+    }
+
+    #[test]
+    fn tiny_corpus_with_huge_min_cluster_size_is_all_noise() {
+        // Regression for the petal-clustering MST panic (issue #122): a corpus
+        // smaller than min_cluster_size / min_samples must report all-noise, not
+        // panic inside the crate.
+        let pts = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let labels = hdbscan_labels(&pts, 100, 100);
+        assert_eq!(labels, vec![-1, -1]);
     }
 
     fn two_blobs() -> Vec<Vec<f64>> {

@@ -183,6 +183,18 @@ def test_embedding_doc_embeddings_valid_passes():
     m.fit(docs, emb)
 
 
+@pytest.mark.parametrize("ctor", [topica.BERTopic, topica.Top2Vec])
+def test_embedding_min_cluster_size_over_corpus_no_panic(ctor):
+    # issue #122: min_cluster_size larger than the corpus used to panic inside
+    # petal-clustering's MST. It must now resolve to a clean num_topics=0.
+    docs = [["a", "b"], ["c", "d"]]
+    emb = np.random.default_rng(0).standard_normal((2, 4))
+    m = ctor(min_cluster_size=100, seed=1)
+    with pytest.warns(UserWarning, match="found no clusters"):
+        m.fit(docs, emb)
+    assert m.num_topics == 0
+
+
 # --- 7. iters bounds (issue #103) -----------------------------------------
 # iters=0 is a supported "initialize only" operation (e.g. inspecting the seed
 # prior before any sweep; see test_seeded_gsdmm_contracts), so it is NOT an

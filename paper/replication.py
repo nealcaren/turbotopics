@@ -1,4 +1,9 @@
-"""Reproduce every quantitative artifact in the topica paper.
+"""Reproduce the topica paper's worked-example artifacts and validation checks.
+
+This drives the worked example (Section 7) and the cross-implementation
+validation (Section 5). The speed comparisons of Section 6 are reproduced
+separately by the timing scripts in `benchmarks/` (bench_stm.py, bench.py,
+k_crossover.py), which need a tuned, quiet machine to be meaningful.
 
 Run from the repo root:
 
@@ -157,33 +162,65 @@ def effect_figure(docs, conservative):
               f"coef={r['coef']:+.4f}  [{r['ci_low']:+.4f}, {r['ci_high']:+.4f}]{flag}")
 
 
+def _missing_r_packages(pkgs):
+    """Return the subset of `pkgs` that Rscript cannot load (best effort).
+
+    Lets a missing `quanteda`/`jsonlite` surface as a clean SKIP rather than an
+    opaque exit-1 from the comparison script. If the probe itself fails, assume
+    nothing is missing and let the script report its own error.
+    """
+    if not pkgs:
+        return []
+    expr = ("p <- c(%s); ok <- sapply(p, requireNamespace, quietly=TRUE); "
+            "cat(paste(p[!ok], collapse=' '))") % \
+        ", ".join(f'"{p}"' for p in pkgs)
+    try:
+        proc = subprocess.run(["Rscript", "-e", expr],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return (proc.stdout or "").split()
+
+
 def cross_implementation():
     """Run the reference packages themselves and report the agreement.
 
-    Each entry names the script, the executables it needs, and a one-line note.
-    Missing toolchains are reported, never hidden -- the paper's validation claims
-    only stand for the rows that actually ran here.
+    Each entry names the script, the executables it needs, the R packages it needs
+    (probed when Rscript is present), and a one-line note. Missing toolchains are
+    reported, never hidden -- the paper's validation claims only stand for the rows
+    that actually ran here.
     """
     print("\n" + "=" * 72)
     print("Cross-implementation validation: topica vs. the reference packages")
     print("=" * 72)
 
+    # (label, script, executables, R packages)
     checks = [
         ("LDA / LabeledLDA / DMR vs. Java MALLET", "parity/mallet_parity.py",
-         ["mallet", "java"]),
+         ["mallet", "java"], []),
         ("STM vs. R stm (poliblog vignette)", "parity/stm_poliblog_compare.py",
-         ["Rscript"]),
-        ("KeyATM vs. R keyATM", "parity/keyatm_r_compare.py", ["Rscript"]),
+         ["Rscript"], ["stm"]),
+        ("STM content-covariate (SAGE) vs. R stm", "parity/stm_content_r_compare.py",
+         ["Rscript"], ["stm"]),
+        ("KeyATM vs. R keyATM", "parity/keyatm_r_compare.py", ["Rscript"],
+         ["keyATM", "quanteda"]),
+        ("STS vs. authors' replication package (sets STS_REPL_DIR)",
+         "parity/sts_r_compare.py", ["Rscript"], ["stm"]),
         ("Fit-time speedups vs. R stm / keyATM", "benchmarks/speed_vs_r.py",
-         ["Rscript"]),
+         ["Rscript"], ["stm", "keyATM", "quanteda", "jsonlite"]),
     ]
 
     ran, skipped = [], []
-    for label, script, exes in checks:
+    for label, script, exes, r_pkgs in checks:
         missing = [e for e in exes if shutil.which(e) is None]
         print(f"\n--- {label}\n    ({script})")
         if missing:
             print(f"    SKIPPED: not installed: {', '.join(missing)}")
+            skipped.append(label)
+            continue
+        missing_pkgs = _missing_r_packages(r_pkgs) if r_pkgs else []
+        if missing_pkgs:
+            print(f"    SKIPPED: missing R package(s): {', '.join(missing_pkgs)}")
             skipped.append(label)
             continue
         proc = subprocess.run([sys.executable, script], cwd=ROOT_DIR,
@@ -211,7 +248,11 @@ def main():
 
     docs, conservative = load_poliblog()
     spanning_comparison(docs, conservative)
-    effect_figure(docs, conservative)
+    try:
+        effect_figure(docs, conservative)
+    except ImportError as e:  # matplotlib/pandas not installed: report and continue
+        print(f"\n  (effect figure skipped: {type(e).__name__}: {e};"
+              " install matplotlib and pandas to render it)")
     if not args.quick:
         cross_implementation()
 
