@@ -31,6 +31,7 @@ import csv, numpy as np, topica
 from topica import tokenize, stm
 
 rows = list(csv.DictReader(open("examples/gadarian.csv")))
+stop = set(open("examples/english-stoplist.txt").read().split())
 docs = [tokenize(r["open.ended.response"], stopwords=stop, min_length=3) for r in rows]
 treatment = np.array([float(r["treatment"]) for r in rows]).reshape(-1, 1)
 print("treated:", int(treatment.sum()), "control:", int((1 - treatment).sum()))

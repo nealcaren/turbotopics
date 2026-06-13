@@ -69,7 +69,7 @@ Model-agnostic: they work on any fitted model's `topic_word`/`doc_topic`:
 - **Validation:** `word_intrusion`, `document_intrusion`, `bootstrap_stability`, `search_k`
 - **Reliability:** `select_model` (fit many seeds) and `ensemble` (combine runs into a consensus more reliable than any single fit — cluster/align/stable methods, the last a gensim `EnsembleLda` port)
 - **Comparison:** `fighting_words` (weighted log-odds) for contrasting corpora
-- **Covariate effects:** `estimate_effect` (method of composition, **cluster-robust SEs**, GLM links), `topic_correlation`, and the design helpers `spline` / `interaction` / `one_hot` (an `stm`-style API); `posterior_theta_samples` draws θ for the logistic-normal models (STM/CTM)
+- **Covariate effects:** `estimate_effect` (method of composition, **cluster-robust SEs**, GLM links), `topic_correlation`, and the design helpers `one_hot` (top level) plus `stm.spline` / `stm.interaction` (an `stm`-style API); `posterior_theta_samples` draws θ for the logistic-normal models (STM/CTM)
 - **Preprocessing:** `tokenize`, `learn_phrases` / `apply_phrases`, `split_documents`, the `Corpus` class
 
 See [diagnostics](https://nealcaren.github.io/topica/guides/diagnostics/) and [covariate effects](https://nealcaren.github.io/topica/guides/covariates/).

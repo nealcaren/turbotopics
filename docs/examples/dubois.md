@@ -48,7 +48,7 @@ print(len(rows), "articles;", {d: by_decade[d] for d in sorted(by_decade)})
 phrases = topica.learn_phrases(docs, min_count=8, threshold=12.0)
 docs = topica.apply_phrases(docs, phrases)            # "jim crow" -> "jim_crow"
 corpus = Corpus.from_documents(docs, min_doc_freq=10, rm_top=20)
-print("vocab", corpus.num_words)                  # 3418
+print("vocab", corpus.num_words)                  # 3423
 ```
 
 ## 3. LDA
