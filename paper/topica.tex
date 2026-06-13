@@ -5,7 +5,7 @@
 %% https://www.jstatsoft.org/style; arXiv's TeXLive also carries the jss package.
 %% For an eventual JSS journal submission, remove the `nojss` option.
 
-\usepackage{amsmath,amssymb,booktabs}
+\usepackage{amsmath,amssymb,booktabs,tabularx}
 
 %% --- author / title metadata ----------------------------------------------
 
@@ -179,6 +179,7 @@ reproducibility guarantee: \emph{seed} reproduces from a fixed seed,
 \pkg{topica}'s bit-for-bit variational fits.}
 \label{tab:compare}
 \small
+\setlength{\tabcolsep}{3pt}
 \begin{tabular}{lccccccc}
 \toprule
  & Language & Classical & STM/content & Short-text & Embedding & Effect SEs & Determinism \\
@@ -193,6 +194,7 @@ reproducibility guarantee: \emph{seed} reproduces from a fixed seed,
 \pkg{topica}    & \proglang{Python}/\proglang{Rust} & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
 \bottomrule
 \end{tabular}
+\setlength{\tabcolsep}{6pt}
 \end{table}
 
 %% ===========================================================================
@@ -318,7 +320,7 @@ baseline to the structural topic model to neural clustering.
 \code{topic\_word}/\code{doc\_topic} contract of Section~\ref{sec:design}.}
 \label{tab:models}
 \small
-\begin{tabular}{lll}
+\begin{tabularx}{\linewidth}{@{}l X X@{}}
 \toprule
 Model & What it is for & Reference \\
 \midrule
@@ -344,7 +346,7 @@ Model & What it is for & Reference \\
 \code{ETM}          & Generative LDA factored through embeddings           & \citet{dieng2020etm} \\
 \code{FASTopic}     & Topics from optimal-transport plans                  & \citet{wu2024fastopic} \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 Two implementations carry most of the weight for social-science users and are
