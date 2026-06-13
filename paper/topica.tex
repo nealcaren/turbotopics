@@ -120,7 +120,7 @@ other variational models from three to twenty-two times faster than \proglang{R}
 for core, without a JVM and without \pkg{PyTorch} (Section~\ref{sec:performance}).
 \item \textbf{Reproducibility by construction.} The variational models are
 deterministic to the bit even when multithreaded, and the sampling models are
-seed-reproducible (Section~\ref{sec:design}).
+reproducible from a fixed seed and thread count (Section~\ref{sec:design}).
 \item \textbf{Reference validation.} Each model is checked against its original
 implementation, and we report the agreement honestly, including where two correct
 engines disagree because the model is non-convex (Section~\ref{sec:validation}).
@@ -316,8 +316,10 @@ baseline to the structural topic model to neural clustering.
 
 \begin{table}[t!]
 \centering
-\caption{The \pkg{topica} model family. All share the \code{fit}\,$\rightarrow$\,
-\code{topic\_word}/\code{doc\_topic} contract of Section~\ref{sec:design}.}
+\caption{The \pkg{topica} model family. Nearly all present the \code{fit}\,$\rightarrow$\,
+\code{topic\_word}/\code{doc\_topic} contract of Section~\ref{sec:design}; \code{HLDA}
+(a topic hierarchy) and \code{DTM} (time-sliced topics) are structural exceptions
+with no single $(D, K)$ \code{doc\_topic}.}
 \label{tab:models}
 \small
 \begin{tabularx}{\linewidth}{@{}l X X@{}}
@@ -392,14 +394,15 @@ often get wrong, because the diagnostics tempt one to optimize it. $K$ is a
 research decision about granularity, not a hyperparameter to maximize: a model
 with fewer topics often scores higher on coherence while collapsing distinctions
 the researcher cares about. \code{topica.search\_k} fits a range of $K$ and
-reports coherence, exclusivity, and a held-out score for each; with
-\code{topica.make\_heldout} and \code{topica.eval\_heldout} that score is the
-document-completion held-out log-likelihood \pkg{stm} uses, available for every
-model that supports held-out inference rather than only \code{LDA}.
+reports coherence and exclusivity for each, and, when given a held-out split from
+\code{topica.make\_heldout}, the document-completion held-out log-likelihood
+\pkg{stm} uses (\code{topica.eval\_heldout}), available for every model that
+supports held-out inference rather than only \code{LDA}.
 \code{topica.quality\_frontier} plots the per-topic coherence-exclusivity
 trade-off, and because a single fit of a non-convex model can land on a poor
 local optimum, \code{topica.select\_model} fits several models at a fixed $K$
-under different seeds and returns the most coherent. The honest procedure is to
+under different seeds and returns them with their per-run coherence and
+exclusivity, for the researcher to choose among. The honest procedure is to
 fit a small range around a theoretically plausible $K$, label the topics at each,
 count the uninterpretable ones, and let the researcher choose, reporting
 sensitivity to that choice.
@@ -499,7 +502,7 @@ ribbons. Interactive views render through \pkg{Plotly}, and
 \begin{figure}[t!]
 \centering
 \includegraphics[width=\textwidth]{fig_poliblog_report}
-\caption{The one-call report \code{topica.plot\_report(model, texts, groups)} for
+\caption{The one-call report \code{topica.plot\_report(model, texts=texts, groups=groups)} for
 the poliblog structural topic model ($K = 15$): topics ordered by prevalence with
 FREX labels, the coherence--exclusivity quality frontier (point area is
 prevalence), the topic-correlation matrix, and topic prevalence by blog rating.
@@ -669,10 +672,11 @@ fine-grained topic counts common in social science (e.g.\ $K=1{,}000$) it fits
 several times faster than SparseLDA and reaches higher coherence.
 \code{"cvb0"} is collapsed variational Bayes, zeroth-order
 \citep{asuncion2009smoothing}, a deterministic, non-sampling alternative that
-trades speed for higher topic coherence and exact reproducibility. These
-extend across the count-based models that share the collapsed conditional:
-the per-document prior (\code{DMR}), seeded (\code{SeededLDA}), supervised
-(\code{LabeledLDA}), and keyword (\code{keyATM}) variants. CVB0 is the natural
+trades speed for higher topic coherence and exact reproducibility. \code{"cvb0"}
+extends to every count-based model that shares the collapsed conditional: the
+per-document prior (\code{DMR}), seeded (\code{SeededLDA}), supervised
+(\code{LabeledLDA}), and keyword (\code{KeyATM}) variants; \code{"warp"} covers the
+plain-Dirichlet members (\code{LDA}, \code{DMR}, \code{SeededLDA}). CVB0 is the natural
 home for the supervised and keyword models in particular, because its
 per-cell responsibilities take the label mask or keyword-switch constraint
 exactly and at no cost (the off-mask responsibility is simply zero), where a
@@ -823,7 +827,7 @@ model.fit(docs, conservative,
 labels = stm.label_topics(model.topic_word, model.vocabulary, n=3)
 panel = viz.effect_plot(model, corpus, X=conservative,
                         feature_names=["conservative"], nsims=100)
-panel.to_png("fig_poliblog_effect.pdf")
+panel.to_pdf("fig_poliblog_effect.pdf")
 \end{CodeInput}
 \end{CodeChunk}
 

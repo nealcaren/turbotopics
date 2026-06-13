@@ -294,11 +294,10 @@ class TestCTMDeterminism:
         m1.fit(docs, iters=20)
         m2 = CTM(3, seed=42)
         m2.fit(docs, iters=20)
-        # Variational EM is deterministic; any divergence is pure floating-point noise (< 1e-14)
-        npt.assert_allclose(
-            m1.topic_word, m2.topic_word, atol=1e-14,
-            err_msg="Identical seeds must produce identical topic_word"
-        )
+        # Variational EM is deterministic: same seed and thread count must give
+        # a bit-for-bit identical fit, matching the paper's determinism claim.
+        assert np.array_equal(m1.topic_word, m2.topic_word), \
+            "Identical seeds must produce bit-identical topic_word"
 
     def test_same_seed_allclose_doc_topic(self):
         docs = _make_correlated_corpus(n=60, seed=7)
@@ -306,10 +305,8 @@ class TestCTMDeterminism:
         m1.fit(docs, iters=20)
         m2 = CTM(3, seed=42)
         m2.fit(docs, iters=20)
-        npt.assert_allclose(
-            m1.doc_topic, m2.doc_topic, atol=1e-14,
-            err_msg="Identical seeds must produce identical doc_topic"
-        )
+        assert np.array_equal(m1.doc_topic, m2.doc_topic), \
+            "Identical seeds must produce bit-identical doc_topic"
 
 
 # ---------------------------------------------------------------------------
