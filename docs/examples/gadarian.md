@@ -80,11 +80,15 @@ T1: coef=-0.044  z=-1.4  ci=(-0.106, +0.018)
 T2: coef=-0.076  z=-2.4  ci=(-0.138, -0.014)
 ```
 
-The anxiety prime **raises** prevalence of the threat frame (T0: benefits,
-services, crime) and **lowers** the procedural frame (T2: process, born, wage).
-This is the substantive finding of the original study. Because treatment was
+In this single 3-topic fit the anxiety prime is associated with higher prevalence
+of the threat frame (T0: benefits, services, crime; z=+3.9) and lower prevalence
+of the procedural frame (T2: process, born, wage; z=−2.4, borderline). That echoes
+the direction of the original study, but read it as one fit, not a settled result:
+before reporting, confirm `K` with `searchK`, the topics across several seeds with
+`select_model`, and the effect with a `permutation_test`. Because treatment was
 randomized and each respondent contributes one independent response, ordinary
-method-of-composition standard errors are appropriate; no clustering is needed.
+method-of-composition standard errors are appropriate here; no clustering is
+needed.
 
 ## Close-read the rising frame
 

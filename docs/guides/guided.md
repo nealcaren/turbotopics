@@ -148,6 +148,9 @@ Both feed the same [diagnostics](diagnostics.md), [effects](../publishing/effect
 and [validation](../publishing/validation.md) as every other model.
 
 !!! note "Faithful to the references"
-    On a shared corpus with identical seeds, topica recovers the same
-    seeded-topic vocabulary as R's `seededlda` and the same keyword-topic words
-    as R's `keyATM` (verified word-for-word against both packages).
+    On a shared corpus with identical seeds, topica recovers seeded-topic
+    vocabulary close to R's `seededlda` and keyword topics that align with R's
+    `keyATM` as well as R aligns with itself across seeds. The comparison runs the
+    reference packages through the reproducible harness in `parity/` (it needs a
+    local R install with the packages); it measures topic-word agreement, not
+    identical word lists.

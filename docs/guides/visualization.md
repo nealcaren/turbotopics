@@ -37,7 +37,9 @@ and switch their statistics and labels on it, so they never overclaim:
 
 - A **c-TF-IDF** `topic_word` (BERTopic / Top2Vec) is not a probability, so the
   FREX / lift / relevance modes are disabled and the bars are labeled "c-TF-IDF
-  weight," not "P(w | topic)."
+  weight," not "P(w | topic)." (The matrix is row-normalized to sum to one for
+  surface compatibility with the other models' diagnostics; that normalization is
+  a convenience, not a probability claim.)
 - An **effect-plot confidence interval** is drawn only where a θ posterior exists.
   For an embedding/cluster model the panel shows point estimates and says so; pass
   `method="bootstrap"` for intervals. A topic the bootstrap flags as unreliable is

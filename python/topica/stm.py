@@ -19,8 +19,12 @@ LabeledLDA). :func:`estimate_effect` does ordinary OLS on a point estimate of θ
 or — given posterior draws from :func:`posterior_theta_samples` (an STM/CTM
 variational posterior) — the **method of composition**, pooling per-draw
 regressions by Rubin's rules so the standard errors propagate topic-estimation
-uncertainty, exactly as R ``stm``'s ``estimateEffect`` does. Nonlinear and
-interaction terms are built with :func:`spline` and :func:`interaction`.
+uncertainty, following the same method-of-composition procedure as R ``stm``'s
+``estimateEffect``. topica propagates the per-document theta posterior
+uncertainty; it does not additionally simulate global-parameter (beta, Sigma,
+gamma) uncertainty, so its pooled standard errors are generally a touch smaller.
+Nonlinear and interaction terms are built with :func:`spline` and
+:func:`interaction`.
 """
 
 from __future__ import annotations

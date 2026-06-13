@@ -644,6 +644,13 @@ def topic_correlation(doc_topic, *, threshold=0.05):
     :class:`TopicCorrelation` with the correlation matrix, a 0/1 adjacency
     matrix (zero diagonal), and the edge list.
 
+    This is the raw across-document theta correlation, matching ``stm``'s
+    ``topicCorr`` default ("simple") method. Raw theta correlation is
+    compositionally biased (the simplex constraint induces spurious negative
+    correlation); for the closure-corrected alternatives use
+    ``viz.topic_correlation(model, method="clr")`` (the viz layer's default) or
+    ``method="partial"``/``"eta"``.
+
     `doc_topic` is a fitted model (uses its ``doc_topic``) or a ``(D, K)`` array.
     """
     theta = _as_doc_topic(doc_topic)
