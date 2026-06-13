@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Added
+
+- The covariate-design helpers `spline` and `interaction` are now exported at the
+  top level as `topica.spline` / `topica.interaction`, matching the `formulas`
+  docstring and reflecting that they build design-matrix blocks usable by any
+  covariate model (DMR, STM, STS, KeyATM), not only STM. The `topica.stm.spline` /
+  `topica.stm.interaction` paths still work (#137 follow-up).
+
 ## [0.16.2] - 2026-06-13
 
 ### Fixed

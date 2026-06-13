@@ -75,6 +75,28 @@ def align_corpus(
     ready to pass to model.transform or topica.stm.transform."""
     ...
 
+def spline(
+    x: Any,
+    df: int = 4,
+    knots: Any | None = None,
+) -> tuple[numpy.typing.NDArray[numpy.float64], list[str]]:
+    """Restricted (natural) cubic-spline basis for a covariate, returned as
+    (basis (n, df), names). A general covariate-design helper: column_stack the
+    basis into any model's design matrix (DMR, STM, STS, KeyATM) and extend
+    feature_names with the returned names. Also exposed inside formula strings as
+    spline(...)."""
+    ...
+
+def interaction(
+    a: Any,
+    b: Any,
+    name: str = "interaction",
+) -> tuple[numpy.typing.NDArray[numpy.float64], list[str]]:
+    """Interaction columns (all pairwise products) between two covariate blocks,
+    returned as (products (n, ncols), names). column_stack into any model's
+    design matrix."""
+    ...
+
 def coherence(
     topics: Any,
     texts: Sequence[Sequence[str]],
@@ -413,6 +435,8 @@ __all__ = [
     "llm_backend",
     "topic_label_prompts",
     "align_corpus",
+    "spline",
+    "interaction",
     "DEFAULT_TOKEN_REGEX",
     "__version__",
     "__citation__",
