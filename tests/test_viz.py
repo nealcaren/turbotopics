@@ -389,7 +389,7 @@ def test_dashboard_content_and_inspector(sage_content):
 
 # --- interactive build (skips if plotly absent) ----------------------------
 
-def test_interactive_browser():
+def test_interactive_browser(tmp_path):
     pytest.importorskip("plotly")
     rng = np.random.default_rng(0)
     docs = [["a", "b", "c"]] * 15 + [["x", "y", "z"]] * 15
@@ -398,3 +398,9 @@ def test_interactive_browser():
     fig = viz.term_topic_browser(m, n=5)
     html = fig.to_html(full_html=False)
     assert "plotly" in html.lower()
+    # to_html(path) must write a self-contained page (regression for #135: a raw
+    # Plotly Figure treats the first positional arg as config and writes nothing).
+    out = tmp_path / "browser.html"
+    ret = fig.to_html(str(out))
+    assert out.exists() and out.stat().st_size > 0
+    assert ret == str(out)

@@ -212,11 +212,35 @@ class TopicSimilarity(Panel):
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=f"1 − {self.metric}")
 
 
+class _InteractiveFigure:
+    """Thin wrapper around a Plotly ``Figure`` that gives it the panel-style
+    ``.to_html(path)`` writer. A raw Plotly ``Figure.to_html`` takes ``config`` as
+    its first positional argument and returns a string, so the documented
+    ``.to_html("page.html")`` call would silently write nothing; here it writes the
+    file. Every other attribute (``.show()``, ``.write_html()``, ``.write_image()``,
+    ``.data``, ``.layout``, ...) delegates to the underlying figure, available as
+    ``.figure``."""
+
+    def __init__(self, figure):
+        self.figure = figure
+
+    def to_html(self, path=None, **kwargs):
+        """Write a self-contained interactive HTML page to ``path`` (matching the
+        panel renderers); with ``path=None`` return the HTML as a string."""
+        if path is None:
+            return self.figure.to_html(**kwargs)
+        self.figure.write_html(path, **kwargs)
+        return path
+
+    def __getattr__(self, name):
+        return getattr(self.figure, name)
+
+
 def term_topic_browser(model, *, n=10, mode="prob"):
     """An interactive (Plotly) term browser + topic-similarity heatmap: the seriated
     K x K heatmap for the overview, and a dropdown to pick a topic and read its top
-    words. Returns a Plotly ``Figure``; ``.write_html("page.html")`` (or this
-    function's ``.to_html``) writes a self-contained page. Needs
+    words. Returns an interactive view whose ``.to_html("page.html")`` writes a
+    self-contained page (the wrapped Plotly figure is at ``.figure``). Needs
     ``topica[viz]``."""
     go = _require("plotly.graph_objects", "viz")
     from plotly.subplots import make_subplots
@@ -261,4 +285,4 @@ def term_topic_browser(model, *, n=10, mode="prob"):
     fig.update_xaxes(title_text="topic", row=1, col=1)
     fig.update_yaxes(title_text="topic", autorange="reversed", row=1, col=1)
     fig.update_xaxes(title_text=weight_label, row=1, col=2)
-    return fig
+    return _InteractiveFigure(fig)
