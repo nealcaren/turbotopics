@@ -12,7 +12,7 @@ viz.effect_plot(model, corpus, formula="~ year", data=meta).to_png("effects.pdf"
 viz.term_barchart(model, topic=3, mode="frex").to_frame()
 ```
 
-Every view is a **panel** with three renderers:
+Every **static** view is a **panel** with three renderers:
 
 - `.to_frame()` — a pandas DataFrame of the numbers behind the picture. Always
   available; this is your reproducibility and reviewer-armor.
@@ -20,6 +20,11 @@ Every view is a **panel** with three renderers:
   publication renderer.
 - `.to_html(path)` — an interactive (Plotly) build, for the few views interaction
   genuinely helps. Needs the `topica[viz]` extra.
+
+A few views are interactive-only composites (for example `term_topic_browser`,
+the linked topic/term dashboard) and expose just `.to_html(path)`; the static and
+data renderers for that content live in the standalone `topic_similarity` and
+`term_barchart` panels.
 
 Install the toolkit with `pip install topica[viz]` (matplotlib, pandas, scipy,
 and plotly for the interactive `.to_html()` builds), or `pip install topica[all]`
