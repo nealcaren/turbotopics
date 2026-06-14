@@ -5248,6 +5248,12 @@ fn infer_theta_batch_per_doc(
 /// unlike LDA's Dirichlet. Fit by variational EM (STM's Laplace E-step).
 ///
 /// This is the engine STM builds on; prevalence/content covariates layer on top.
+///
+/// The per-document E-step runs in parallel on all cores by default; cap it with
+/// ``fit(num_threads=...)`` (results are identical regardless). ``variational=``
+/// chooses the covariance approximation (``"laplace"`` full, or ``"diagonal"``
+/// for a faster mean-field one at high K), and ``fit(keep_eta_cov=False)`` trades
+/// stored covariance for far less memory at large K.
 #[pyclass(module = "topica")]
 pub struct CTM {
     num_topics: usize,
@@ -5352,6 +5358,13 @@ impl CTM {
     /// decaying learning rate `(tau + t)^(-kappa)`, for `iters` epochs. SVI is
     /// for very large corpora; on moderate corpora the default `"batch"` EM is
     /// preferable. SVI uses the base logistic-normal model only.
+    /// `num_threads` caps the worker pool for the parallel per-document E-step;
+    /// the default ``None`` uses all available cores. The fit is bit-for-bit
+    /// identical regardless of the worker count, so this only trades resource use
+    /// (set it to 1 for a fully serial run). `keep_eta_cov=False` does not store
+    /// the per-document variational covariance (an O(N*K^2) array), cutting memory
+    /// sharply at large K; `posterior_theta_samples` / `estimate_effect` with
+    /// draws transparently recompute it on demand when needed.
     #[pyo3(signature = (data, *, iters=500, convergence_tol=1e-5, inference="batch",
                         batch_size=256, tau=64.0, kappa=0.7, em_tol=None, keep_eta_cov=true,
                         num_threads=None))]
@@ -5841,6 +5854,12 @@ impl CTM {
 /// mean is a regression on its covariates, `μ_d = X_d γ`, so covariates shift
 /// which topics a document discusses. After fitting, `prevalence_effects` holds
 /// the learned γ; pair it with `topica.stm.estimate_effect` for inference.
+///
+/// The per-document E-step runs in parallel on all cores by default; cap it with
+/// ``fit(num_threads=...)`` (results are identical regardless). ``variational=``
+/// chooses the covariance approximation (``"laplace"`` full, or ``"diagonal"``
+/// for a faster mean-field one at high K), and ``fit(keep_eta_cov=False)`` trades
+/// stored covariance for far less memory at large K.
 #[pyclass(module = "topica")]
 pub struct STM {
     num_topics: usize,
@@ -5980,6 +5999,15 @@ impl STM {
     /// is the elastic-net mix: 1.0 is pure lasso, values in (0, 1) add a ridge
     /// component (R `stm`'s ``gamma.enet``). `gamma_enet` is ignored when
     /// `gamma_prior="pooled"`.
+    /// `num_threads` caps the worker pool for the parallel per-document E-step;
+    /// the default ``None`` uses all available cores, and the fit is bit-for-bit
+    /// identical regardless of the worker count (set it to 1 for a fully serial
+    /// run). `keep_eta_cov=False` does not store the per-document variational
+    /// covariance (an O(N*K^2) array), cutting memory sharply at large K;
+    /// `posterior_theta_samples` / `estimate_effect` with draws recompute it on
+    /// demand. The covariance approximation is set on the constructor via
+    /// `variational=` (``"laplace"`` default, or ``"diagonal"`` for a faster,
+    /// lower-precision mean-field covariance).
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
                         content=None, content_names=None, iters=500, convergence_tol=1e-5,
                         gamma_prior="pooled", gamma_enet=1.0, em_tol=None, covariates=None,
