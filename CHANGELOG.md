@@ -37,6 +37,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- Speed: the STM/CTM Σ (topic-covariance) M-step update is now parallelized over
+  the K-1 rows. Profiling found this `O(N·K²)` cross-term was a large serial tail
+  (~37% of fit wall-clock at N=20k, K=60) that left cores idle while the
+  already-parallel E-step finished — the main reason large fits ran near
+  single-threaded. Parallelizing it cut a representative fit ~28% (and more as N
+  grows). Each Σ row still sums over documents in order, so fits remain bit-for-bit
+  identical regardless of thread count (#164).
 - Memory: the STM/CTM E-step now reduces its per-document sufficient statistics
   in chunks instead of collecting all N documents' results first, bounding the
   fit-time transient peak from O(N·K²) (~11 GB at N≈395K, K=60) to ~128 MB. The

@@ -997,14 +997,22 @@ pub fn fit_ctm<R: Rng>(
 
         // Σ = (1/D)[ Σ ν + Σ (η-μ_d)(η-μ_d)ᵀ ] with the updated μ_d.
         let mus: Vec<Vec<f64>> = (0..d).map(|di| doc_mu(di, &gamma, &mu_shared)).collect();
-        for i in 0..km1 {
-            for j in 0..km1 {
-                let mut cross = 0.0;
-                for (di, li) in lambda.iter().enumerate() {
-                    cross += (li[i] - mus[di][i]) * (li[j] - mus[di][j]);
+        // Σ cross-term is O(D·K²) and was the dominant serial cost (#164).
+        // Parallelize over the K-1 rows; each row still sums over documents in
+        // ascending order, so the result is bit-identical to the serial loop
+        // regardless of thread count.
+        {
+            use rayon::prelude::*;
+            let df = d as f64;
+            sigma.par_chunks_mut(km1).enumerate().for_each(|(i, row)| {
+                for (j, sij) in row.iter_mut().enumerate() {
+                    let mut cross = 0.0;
+                    for (di, li) in lambda.iter().enumerate() {
+                        cross += (li[i] - mus[di][i]) * (li[j] - mus[di][j]);
+                    }
+                    *sij = (sigma_ss[i * km1 + j] + cross) / df;
                 }
-                sigma[i * km1 + j] = (sigma_ss[i * km1 + j] + cross) / d as f64;
-            }
+            });
         }
         if sigma_shrink > 0.0 {
             for i in 0..km1 {
