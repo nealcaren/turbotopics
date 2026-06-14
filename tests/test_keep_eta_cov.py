@@ -169,3 +169,34 @@ class TestPosteriorThetaSamplesFallback:
             atol=1e-5,
             err_msg="posterior_theta_samples draws differ between keep and recompute paths",
         )
+
+
+# ---------------------------------------------------------------------------
+# #164: num_threads controls the rayon pool without changing results
+# ---------------------------------------------------------------------------
+
+def _toy_prevalence_corpus(n=120, seed=1):
+    rng = np.random.default_rng(seed)
+    A = [f"a{i}" for i in range(12)]; B = [f"b{i}" for i in range(12)]
+    docs, xs = [], []
+    for _ in range(n):
+        x = rng.random(); xs.append(x)
+        docs.append(list(rng.choice(A if x > 0.5 else B, size=10)))
+    return docs, np.array(xs).reshape(-1, 1)
+
+
+def test_num_threads_does_not_change_stm_results():
+    docs, X = _toy_prevalence_corpus()
+    ref = topica.STM(num_topics=4, seed=7); ref.fit(docs, prevalence=X, iters=60)
+    for nt in (1, 2, 3):
+        m = topica.STM(num_topics=4, seed=7)
+        m.fit(docs, prevalence=X, iters=60, num_threads=nt)
+        np.testing.assert_array_equal(m.topic_word, ref.topic_word)
+        np.testing.assert_array_equal(np.asarray(m.eta_mean), np.asarray(ref.eta_mean))
+
+
+def test_num_threads_does_not_change_ctm_results():
+    docs, _ = _toy_prevalence_corpus()
+    ref = topica.CTM(num_topics=4, seed=7); ref.fit(docs, iters=60)
+    m = topica.CTM(num_topics=4, seed=7); m.fit(docs, iters=60, num_threads=2)
+    np.testing.assert_array_equal(m.topic_word, ref.topic_word)

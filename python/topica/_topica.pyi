@@ -360,6 +360,7 @@ class CTM:
         kappa: float = 0.7,
         em_tol: Optional[float] = None,
         keep_eta_cov: bool = True,
+        num_threads: Optional[int] = None,
     ) -> None:
         """EM stops once the relative change in the variational bound falls below
         convergence_tol or after iters iterations, whichever comes first. Pass
@@ -498,6 +499,7 @@ class STM:
         em_tol: Optional[float] = None,
         covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
         keep_eta_cov: bool = True,
+        num_threads: Optional[int] = None,
     ) -> None:
         """Fit. prevalence (or covariates, a symmetric alias) is (num_docs, F)
         covariates driving topic proportions (mu_d = X_d gamma; intercept

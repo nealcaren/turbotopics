@@ -182,6 +182,20 @@ fn arr3_opt(a: &Option<Array3<f64>>) -> Option<Arr3> {
 fn arr3_back(s: Option<Arr3>) -> Option<Array3<f64>> {
     s.map(|a| Array3::from_shape_vec((a.d0, a.d1, a.d2), a.data).unwrap())
 }
+
+/// Run `f` on a rayon pool of `num_threads` workers, or on the global pool (all
+/// cores) when `num_threads` is `None`/0. The variational fits are deterministic
+/// regardless of worker count, so this controls only resource use, not output.
+/// Call inside `py.allow_threads`.
+fn run_with_threads<T: Send, F: FnOnce() -> T + Send>(num_threads: Option<usize>, f: F) -> T {
+    match num_threads {
+        Some(n) if n >= 1 => match rayon::ThreadPoolBuilder::new().num_threads(n).build() {
+            Ok(pool) => pool.install(f),
+            Err(_) => f(),
+        },
+        _ => f(),
+    }
+}
 fn arr3f32_opt(a: &Option<Array3<f32>>) -> Option<Arr3f32> {
     a.as_ref().map(|m| {
         let d = m.dim();
@@ -5320,7 +5334,8 @@ impl CTM {
     /// for very large corpora; on moderate corpora the default `"batch"` EM is
     /// preferable. SVI uses the base logistic-normal model only.
     #[pyo3(signature = (data, *, iters=500, convergence_tol=1e-5, inference="batch",
-                        batch_size=256, tau=64.0, kappa=0.7, em_tol=None, keep_eta_cov=true))]
+                        batch_size=256, tau=64.0, kappa=0.7, em_tol=None, keep_eta_cov=true,
+                        num_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5334,6 +5349,7 @@ impl CTM {
         kappa: f64,
         em_tol: Option<f64>,
         keep_eta_cov: bool,
+        num_threads: Option<usize>,
     ) -> PyResult<()> {
         let convergence_tol = if let Some(old_val) = em_tol {
             let warnings = py.import_bound("warnings")?;
@@ -5375,17 +5391,19 @@ impl CTM {
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         let (model, corpus) = py.allow_threads(move || {
-            let m = if svi {
-                ctm::fit_ctm_svi(
-                    &corpus.docs, k, num_types, iters, batch_size, tau, kappa, shrink, spectral,
-                    keep_eta_cov, &mut rng,
-                )
-            } else {
-                ctm::fit_ctm(
-                    &corpus.docs, k, num_types, iters, convergence_tol, shrink, None, None, spectral,
-                    ctm::GammaPrior::Pooled, keep_eta_cov, &mut rng,
-                )
-            };
+            let m = run_with_threads(num_threads, || {
+                if svi {
+                    ctm::fit_ctm_svi(
+                        &corpus.docs, k, num_types, iters, batch_size, tau, kappa, shrink, spectral,
+                        keep_eta_cov, &mut rng,
+                    )
+                } else {
+                    ctm::fit_ctm(
+                        &corpus.docs, k, num_types, iters, convergence_tol, shrink, None, None,
+                        spectral, ctm::GammaPrior::Pooled, keep_eta_cov, &mut rng,
+                    )
+                }
+            });
             (m, corpus)
         });
 
@@ -5923,7 +5941,7 @@ impl STM {
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
                         content=None, content_names=None, iters=500, convergence_tol=1e-5,
                         gamma_prior="pooled", gamma_enet=1.0, em_tol=None, covariates=None,
-                        keep_eta_cov=true))]
+                        keep_eta_cov=true, num_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5940,6 +5958,7 @@ impl STM {
         em_tol: Option<f64>,
         covariates: Option<&Bound<'_, PyAny>>,
         keep_eta_cov: bool,
+        num_threads: Option<usize>,
     ) -> PyResult<()> {
         let convergence_tol = if let Some(old_val) = em_tol {
             let warnings = py.import_bound("warnings")?;
@@ -6082,10 +6101,12 @@ impl STM {
         let (model, corpus) = py.allow_threads(move || {
             let prev_ref = prevalence_x.as_deref();
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
-            let m = ctm::fit_ctm(
-                &corpus.docs, k, num_types, iters, convergence_tol, shrink, prev_ref, cont_ref,
-                spectral, gprior, keep_eta_cov, &mut rng,
-            );
+            let m = run_with_threads(num_threads, || {
+                ctm::fit_ctm(
+                    &corpus.docs, k, num_types, iters, convergence_tol, shrink, prev_ref, cont_ref,
+                    spectral, gprior, keep_eta_cov, &mut rng,
+                )
+            });
             (m, corpus)
         });
 

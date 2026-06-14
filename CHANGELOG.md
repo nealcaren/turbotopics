@@ -37,6 +37,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- `STM.fit` / `CTM.fit` take `num_threads=` to cap the rayon worker pool used by
+  the variational fit (default `None` = all cores). Results are bit-for-bit
+  identical regardless of the worker count, so this controls only resource use
+  (#164).
 - Speed: the STM/CTM Σ (topic-covariance) M-step update is now parallelized over
   the K-1 rows. Profiling found this `O(N·K²)` cross-term was a large serial tail
   (~37% of fit wall-clock at N=20k, K=60) that left cores idle while the
