@@ -891,71 +891,84 @@ pub fn fit_ctm<R: Rng>(
         let mut lambda_sum = vec![0.0f64; km1];
 
         // E-step: per-document variational inference is independent across
-        // documents, so run it in parallel. Results are collected in document
-        // order and then accumulated serially, so the sufficient statistics are
-        // summed in the exact same order as the serial loop — the fit stays
-        // bit-for-bit deterministic regardless of thread count.
-        let doc_results: Vec<(usize, (Vec<f64>, HpbResult))> =
-            crate::variational::laplace_estep(&sparse, |di, words, counts| {
-                let mu_d = doc_mu(di, &gamma, &mu_shared);
-                // The E-step β is the document's group β (content) or the shared β.
-                let beta_doc: &[Vec<f64>] = match groups {
-                    Some(g) => &content_beta[g[di]],
-                    None => &beta,
-                };
-                let opt = lbfgs_minimize(
-                    lambda[di].clone(),
-                    |eta| {
-                        (
-                            ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
-                            ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
-                        )
-                    },
-                    40,
-                    7,
-                    1e-5,
-                );
-                let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
-                (opt, res)
-            });
+        // documents, so run it in parallel. To bound the transient memory (each
+        // document's ν is (K-1)², so collecting all D at once is O(D·K²)), we
+        // process documents in chunks: run a chunk's E-step in parallel, then
+        // fold its sufficient statistics in serially before discarding the chunk.
+        // The reduction still sums in ascending document order, so the fit stays
+        // bit-for-bit deterministic regardless of thread count or chunk size.
+        // The chunk is sized to cap the peak ν buffer near ~128 MB.
+        let chunk = (128 * 1024 * 1024 / (km1 * km1 * 8).max(1))
+            .max(256)
+            .min(d.max(1));
+        let mut total_bound = 0.0f64;
+        let mut base = 0usize;
+        while base < d {
+            let end = (base + chunk).min(d);
+            let chunk_results: Vec<(usize, (Vec<f64>, HpbResult))> =
+                crate::variational::laplace_estep(&sparse[base..end], |local_di, words, counts| {
+                    let di = base + local_di;
+                    let mu_d = doc_mu(di, &gamma, &mu_shared);
+                    // The E-step β is the document's group β (content) or the shared β.
+                    let beta_doc: &[Vec<f64>] = match groups {
+                        Some(g) => &content_beta[g[di]],
+                        None => &beta,
+                    };
+                    let opt = lbfgs_minimize(
+                        lambda[di].clone(),
+                        |eta| {
+                            (
+                                ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
+                                ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
+                            )
+                        },
+                        40,
+                        7,
+                        1e-5,
+                    );
+                    let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
+                    (opt, res)
+                });
+
+            for (local_di, (opt, res)) in &chunk_results {
+                let di = base + *local_di;
+                total_bound += res.bound;
+                let words = &sparse[di].0;
+                lambda[di] = opt.clone();
+                match groups {
+                    Some(g) => {
+                        let grp = g[di];
+                        for (wi, &w) in words.iter().enumerate() {
+                            for t in 0..k {
+                                content_ss[t * num_groups + grp][w] += res.phi[t][wi];
+                            }
+                        }
+                    }
+                    None => {
+                        for (wi, &w) in words.iter().enumerate() {
+                            for t in 0..k {
+                                beta_ss[t][w] += res.phi[t][wi];
+                            }
+                        }
+                    }
+                }
+                if keep_nu {
+                    nu_store[di] = res.nu.clone();
+                }
+                for i in 0..km1 {
+                    lambda_sum[i] += opt[i];
+                    for j in 0..km1 {
+                        sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
+                    }
+                }
+            }
+            base = end;
+        }
 
         // Corpus bound for this E-step (sum of the per-document evidence bounds),
         // computed with the parameters from the previous M-step — the quantity
         // whose relative change drives convergence.
-        let total_bound: f64 = doc_results.iter().map(|(_, (_, res))| res.bound).sum();
         bound_history.push(total_bound);
-
-        for (di, (opt, res)) in &doc_results {
-            let di = *di;
-            let words = &sparse[di].0;
-            lambda[di] = opt.clone();
-            match groups {
-                Some(g) => {
-                    let grp = g[di];
-                    for (wi, &w) in words.iter().enumerate() {
-                        for t in 0..k {
-                            content_ss[t * num_groups + grp][w] += res.phi[t][wi];
-                        }
-                    }
-                }
-                None => {
-                    for (wi, &w) in words.iter().enumerate() {
-                        for t in 0..k {
-                            beta_ss[t][w] += res.phi[t][wi];
-                        }
-                    }
-                }
-            }
-            if keep_nu {
-                nu_store[di] = res.nu.clone();
-            }
-            for i in 0..km1 {
-                lambda_sum[i] += opt[i];
-                for j in 0..km1 {
-                    sigma_ss[i * km1 + j] += res.nu[i * km1 + j];
-                }
-            }
-        }
 
         // Convergence: stop once the relative change in the corpus bound falls
         // below `em_tol`. Break before the M-step, so the returned β/Σ/γ are the

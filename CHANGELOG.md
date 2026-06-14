@@ -37,6 +37,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- Memory: the STM/CTM E-step now reduces its per-document sufficient statistics
+  in chunks instead of collecting all N documents' results first, bounding the
+  fit-time transient peak from O(N·K²) (~11 GB at N≈395K, K=60) to ~128 MB. The
+  reduction still sums in document order, so fits stay bit-for-bit identical
+  regardless of thread count or chunk size (verified against the previous
+  implementation on a multi-chunk fit). This closes the fit-time-peak gap that
+  `keep_eta_cov=False` (#160) left open — that removed the post-fit copy; this
+  removes the during-fit peak (#165).
 - Memory: `STS` `fit` takes `keep_eta_cov=True` (matching STM/CTM): with
   `keep_eta_cov=False` the per-document variational covariance is not stored
   (O(N·eta_dim) fit), the fit is bit-identical, and the covariance is recomputed
