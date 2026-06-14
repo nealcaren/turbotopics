@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-14
+
 ### Added
 
 - `KeyATM.fit` accepts `times=` as the canonical per-document time index (the
