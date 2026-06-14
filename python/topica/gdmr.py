@@ -114,6 +114,22 @@ def _basis_order(degrees: list[int]) -> np.ndarray:
     return np.array([sum(idx) for idx in _iproduct(*degree_ranges)], dtype=np.float64)
 
 
+def _basis_feature_names(degrees: list[int], metadata_names: list[str]) -> list[str]:
+    """Readable label for each basis column, aligned with ``feature_effects``.
+
+    The all-zeros term is ``"intercept"``; a term with per-dim Legendre degrees
+    ``idx`` is the ``:``-joined ``"{name}^{k}"`` over the dimensions where
+    ``idx[d] > 0`` (e.g. ``"year^2"``, ``"year^1:citations^1"``). These are
+    Legendre basis terms, so ``^k`` denotes the degree-``k`` term, not a raw power.
+    """
+    degree_ranges = [range(deg + 1) for deg in degrees]
+    names = []
+    for idx in _iproduct(*degree_ranges):
+        parts = [f"{metadata_names[d]}^{k}" for d, k in enumerate(idx) if k > 0]
+        names.append("intercept" if not parts else ":".join(parts))
+    return names
+
+
 def _column_scales(degrees: list[int], sigma: float, sigma0: float,
                    decay: float) -> np.ndarray:
     """Compute the column scaling factors c_j = sqrt(v_j / v0).
@@ -265,6 +281,8 @@ class GDMR:
         )
         self._lbfgs_iters = lbfgs_iters
         self._sampler = sampler
+        # names of the D continuous metadata dimensions; set at fit
+        self._metadata_names: list[str] | None = None
 
         # column scales are computed once metadata_range is known (at fit)
         self._col_scales: np.ndarray | None = None
@@ -281,6 +299,7 @@ class GDMR:
         data: "Corpus | Sequence[Sequence[str]]",
         features=None,
         *,
+        metadata_names=None,
         iters: int = 1000,
         num_samples: int = 5,
         sample_interval: int = 25,
@@ -340,6 +359,16 @@ class GDMR:
             raise ValueError(
                 f"covariates have {D} dimensions but degrees has {len(self._degrees)}"
             )
+
+        if metadata_names is None:
+            self._metadata_names = [f"x{d}" for d in range(D)]
+        else:
+            self._metadata_names = [str(n) for n in metadata_names]
+            if len(self._metadata_names) != D:
+                raise ValueError(
+                    f"metadata_names has {len(self._metadata_names)} entries but "
+                    f"covariates have {D} dimensions"
+                )
 
         # Infer metadata_range from data if not provided
         if self._metadata_range is None:
@@ -421,13 +450,9 @@ class GDMR:
         # Apply scaling to feature columns
         scaled_features = non_intercept_basis * non_intercept_scales[np.newaxis, :]
 
-        # Build feature names for DMR
-        degree_ranges = [range(deg + 1) for deg in self._degrees]
-        multi_indices = list(_iproduct(*degree_ranges))
-        # Skip the first multi-index (the all-zeros one = intercept) since DMR handles it
-        feature_names = [
-            "L" + "_".join(str(p) for p in idx) for idx in multi_indices[1:]
-        ]
+        # Readable basis-term labels (intercept first); the inner DMR prepends its
+        # own intercept, so hand it the non-intercept names only.
+        feature_names = _basis_feature_names(self._degrees, self._metadata_names)[1:]
 
         # Build inner DMR
         self._dmr = DMR(
@@ -643,6 +668,35 @@ class GDMR:
         return list(self._degrees)
 
     @property
+    def metadata_names(self) -> list[str]:
+        """Names of the D continuous metadata dimensions (the model's inputs).
+
+        These are distinct from :attr:`feature_names`: a metadata dimension (say
+        ``"year"``) expands into several Legendre basis terms (``year^1``,
+        ``year^2``, ...), and it is those basis terms that :attr:`feature_effects`
+        is indexed by. Set via ``metadata_names=`` on :meth:`fit`; defaults to
+        ``["x0", "x1", ...]``.
+        """
+        self._require_fitted()
+        return list(self._metadata_names)
+
+    @property
+    def feature_names(self) -> list[str]:
+        """Labels for the Legendre basis terms, aligned with the columns of
+        :attr:`feature_effects`.
+
+        Column 0 is ``"intercept"``; the rest are ``:``-joined ``"{name}^{k}"``
+        terms over the metadata dimensions (e.g. ``"year^2"``,
+        ``"year^1:citations^1"``), using :attr:`metadata_names`. The ``^k`` marks
+        the degree-``k`` Legendre term, not a raw power. Because a continuous
+        covariate's per-degree coefficients are rarely interpretable on their own,
+        read the fitted surface with :meth:`tdf` / :meth:`tdf_linspace` rather
+        than the individual basis coefficients.
+        """
+        self._require_fitted()
+        return _basis_feature_names(self._degrees, self._metadata_names)
+
+    @property
     def metadata_range(self) -> list[tuple[float, float]]:
         """Per-dimension ``(lo, hi)`` bounds used for the [-1, 1] mapping."""
         self._require_fitted()
@@ -838,6 +892,7 @@ class GDMR:
             "sigma0": self._sigma0,
             "decay": self._decay,
             "metadata_range": self._metadata_range,
+            "metadata_names": self._metadata_names,
             "lbfgs_iters": self._lbfgs_iters,
             "sampler": self._sampler,
             "recover_scales": self._recover_scales,
@@ -880,6 +935,7 @@ class GDMR:
         m._dmr = DMR.load(state["dmr_path"])
         m._recover_scales = state["recover_scales"]
         m._col_scales = state["col_scales"]
+        m._metadata_names = state.get("metadata_names")
         m._fitted = state["fitted"]
         return m
 

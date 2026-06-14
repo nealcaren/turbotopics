@@ -172,13 +172,17 @@ citation impact, age).
 
 ```python
 model = topica.GDMR(num_topics=20, degrees=[3], seed=1)
-model.fit(docs, year)                 # `features=`/`covariates=`/`metadata=` all accepted
+model.fit(docs, year, metadata_names=["year"])   # features=/covariates=/metadata= all accepted
 curve = model.tdf_linspace(1990, 2020, num=31)   # (31, num_topics) prevalence surface
 ```
 
 `GDMR` mirrors `DMR`'s interface; `degrees`, `metadata_range`, and the prior
 scales `sigma`/`sigma0`/`decay` configure the basis, and `tdf` / `tdf_linspace`
-evaluate the fitted surface.
+evaluate the fitted surface. `metadata_names` labels the continuous dimensions;
+`feature_names` then labels the derived Legendre basis terms (e.g. `year^2`),
+aligned with `feature_effects`. Because a continuous covariate's per-degree
+coefficients are rarely interpretable on their own, read the surface with `tdf`
+rather than the individual basis coefficients.
 
 ## DTM
 

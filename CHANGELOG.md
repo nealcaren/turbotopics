@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `GDMR` gains `metadata_names` (label the continuous dimensions, via
+  `fit(..., metadata_names=[...])`) and a `feature_names` property that labels the
+  derived Legendre basis terms (e.g. `year^2`) aligned with `feature_effects` —
+  kept as two distinct names because they are two distinct things (the D input
+  dimensions vs the basis columns). Both survive save/load (#157).
 - `TopicEffect.to_frame()` returns a tidy DataFrame with one row per feature
   (columns `topic`, `feature`, `coef`, `se`, `z`, `ci_low`, `ci_high`,
   `r_squared`); concatenating the per-topic frames from `estimate_effect` gives a

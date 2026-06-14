@@ -750,3 +750,64 @@ class TestGDMRCovariateAliases:
         t_features = m.transform(new_docs, features=new_meta, seed=0)
         t_metadata = m.transform(new_docs, metadata=new_meta, seed=0)
         npt.assert_allclose(t_features, t_metadata)
+
+
+# ---------------------------------------------------------------------------
+# #157: metadata_names (the D dimensions) vs feature_names (the basis columns)
+# ---------------------------------------------------------------------------
+
+class TestGDMRNames:
+    """metadata_names labels the D continuous dimensions; feature_names labels
+    the Legendre basis terms and aligns with feature_effects columns. They are
+    deliberately different things with different names."""
+
+    def _fit(self, degrees, metadata_names=None, seed=5):
+        n_dim = len(degrees)
+        if n_dim == 1:
+            docs, meta = _make_continuous_corpus(n=120, seed=seed)
+        else:
+            docs, meta = _make_2d_corpus(n=140, seed=seed)
+        m = topica.GDMR(num_topics=2, degrees=degrees, seed=7)
+        m.fit(docs, meta, metadata_names=metadata_names, iters=120)
+        return m
+
+    def test_metadata_names_default(self):
+        m = self._fit([3])
+        assert m.metadata_names == ["x0"]
+
+    def test_metadata_names_custom(self):
+        m = self._fit([2, 1], metadata_names=["year", "citations"])
+        assert m.metadata_names == ["year", "citations"]
+
+    def test_metadata_names_length_must_match_dims(self):
+        docs, meta = _make_continuous_corpus(n=60, seed=1)
+        m = topica.GDMR(num_topics=2, degrees=[2], seed=7)
+        with pytest.raises(ValueError):
+            m.fit(docs, meta, metadata_names=["a", "b"], iters=50)  # D=1, 2 names
+
+    def test_feature_names_align_with_feature_effects(self):
+        m = self._fit([3])
+        names = m.feature_names
+        assert len(names) == m.feature_effects.shape[1]      # one per basis column
+        assert names[0] == "intercept"
+
+    def test_feature_names_use_metadata_names(self):
+        m = self._fit([2], metadata_names=["year"])
+        names = m.feature_names
+        # degrees=[2] -> intercept, year^1, year^2
+        assert names == ["intercept", "year^1", "year^2"]
+
+    def test_feature_names_tensor_product_2d(self):
+        m = self._fit([1, 1], metadata_names=["year", "cite"])
+        names = m.feature_names
+        assert names[0] == "intercept"
+        assert len(names) == m.feature_effects.shape[1] == 4  # (1+1)*(1+1)
+        assert "year^1:cite^1" in names                       # the cross term
+
+    def test_metadata_names_survive_save_load(self, tmp_path):
+        m = self._fit([2], metadata_names=["year"])
+        p = str(tmp_path / "g.gdmr")
+        m.save(p)
+        loaded = topica.GDMR.load(p)
+        assert loaded.metadata_names == ["year"]
+        assert loaded.feature_names == m.feature_names
