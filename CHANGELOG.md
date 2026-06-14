@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `TopicEffect.to_frame()` returns a tidy DataFrame with one row per feature
+  (columns `topic`, `feature`, `coef`, `se`, `z`, `ci_low`, `ci_high`,
+  `r_squared`); concatenating the per-topic frames from `estimate_effect` gives a
+  long table with one row per (topic, feature) and no special-casing (#151).
+- `search_k` now returns a `SearchKResult` (still a list of per-K rows) that
+  carries `.directions` (whether higher or lower is better per metric) and a
+  `.best_k(metric=...)` selector, so auto-selecting K cannot sort the wrong way
+  (coherence is negative; the maximum is best) (#153).
 - `GDMR`, generalized DMR (g-DMR; Lee & Song 2020): DMR over one or more
   continuous metadata variables via a Legendre-polynomial basis with a decay
   prior, plus topic distribution functions `tdf` / `tdf_linspace` that read the
@@ -25,6 +33,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Documentation
 
+- Covariates guide gains a single end-to-end recipe (`from_dataframe` →
+  `design_matrix` → `search_k`/`fit` → `estimate_effect` → `to_frame`) and a note
+  that all design/effect helpers are canonically top-level `topica.*` (the
+  `topica.stm.*` paths remain as compatibility aliases) (#149, #152).
+- `design_matrix` and `from_dataframe` docstrings now name the optional
+  `topica[formula]` extra so the requirement is visible before runtime (#150).
 - Softened several cross-implementation claims to match what the artifacts show
   (design-review #02/#05/#06): keyATM/seededlda "verified word-for-word" → topic
   agreement via the reproducible `parity/` harness; BERTopic/Top2Vec "matching

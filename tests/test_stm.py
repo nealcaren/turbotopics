@@ -184,6 +184,36 @@ class TestEstimateEffect:
         with pytest.raises(ValueError, match="rows"):
             stm.estimate_effect(model.doc_topic, bad_x)
 
+    def test_to_frame_columns_and_rows(self, synthetic_model_and_x, space_topic_idx):
+        """to_frame() gives one row per feature with the tidy column set."""
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(
+            model.doc_topic, x, feature_names=["x"], topics=[space_topic_idx]
+        )
+        df = effects[0].to_frame()
+        assert list(df.columns) == [
+            "topic", "feature", "coef", "se", "z", "ci_low", "ci_high", "r_squared"
+        ]
+        assert len(df) == len(effects[0].feature_names)  # intercept + x
+        assert set(df["feature"]) == {"intercept", "x"}
+        assert (df["topic"] == space_topic_idx).all()
+        # values agree with the underlying arrays
+        xrow = df[df["feature"] == "x"].iloc[0]
+        j = effects[0].feature_names.index("x")
+        assert xrow["coef"] == pytest.approx(float(effects[0].coef[j]))
+        assert xrow["ci_low"] == pytest.approx(float(effects[0].ci_low[j]))
+
+    def test_to_frame_concat_one_row_per_topic_feature(self, synthetic_model_and_x):
+        """Concatenating per-topic frames yields one row per (topic, feature)."""
+        import pandas as pd
+
+        model, x = synthetic_model_and_x
+        effects = stm.estimate_effect(model.doc_topic, x, feature_names=["x"])
+        table = pd.concat([e.to_frame() for e in effects], ignore_index=True)
+        n_feat = len(effects[0].feature_names)
+        assert len(table) == len(effects) * n_feat
+        assert table.groupby("topic").size().eq(n_feat).all()
+
     def test_feature_names_length_mismatch_raises(self, synthetic_model_and_x):
         model, x = synthetic_model_and_x
         with pytest.raises(ValueError):

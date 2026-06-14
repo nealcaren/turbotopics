@@ -706,6 +706,61 @@ def find_thoughts(doc_topic, texts=None, *, topic, n=3):
 # searchK: fit across topic counts, report quality
 # ---------------------------------------------------------------------------
 
+# Whether a higher or lower value of each metric is better. Coherence here is
+# mean UMass (negative; less-negative is better), so "maximize".
+SEARCH_K_DIRECTIONS = {
+    "coherence": "maximize",
+    "exclusivity": "maximize",
+    "heldout_loglik": "maximize",
+    "perplexity": "minimize",
+}
+
+
+class SearchKResult(list):
+    """The :func:`search_k` result: a list of per-K dict rows, with the
+    optimization direction stamped in and a safe ``best_k`` selector.
+
+    It is a ``list`` subclass, so it iterates and indexes exactly like the rows
+    it always returned. The additions remove the trap of sorting the wrong way:
+    ``coherence`` is mean UMass (negative; less-negative is better), so naively
+    taking the minimum picks the worst K.
+    """
+
+    @property
+    def directions(self) -> dict:
+        """``{metric: "maximize"|"minimize"}`` for the metrics actually present."""
+        present = set().union(*[r.keys() for r in self]) if self else set()
+        return {m: d for m, d in SEARCH_K_DIRECTIONS.items() if m in present}
+
+    def best_k(self, metric: str | None = None) -> int:
+        """Return the ``k`` that optimizes ``metric`` in its correct direction.
+
+        ``metric`` defaults to the held-out metric when a held-out set was
+        supplied (``"heldout_loglik"`` for a :class:`Heldout`, ``"perplexity"``
+        for a legacy corpus), otherwise ``"coherence"``. Raises if absent.
+        """
+        if not self:
+            raise ValueError("search_k returned no rows")
+        if metric is None:
+            if "heldout_loglik" in self[0]:
+                metric = "heldout_loglik"
+            elif "perplexity" in self[0]:
+                metric = "perplexity"
+            else:
+                metric = "coherence"
+        if metric not in SEARCH_K_DIRECTIONS:
+            raise ValueError(
+                f"unknown metric {metric!r}; choose from {sorted(SEARCH_K_DIRECTIONS)}"
+            )
+        if metric not in self[0]:
+            raise ValueError(
+                f"metric {metric!r} not in results (present: {sorted(self[0])}); "
+                f"pass held_out= to get a held-out metric"
+            )
+        pick = max if SEARCH_K_DIRECTIONS[metric] == "maximize" else min
+        return int(pick(self, key=lambda r: r[metric])["k"])
+
+
 def search_k(
     docs,
     ks,
@@ -725,10 +780,14 @@ def search_k(
     ``model="stm"`` fits an :class:`~topica.STM` per K — pass ``prevalence``
     (a covariate design matrix) to scan K for the model you'll actually report.
 
-    Returns a list of dicts (one per K) with ``k``, ``coherence`` (mean UMass,
-    so negative; the metric is named in ``coherence_metric`` since ``plot_report``
-    reports c_v on a different scale), ``exclusivity`` (mean top-word exclusivity),
-    and — when ``held_out`` is supplied — a held-out quality metric.
+    Returns a :class:`SearchKResult` (a list of per-K dicts) with ``k``,
+    ``coherence`` (mean UMass, so negative; the metric is named in
+    ``coherence_metric`` since ``plot_report`` reports c_v on a different scale),
+    ``exclusivity`` (mean top-word exclusivity), and — when ``held_out`` is
+    supplied — a held-out quality metric. The result also carries
+    ``.directions`` (whether higher or lower is better per metric) and a
+    ``.best_k(metric=...)`` selector, so auto-selection cannot sort the wrong way
+    (``coherence`` is negative, so the maximum, not the minimum, is best).
 
     Two held-out paths are supported, determined by the type of ``held_out``:
 
@@ -781,7 +840,7 @@ def search_k(
             else:
                 row["perplexity"] = float(perplexity(m, held_out, seed=seed))
         rows.append(row)
-    return rows
+    return SearchKResult(rows)
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,12 @@ def from_dataframe(
     aligned one-to-one with the corpus documents, in the same row order. Feed
     that metadata straight to an STM prevalence design with no manual alignment.
 
+    To turn that metadata into a design matrix with an R-style formula, pass
+    ``corpus.metadata`` to :func:`topica.design_matrix`, which needs the optional
+    ``formulaic`` package (``pip install "topica[formula]"``); or build the design
+    by hand with :func:`topica.one_hot` / :func:`topica.spline`, which need no
+    extra dependency.
+
     Parameters
     ----------
     df : pandas.DataFrame or polars.DataFrame

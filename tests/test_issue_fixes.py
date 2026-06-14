@@ -127,6 +127,34 @@ def test_search_k_labels_its_coherence_metric():
     assert all(r["coherence_metric"] == "u_mass" for r in rows)
 
 
+def test_search_k_best_k_and_directions():
+    # #153: best_k optimizes in the correct direction; coherence is negative, so
+    # the maximum (least-negative) K is best, not the minimum.
+    docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
+    res = topica.search_k(docs, [2, 3], iters=60, num_samples=1)
+    # still behaves as the list of rows it always was
+    assert isinstance(res, list) and len(res) == 2
+    assert res.directions["coherence"] == "maximize"
+    assert res.directions["exclusivity"] == "maximize"
+    # best_k matches a manual max-by-coherence
+    expected = max(res, key=lambda r: r["coherence"])["k"]
+    assert res.best_k() == expected
+    assert res.best_k("coherence") == expected
+    # asking for an absent held-out metric is a clear error, not a silent wrong pick
+    with pytest.raises(ValueError):
+        res.best_k("heldout_loglik")
+
+
+def test_search_k_best_k_defaults_to_heldout_when_present():
+    # #153: with a held-out set, best_k defaults to the held-out log-likelihood
+    # (maximize) rather than coherence.
+    docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
+    held = [["cat", "dog"], ["star", "moon"]]
+    res = topica.search_k(docs, [2, 3], iters=60, num_samples=1, held_out=held)
+    assert res.directions["perplexity"] == "minimize"
+    assert res.best_k() == min(res, key=lambda r: r["perplexity"])["k"]
+
+
 def _planted_embeddings(seed=0):
     rng = np.random.default_rng(seed)
     vocab = [f"a{i}" for i in range(8)] + [f"b{i}" for i in range(8)]

@@ -94,7 +94,13 @@ def design_matrix(formula, data, _knot_ctx=None):
     prevalence model add their own. Categorical columns become treatment-coded
     dummies; ``a * b`` / ``a:b`` expand interactions; ``spline(x, df=k)`` uses
     topica's restricted cubic spline. A Polars frame is converted to pandas for
-    `formulaic`. Requires the optional ``formulaic`` package.
+    `formulaic`.
+
+    Requires the optional ``formulaic`` package: install it with
+    ``pip install "topica[formula]"`` (or ``pip install formulaic``). Without it,
+    this raises ``ImportError`` at call time. If you would rather build the design
+    matrix without that dependency, use :func:`topica.one_hot`,
+    :func:`topica.spline`, and :func:`topica.interaction` directly.
 
     Parameters
     ----------

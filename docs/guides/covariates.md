@@ -5,6 +5,47 @@ The Structural Topic Model lets topics depend on document metadata in two ways:
 topic is worded). For the publication-grade version of this workflow, with proper
 uncertainty and clustered errors, see [Measure effects properly](../publishing/effects.md).
 
+!!! tip "Importing the covariate helpers"
+    All of the design-matrix and effect helpers are top-level: `topica.one_hot`,
+    `topica.design_matrix`, `topica.spline`, `topica.interaction`,
+    `topica.estimate_effect`, and `topica.posterior_theta_samples`. That is the
+    canonical path used throughout these docs. The same names are also reachable
+    under `topica.stm.*` (they are the identical objects, kept as a compatibility
+    alias), but prefer the top-level form.
+
+## End to end: from a DataFrame to effects
+
+The whole covariate workflow in one block: build an aligned corpus from a
+DataFrame, turn the metadata into a design matrix with an R-style formula, fit
+the STM, and read the effects as a tidy table. Every step uses the canonical
+top-level helpers.
+
+```python
+import pandas as pd
+import topica
+
+# df has columns: text, party, year
+corpus = topica.from_dataframe(df, text_col="text")     # metadata kept aligned
+
+# Design matrix from a formula (needs the optional topica[formula] extra).
+# corpus.metadata is the surviving rows, already aligned to the documents.
+X, names = topica.design_matrix("~ party + spline(year, df=3)", corpus.metadata)
+
+# Pick K with a safe, direction-aware selector, then fit at that K.
+scan = topica.search_k(corpus, [10, 20, 30], model="stm", prevalence=X, iters=200)
+model = topica.STM(num_topics=scan.best_k(), seed=1)
+model.fit(corpus, prevalence=X, prevalence_names=names)
+
+# Effects with method-of-composition uncertainty, as a tidy long table.
+draws = topica.posterior_theta_samples(model, nsims=50, seed=0)
+effects = topica.estimate_effect(draws, X, feature_names=names)
+table = pd.concat([e.to_frame() for e in effects], ignore_index=True)
+```
+
+If you would rather not add the `formulaic` dependency, replace `design_matrix`
+with hand-built blocks: `X, names = topica.one_hot(df["party"])` combined with
+`topica.spline` / `topica.interaction` via `numpy.hstack`.
+
 ## Prevalence covariates
 
 ```python
@@ -39,20 +80,22 @@ Regress topic proportions on covariates with honest uncertainty, using the metho
 of composition, optionally with clustered standard errors and GLM links:
 
 ```python
-from topica import stm
+import pandas as pd
+import topica
 
-draws = stm.posterior_theta_samples(model, nsims=50, seed=0)
-effects = stm.estimate_effect(
+draws = topica.posterior_theta_samples(model, nsims=50, seed=0)
+effects = topica.estimate_effect(
     draws, X, feature_names=names,
     cluster=source_id,     # cluster-robust SEs for nested data
     # link="logit",        # keep predictions in [0, 1]
 )
-for e in effects:
-    print(e.as_dict())
+
+# One tidy row per (topic, feature): coef, se, z, ci_low, ci_high, r_squared
+table = pd.concat([e.to_frame() for e in effects], ignore_index=True)
 ```
 
-Build non-linear and interaction terms with `stm.spline` and `stm.interaction`.
-Full detail and the journal-grade treatment are in the
+Build non-linear and interaction terms with `topica.spline` and
+`topica.interaction`. Full detail and the journal-grade treatment are in the
 [Publishing](../publishing/effects.md) track.
 
 ## Predicted prevalence

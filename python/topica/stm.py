@@ -66,6 +66,33 @@ class TopicEffect:
             "r_squared": self.r_squared,
         }
 
+    def to_frame(self):
+        """Return a tidy pandas DataFrame, one row per feature.
+
+        Columns are ``topic``, ``feature``, ``coef``, ``se``, ``z``, ``ci_low``,
+        ``ci_high``, and ``r_squared`` (the topic's value, repeated). Because the
+        ``topic`` column is included, concatenating the frames from a whole
+        :func:`estimate_effect` call gives one row per (topic, feature)::
+
+            import pandas as pd
+            effects = topica.estimate_effect(model, X, feature_names=names)
+            table = pd.concat([e.to_frame() for e in effects], ignore_index=True)
+        """
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "topic": self.topic,
+                "feature": list(self.feature_names),
+                "coef": np.asarray(self.coef, dtype=float),
+                "se": np.asarray(self.se, dtype=float),
+                "z": np.asarray(self.z, dtype=float),
+                "ci_low": np.asarray(self.ci_low, dtype=float),
+                "ci_high": np.asarray(self.ci_high, dtype=float),
+                "r_squared": self.r_squared,
+            }
+        )
+
 
 def _ols(y, X, hat, XtX_inv, dof):
     """One OLS fit. Returns (beta, cov, r2)."""
@@ -301,7 +328,11 @@ def estimate_effect(
     Returns
     -------
     list[TopicEffect]
-        One regression per topic. ``[e.as_dict() for e in result]`` builds a table.
+        One regression per topic. For a tidy long table with one row per
+        (topic, feature), concatenate the per-topic frames::
+
+            import pandas as pd
+            table = pd.concat([e.to_frame() for e in result], ignore_index=True)
     """
     # Formula path: build X and feature_names from an R-style formula + a
     # DataFrame. A string `cluster` is read as a column of that frame.
