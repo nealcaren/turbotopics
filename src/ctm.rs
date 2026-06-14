@@ -135,6 +135,13 @@ pub struct HpbResult {
 
 /// STM `hpbcpp`: form the Hessian at η, invert it (with a diagonal-dominance
 /// fallback when indefinite) to get ν, and the expected counts φ and bound.
+///
+/// When `diagonal` is true, the mean-field variant is used: only the Hessian
+/// *diagonal* is formed and ν is filled with `1/H_ii` on its diagonal (the
+/// off-diagonals stay 0). This skips the per-document O((K-1)³) Cholesky and
+/// inverse — a large E-step speedup at high K — at the cost of dropping the
+/// off-diagonal posterior covariance. The `nu` storage format is unchanged
+/// (a length-(K-1)² flat vector), and `phi`/`ll`/`quad` are computed identically.
 pub fn ctm_hpb(
     eta: &[f64],
     beta: &[Vec<f64>],
@@ -143,6 +150,7 @@ pub fn ctm_hpb(
     mu: &[f64],
     siginv: &[f64],
     entropy: f64,
+    diagonal: bool,
 ) -> HpbResult {
     let km1 = eta.len();
     let k = km1 + 1;
@@ -165,48 +173,84 @@ pub fn ctm_hpb(
         }
     }
 
-    // hess (K×K) = EB·EBᵀ − ndoc·θθᵀ
-    let mut hess = vec![0.0f64; k * k];
-    for a in 0..k {
-        for b in 0..k {
+    // Shared `det_term` and `nu` are computed via either the full Hessian
+    // (Laplace) or its diagonal alone (mean-field). `phi` (= eb re-multiplied by
+    // sqrt(counts)) and the `ll`/`quad` bound terms below are identical in both.
+    let (nu, det_term) = if diagonal {
+        // Mean-field: form only the Hessian diagonal H_ii, exactly the i==i
+        // entries the full path computes. From eb (before re-multiplying by
+        // sqrt(counts)): diag of EB·EBᵀ − ndoc·θθᵀ.
+        let mut hdiag = vec![0.0f64; km1];
+        for i in 0..km1 {
             let mut s = 0.0;
             for wi in 0..w_n {
-                s += eb[a][wi] * eb[b][wi];
+                s += eb[i][wi] * eb[i][wi];
             }
-            hess[a * k + b] = s - ndoc * theta[a] * theta[b];
+            hdiag[i] = s - ndoc * theta[i] * theta[i];
         }
-    }
-    // Turn EB into φ = counts[w]·responsibility (multiply rows by sqrt(counts) again).
-    for (wi, &_w) in words.iter().enumerate() {
-        let sq = counts[wi].sqrt();
+        // Re-multiply eb by sqrt(counts) → φ (same as the full path).
+        for (wi, &_w) in words.iter().enumerate() {
+            let sq = counts[wi].sqrt();
+            for t in 0..k {
+                eb[t][wi] *= sq;
+            }
+        }
+        // Diagonal adjustment: H_ii −= rowSums(φ)_i − ndoc·θ_i, then + siginv_ii.
+        let mut nu = vec![0.0f64; km1 * km1];
+        let mut det_term = 0.0f64;
+        for i in 0..km1 {
+            let row_sum: f64 = (0..w_n).map(|wi| eb[i][wi]).sum();
+            hdiag[i] -= row_sum - ndoc * theta[i];
+            hdiag[i] += siginv[i * km1 + i];
+            let h_ii = hdiag[i].max(1e-12);
+            nu[i * km1 + i] = 1.0 / h_ii;
+            det_term -= 0.5 * h_ii.ln();
+        }
+        (nu, det_term)
+    } else {
+        // hess (K×K) = EB·EBᵀ − ndoc·θθᵀ
+        let mut hess = vec![0.0f64; k * k];
+        for a in 0..k {
+            for b in 0..k {
+                let mut s = 0.0;
+                for wi in 0..w_n {
+                    s += eb[a][wi] * eb[b][wi];
+                }
+                hess[a * k + b] = s - ndoc * theta[a] * theta[b];
+            }
+        }
+        // Turn EB into φ = counts[w]·responsibility (multiply rows by sqrt(counts) again).
+        for (wi, &_w) in words.iter().enumerate() {
+            let sq = counts[wi].sqrt();
+            for t in 0..k {
+                eb[t][wi] *= sq;
+            }
+        }
+        // diag(hess) −= rowSums(φ) − ndoc·θ
         for t in 0..k {
-            eb[t][wi] *= sq;
+            let row_sum: f64 = (0..w_n).map(|wi| eb[t][wi]).sum();
+            hess[t * k + t] -= row_sum - ndoc * theta[t];
         }
-    }
-    // diag(hess) −= rowSums(φ) − ndoc·θ
-    for t in 0..k {
-        let row_sum: f64 = (0..w_n).map(|wi| eb[t][wi]).sum();
-        hess[t * k + t] -= row_sum - ndoc * theta[t];
-    }
 
-    // Drop the last (reference) row/col → (K-1)×(K-1), then add siginv.
-    let mut h = vec![0.0f64; km1 * km1];
-    for i in 0..km1 {
-        for j in 0..km1 {
-            h[i * km1 + j] = hess[i * k + j] + siginv[i * km1 + j];
+        // Drop the last (reference) row/col → (K-1)×(K-1), then add siginv.
+        let mut h = vec![0.0f64; km1 * km1];
+        for i in 0..km1 {
+            for j in 0..km1 {
+                h[i * km1 + j] = hess[i * k + j] + siginv[i * km1 + j];
+            }
         }
-    }
 
-    // ν = H⁻¹, with STM's diagonal-dominance fallback if H isn't PD.
-    let (nu, half_ld) = match cholesky(&h, km1) {
-        Some(l) => (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1)),
-        None => {
-            make_diagonally_dominant(&mut h, km1);
-            let l = cholesky(&h, km1).expect("PD after diagonal dominance");
-            (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1))
-        }
+        // ν = H⁻¹, with STM's diagonal-dominance fallback if H isn't PD.
+        let (nu, half_ld) = match cholesky(&h, km1) {
+            Some(l) => (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1)),
+            None => {
+                make_diagonally_dominant(&mut h, km1);
+                let l = cholesky(&h, km1).expect("PD after diagonal dominance");
+                (spd_inverse_from_chol(&l, km1), half_logdet(&l, km1))
+            }
+        };
+        (nu, -half_ld) // STM: −Σ log diag(chol(H))
     };
-    let det_term = -half_ld; // STM: −Σ log diag(chol(H))
 
     // bound = Σ_w counts[w]·log(Σ_t θ_t β_{t,w}) + detTerm − 0.5 (η-μ)ᵀΣ⁻¹(η-μ) − entropy
     let mut ll = 0.0;
@@ -272,6 +316,13 @@ pub struct CtmModel {
     pub converged: bool,
     /// Number of EM iterations actually run (≤ `em_iters`).
     pub em_iters_run: usize,
+    /// Variational-covariance mode used in the E-step. `false` (default) is the
+    /// Laplace approximation (full ν = H⁻¹); `true` is the mean-field diagonal
+    /// approximation (ν = diag(1/H_ii), off-diagonals zero). Stored so
+    /// `recompute_nu` reproduces ν in the same mode. Persistence (with a serde
+    /// default of `false` for old saves) lives on the `CtmState`/`StmState`
+    /// structs in `python.rs`.
+    pub diagonal: bool,
 }
 
 /// Build per-group topic-word β (G×K×V) from the SAGE content deviations:
@@ -748,6 +799,12 @@ fn mu_from(x_d: &[f64], gamma: &[Vec<f64>], km1: usize) -> Vec<f64> {
 /// default, ridge) or `L1 { alpha }` (elastic-net coordinate descent with
 /// AIC-selected penalty). When no prevalence design is supplied the parameter
 /// has no effect.
+///
+/// `diagonal` selects the per-document variational-covariance mode: `false` is
+/// the Laplace approximation (full ν = H⁻¹), `true` is the mean-field diagonal
+/// approximation (ν = diag(1/H_ii)), which skips the per-document Cholesky and
+/// inverse for a large E-step speedup at high K, at the cost of dropping the
+/// off-diagonal posterior covariance.
 #[allow(clippy::too_many_arguments)]
 pub fn fit_ctm<R: Rng>(
     docs: &[Vec<u32>],
@@ -761,6 +818,7 @@ pub fn fit_ctm<R: Rng>(
     init_spectral: bool,
     gamma_prior: GammaPrior,
     keep_nu: bool,
+    diagonal: bool,
     rng: &mut R,
 ) -> CtmModel {
     let k = num_topics;
@@ -926,7 +984,7 @@ pub fn fit_ctm<R: Rng>(
                         7,
                         1e-5,
                     );
-                    let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy);
+                    let res = ctm_hpb(&opt, beta_doc, words, counts, &mu_d, &siginv, entropy, diagonal);
                     (opt, res)
                 });
 
@@ -1080,6 +1138,7 @@ pub fn fit_ctm<R: Rng>(
         bound_history,
         converged,
         em_iters_run,
+        diagonal,
     }
 }
 
@@ -1106,6 +1165,7 @@ pub fn fit_ctm_svi<R: Rng>(
     sigma_shrink: f64,
     init_spectral: bool,
     keep_nu: bool,
+    diagonal: bool,
     rng: &mut R,
 ) -> CtmModel {
     let k = num_topics;
@@ -1190,7 +1250,7 @@ pub fn fit_ctm_svi<R: Rng>(
                     7,
                     1e-5,
                 );
-                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy, diagonal);
                 for (wi, &w) in words.iter().enumerate() {
                     for tt in 0..k {
                         beta_ss[tt][w] += res.phi[tt][wi];
@@ -1269,7 +1329,7 @@ pub fn fit_ctm_svi<R: Rng>(
             7,
             1e-5,
         );
-        let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+        let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy, diagonal);
         lambda[di] = opt;
         if keep_nu {
             nu_store[di] = res.nu;
@@ -1299,6 +1359,7 @@ pub fn fit_ctm_svi<R: Rng>(
         bound_history: vec![total_bound],
         converged: true,
         em_iters_run: epochs,
+        diagonal,
     }
 }
 
@@ -1346,6 +1407,7 @@ pub fn recompute_nu(
                 &model.mu,
                 &siginv,
                 entropy,
+                model.diagonal,
             );
             res.nu
         })
@@ -1407,7 +1469,7 @@ mod tests {
                 doc
             })
             .collect();
-        let m = fit_ctm_svi(&docs, nb, v, 20, 32, 16.0, 0.7, 0.0, false, true, &mut rng);
+        let m = fit_ctm_svi(&docs, nb, v, 20, 32, 16.0, 0.7, 0.0, false, true, false, &mut rng);
         // Each planted block is the top of some topic.
         let mut covered = std::collections::HashSet::new();
         for t in 0..nb {
@@ -1431,7 +1493,7 @@ mod tests {
             .collect();
         let run = || {
             let mut rng = ChaCha8Rng::seed_from_u64(7);
-            fit_ctm_svi(&docs, 3, 9, 10, 16, 16.0, 0.7, 0.0, false, true, &mut rng).beta
+            fit_ctm_svi(&docs, 3, 9, 10, 16, 16.0, 0.7, 0.0, false, true, false, &mut rng).beta
         };
         let (a, b) = (run(), run());
         for (ra, rb) in a.iter().zip(b.iter()) {
@@ -1456,7 +1518,7 @@ mod tests {
                 docs.push(vec![6, 7, 8, 6, 7, 8, 6, 7, 8, 6]);
             }
         }
-        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng);
+        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, false, &mut rng);
         let theta = model.doc_topics();
         // Sanity: θ rows sum to 1 and are valid.
         for row in &theta {
@@ -1487,7 +1549,7 @@ mod tests {
             }
         }
         // K=2 (CTM needs >=2 topics); content groups = 2.
-        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, GammaPrior::Pooled, true, &mut rng);
+        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, GammaPrior::Pooled, true, false, &mut rng);
         let cb = model.content_beta.expect("content_beta present");
         // cb[group][topic][word]. The dominant topic for group 0 should favour
         // {0,1}; for group 1 {2,3}. Check that for each group some topic does.
@@ -1515,7 +1577,7 @@ mod tests {
             }
         }
 
-        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng);
+        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, GammaPrior::Pooled, true, false, &mut rng);
         // The bound trajectory is (weakly) monotone increasing.
         let h = &converged.bound_history;
         assert!(h.len() >= 2);
@@ -1528,10 +1590,86 @@ mod tests {
 
         // em_tol = 0 disables early stopping: run the full cap.
         let mut rng2 = ChaCha8Rng::seed_from_u64(7);
-        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng2);
+        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, false, &mut rng2);
         assert!(!capped.converged);
         assert_eq!(capped.em_iters_run, 8);
         assert_eq!(capped.bound_history.len(), 8);
+    }
+
+    #[test]
+    fn diagonal_bound_increases_and_recovers_topics() {
+        // Mean-field (diagonal) variational mode: the EM bound must ascend and the
+        // model must recover disjoint-vocabulary topics, with ν purely diagonal.
+        let nb = 3usize;
+        let wpb = 5usize;
+        let v = nb * wpb;
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let docs: Vec<Vec<u32>> = (0..240)
+            .map(|d| {
+                let b = d % nb;
+                let block: Vec<u32> = (b * wpb..(b + 1) * wpb).map(|w| w as u32).collect();
+                let mut doc = block.clone();
+                doc.extend(block);
+                doc
+            })
+            .collect();
+        let model = fit_ctm(
+            &docs, nb, v, 30, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, true, &mut rng,
+        );
+        assert!(model.diagonal, "model should record diagonal mode");
+
+        // The mean-field diagonal objective is not the exact Laplace lower bound,
+        // so the reported bound rises steeply to (near) convergence and may then
+        // drift by a tiny amount per step. Check that it improves massively
+        // overall and that any per-step decrease is negligible relative to the
+        // total improvement (no large backward jumps).
+        let h = &model.bound_history;
+        assert!(h.len() >= 2);
+        let h_max = h.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let total_range = h_max - h[0];
+        assert!(total_range > 0.0, "diagonal bound did not improve overall");
+        assert!(h[h.len() - 1] > h[0], "diagonal bound did not improve overall");
+        let mut max_decrease = 0.0f64;
+        for w in h.windows(2) {
+            let dec = w[0] - w[1];
+            if dec > max_decrease {
+                max_decrease = dec;
+            }
+        }
+        assert!(
+            max_decrease < 0.01 * total_range,
+            "max per-step decrease {} too large vs total improvement {}",
+            max_decrease, total_range
+        );
+
+        // ν is purely diagonal (off-diagonals exactly zero, diagonals positive).
+        let km1 = nb - 1;
+        for nu in &model.nu {
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    if i == j {
+                        assert!(nu[i * km1 + j] > 0.0, "diagonal nu must be positive");
+                    } else {
+                        assert_eq!(nu[i * km1 + j], 0.0, "off-diagonal nu must be exactly 0");
+                    }
+                }
+            }
+        }
+
+        // Each planted block is the top of some topic.
+        let mut covered = std::collections::HashSet::new();
+        for t in 0..nb {
+            let mut idx: Vec<usize> = (0..v).collect();
+            idx.sort_by(|&a, &b| model.beta[t][b].partial_cmp(&model.beta[t][a]).unwrap());
+            let top: std::collections::HashSet<usize> = idx[..wpb].iter().copied().collect();
+            for b in 0..nb {
+                let block: std::collections::HashSet<usize> = (b * wpb..(b + 1) * wpb).collect();
+                if block.is_subset(&top) {
+                    covered.insert(b);
+                }
+            }
+        }
+        assert_eq!(covered.len(), nb, "diagonal mode only recovered {covered:?}");
     }
 
     // Build a synthetic regression problem with n observations, p predictors
@@ -1602,7 +1740,7 @@ mod tests {
             vec![1, 1, 2, 0, 1],
             vec![2, 2, 0, 1, 2],
         ];
-        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, true, &mut rng);
+        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, true, false, &mut rng);
 
         let base_violations = check_conformance(&model);
         assert!(

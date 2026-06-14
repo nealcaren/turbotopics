@@ -347,6 +347,11 @@ struct SageState {
 fn nan() -> f64 {
     f64::NAN
 }
+/// serde default for the variational-covariance mode on models saved before the
+/// `variational` field existed: "laplace" (the original full-covariance E-step).
+fn default_variational() -> String {
+    "laplace".to_string()
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CtmState {
     num_topics: usize, sigma_shrink: f64, seed: u64, init_spectral: bool, fitted: bool,
@@ -358,6 +363,7 @@ struct CtmState {
     #[serde(default)] bound_history: Vec<f64>,
     #[serde(default)] converged: bool,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default = "default_variational")] variational: String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StmState {
@@ -371,6 +377,7 @@ struct StmState {
     #[serde(default)] bound_history: Vec<f64>,
     #[serde(default)] converged: bool,
     #[serde(default)] topic_names: Vec<String>,
+    #[serde(default = "default_variational")] variational: String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StsState {
@@ -5247,6 +5254,9 @@ pub struct CTM {
     sigma_shrink: f64,
     seed: u64,
     init_spectral: bool,
+    /// Variational-covariance mode: "laplace" (full ν = H⁻¹) or "diagonal"
+    /// (mean-field ν = diag(1/H_ii)).
+    variational: String,
 
     fitted: bool,
     topic_names: Vec<String>,
@@ -5285,9 +5295,14 @@ impl CTM {
     /// covariance toward its diagonal each M-step (stabilizes Σ). `init` is
     /// ``"spectral"`` (default; deterministic anchor-word init, matching STM's
     /// default — `seed` is then irrelevant) or ``"random"`` (seeded).
+    /// `variational` selects the per-document variational-covariance mode:
+    /// ``"laplace"`` (default; full posterior covariance ν = H⁻¹) or
+    /// ``"diagonal"`` (mean-field ν = diag(1/H_ii), which skips the per-document
+    /// Cholesky/inverse for a large E-step speedup at high K, at the cost of the
+    /// off-diagonal posterior covariance — topic-correlation/SE precision is lower).
     #[new]
-    #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral"))]
-    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
+    #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral", variational="laplace"))]
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str, variational: &str) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -5299,11 +5314,15 @@ impl CTM {
             "random" => false,
             _ => return Err(PyValueError::new_err("init must be 'spectral' or 'random'")),
         };
+        if variational != "laplace" && variational != "diagonal" {
+            return Err(PyValueError::new_err("variational must be 'laplace' or 'diagonal'"));
+        }
         Ok(CTM {
             num_topics,
             sigma_shrink,
             seed,
             init_spectral,
+            variational: variational.to_string(),
             fitted: false,
             topic_names: Vec::new(),
             beta: None,
@@ -5388,6 +5407,7 @@ impl CTM {
         let num_types = corpus.num_types();
         let shrink = self.sigma_shrink;
         let spectral = self.init_spectral;
+        let diagonal = self.variational == "diagonal";
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         let (model, corpus) = py.allow_threads(move || {
@@ -5395,12 +5415,12 @@ impl CTM {
                 if svi {
                     ctm::fit_ctm_svi(
                         &corpus.docs, k, num_types, iters, batch_size, tau, kappa, shrink, spectral,
-                        keep_eta_cov, &mut rng,
+                        keep_eta_cov, diagonal, &mut rng,
                     )
                 } else {
                     ctm::fit_ctm(
                         &corpus.docs, k, num_types, iters, convergence_tol, shrink, None, None,
-                        spectral, ctm::GammaPrior::Pooled, keep_eta_cov, &mut rng,
+                        spectral, ctm::GammaPrior::Pooled, keep_eta_cov, diagonal, &mut rng,
                     )
                 }
             });
@@ -5521,6 +5541,13 @@ impl CTM {
         Ok(self.converged)
     }
 
+    /// Variational-covariance mode: ``"laplace"`` (full ν = H⁻¹) or
+    /// ``"diagonal"`` (mean-field ν = diag(1/H_ii)).
+    #[getter]
+    fn variational(&self) -> String {
+        self.variational.clone()
+    }
+
     /// Uniform convergence trace: ``(iteration, bound)`` pairs, one per EM
     /// iteration. The objective is the variational ELBO (same as
     /// :attr:`bound_history`).
@@ -5624,6 +5651,8 @@ impl CTM {
             bound_history: Vec::new(),
             converged: false,
             em_iters_run: 0,
+            // Recompute ν in the same mode the fit used (laplace/diagonal).
+            diagonal: self.variational == "diagonal",
         };
         let nu = py.allow_threads(|| ctm::recompute_nu(&model_stub, &sparse));
         let mut out = Array3::<f32>::zeros((d, km1, km1));
@@ -5769,6 +5798,7 @@ impl CTM {
             bound: self.bound, bound_history: self.bound_history.clone(),
             converged: self.converged,
             topic_names: self.topic_names.clone(),
+            variational: self.variational.clone(),
         })
     }
 
@@ -5785,7 +5815,7 @@ impl CTM {
         let eta_cov = arr3_back(s.eta_cov).map(|c| c.mapv(|x| x as f32));
         Ok(CTM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
-            init_spectral: s.init_spectral, fitted: s.fitted,
+            init_spectral: s.init_spectral, variational: s.variational, fitted: s.fitted,
             topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov,
@@ -5798,7 +5828,7 @@ impl CTM {
     }
 
     fn __repr__(&self) -> String {
-        format!("CTM(num_topics={}, fitted={})", self.num_topics, self.fitted)
+        format!("CTM(num_topics={}, variational={:?}, fitted={})", self.num_topics, self.variational, self.fitted)
     }
 }
 
@@ -5817,6 +5847,9 @@ pub struct STM {
     sigma_shrink: f64,
     seed: u64,
     init_spectral: bool,
+    /// Variational-covariance mode: "laplace" (full ν = H⁻¹) or "diagonal"
+    /// (mean-field ν = diag(1/H_ii)).
+    variational: String,
 
     fitted: bool,
     topic_names: Vec<String>,
@@ -5877,9 +5910,14 @@ impl STM {
     /// anchor-word init, matching STM's default — `seed` is then irrelevant for
     /// β init) or ``"random"`` (seeded). Spectral init applies to the
     /// topic-word β; with a content model the per-group β is always random.
+    /// `variational` selects the per-document variational-covariance mode:
+    /// ``"laplace"`` (default; full posterior covariance ν = H⁻¹) or
+    /// ``"diagonal"`` (mean-field ν = diag(1/H_ii), which skips the per-document
+    /// Cholesky/inverse for a large E-step speedup at high K, at the cost of the
+    /// off-diagonal posterior covariance — topic-correlation/SE precision is lower).
     #[new]
-    #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral"))]
-    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str) -> PyResult<Self> {
+    #[pyo3(signature = (num_topics, *, sigma_shrink=0.0, seed=42, init="spectral", variational="laplace"))]
+    fn new(#[pyo3(from_py_with = "py_num_topics")] num_topics: usize, sigma_shrink: f64, seed: u64, init: &str, variational: &str) -> PyResult<Self> {
         if num_topics < 2 {
             return Err(PyValueError::new_err("num_topics must be >= 2"));
         }
@@ -5891,11 +5929,15 @@ impl STM {
             "random" => false,
             _ => return Err(PyValueError::new_err("init must be 'spectral' or 'random'")),
         };
+        if variational != "laplace" && variational != "diagonal" {
+            return Err(PyValueError::new_err("variational must be 'laplace' or 'diagonal'"));
+        }
         Ok(STM {
             num_topics,
             sigma_shrink,
             seed,
             init_spectral,
+            variational: variational.to_string(),
             fitted: false,
             topic_names: Vec::new(),
             beta: None,
@@ -6096,6 +6138,7 @@ impl STM {
         let num_types = corpus.num_types();
         let shrink = self.sigma_shrink;
         let spectral = self.init_spectral;
+        let diagonal = self.variational == "diagonal";
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed);
 
         let (model, corpus) = py.allow_threads(move || {
@@ -6104,7 +6147,7 @@ impl STM {
             let m = run_with_threads(num_threads, || {
                 ctm::fit_ctm(
                     &corpus.docs, k, num_types, iters, convergence_tol, shrink, prev_ref, cont_ref,
-                    spectral, gprior, keep_eta_cov, &mut rng,
+                    spectral, gprior, keep_eta_cov, diagonal, &mut rng,
                 )
             });
             (m, corpus)
@@ -6238,6 +6281,13 @@ impl STM {
         Ok(self.converged)
     }
 
+    /// Variational-covariance mode: ``"laplace"`` (full ν = H⁻¹) or
+    /// ``"diagonal"`` (mean-field ν = diag(1/H_ii)).
+    #[getter]
+    fn variational(&self) -> String {
+        self.variational.clone()
+    }
+
     /// Uniform convergence trace: ``(iteration, bound)`` pairs, one per EM
     /// iteration. The objective is the variational ELBO (same as
     /// :attr:`bound_history`).
@@ -6338,6 +6388,8 @@ impl STM {
             bound_history: Vec::new(),
             converged: false,
             em_iters_run: 0,
+            // Recompute ν in the same mode the fit used (laplace/diagonal).
+            diagonal: self.variational == "diagonal",
         };
         let nu = py.allow_threads(|| ctm::recompute_nu(&model_stub, &sparse));
         let mut out = Array3::<f32>::zeros((d, km1, km1));
@@ -6604,6 +6656,7 @@ impl STM {
             bound: self.bound, bound_history: self.bound_history.clone(),
             converged: self.converged,
             topic_names: self.topic_names.clone(),
+            variational: self.variational.clone(),
         })
     }
 
@@ -6620,7 +6673,7 @@ impl STM {
         let eta_cov = arr3_back(s.eta_cov).map(|c| c.mapv(|x| x as f32));
         Ok(STM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
-            init_spectral: s.init_spectral, fitted: s.fitted,
+            init_spectral: s.init_spectral, variational: s.variational, fitted: s.fitted,
             topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov,
@@ -6635,7 +6688,7 @@ impl STM {
     }
 
     fn __repr__(&self) -> String {
-        format!("STM(num_topics={}, fitted={})", self.num_topics, self.fitted)
+        format!("STM(num_topics={}, variational={:?}, fitted={})", self.num_topics, self.variational, self.fitted)
     }
 }
 

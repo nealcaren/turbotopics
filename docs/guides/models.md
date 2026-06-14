@@ -89,6 +89,11 @@ The full Structural Topic Model: CTM core plus **prevalence** and **content**
 covariates. This is the workhorse for social science; it has its own
 [guide](covariates.md).
 
+Like CTM, STM takes `variational="diagonal"` to use the mean-field E-step in
+place of the default Laplace one (`variational="laplace"`): faster at high K, but
+it drops the off-diagonal posterior covariance, so the precision of
+topic-correlation and method-of-composition standard errors is lower.
+
 ## STS
 
 The Structural Topic and Sentiment-Discourse model (Chen & Mankad 2024) extends
@@ -138,6 +143,19 @@ minibatch-sized. It is deterministic for a seed but keeps no per-iteration
 ```python
 model = topica.CTM(num_topics=50, seed=1)
 model.fit(big_corpus, iters=20, inference="svi", batch_size=512)
+```
+
+By default the per-document E-step uses the Laplace approximation
+(`variational="laplace"`), forming the full posterior covariance `ν = H⁻¹`.
+Passing `variational="diagonal"` switches to a mean-field diagonal covariance,
+`ν = diag(1/H_ii)`, which skips the per-document Cholesky and inverse for a large
+E-step speedup at high K. The cost is that the off-diagonal posterior covariance
+is dropped, so the precision of `topic_correlation` and the method-of-composition
+standard errors is lower.
+
+```python
+model = topica.CTM(num_topics=200, variational="diagonal", seed=1)
+model.fit(corpus)
 ```
 
 ## DMR

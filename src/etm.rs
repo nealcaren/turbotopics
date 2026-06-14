@@ -264,7 +264,8 @@ pub fn fit_etm<R: Rng>(
                     7,
                     1e-5,
                 );
-                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
+                // ETM uses the full Laplace covariance (diagonal=false).
+                let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy, false);
                 (di, opt, res)
             })
             .collect();

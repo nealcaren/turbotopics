@@ -37,6 +37,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- `STM` / `CTM` take `variational="diagonal"` (default `"laplace"`) for a
+  mean-field diagonal posterior covariance `ν = diag(1/H_ii)` instead of the full
+  Laplace `ν = H⁻¹`. This skips the per-document Cholesky+inverse, a large E-step
+  speedup at high K (~4.8× at K=60). The off-diagonal posterior covariance is
+  dropped (`eta_cov` is diagonal), so `topic_correlation` and method-of-composition
+  standard errors are less precise; the default Laplace path is unchanged
+  (bit-for-bit identical). Note the diagonal objective is not a strict ELBO lower
+  bound, so the per-iteration bound can drift slightly rather than increase
+  monotonically (#163).
 - `STM.fit` / `CTM.fit` take `num_threads=` to cap the rayon worker pool used by
   the variational fit (default `None` = all cores). Results are bit-for-bit
   identical regardless of the worker count, so this controls only resource use

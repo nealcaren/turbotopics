@@ -342,10 +342,14 @@ class CTM:
         sigma_shrink: float = 0.0,
         seed: int = 42,
         init: str = "spectral",
+        variational: str = "laplace",
     ) -> None:
         """num_topics >= 2. sigma_shrink in [0,1] shrinks topic covariance toward
         diagonal. init is "spectral" (default; deterministic anchor-word init,
-        matching STM's default — seed is then irrelevant) or "random" (seeded)."""
+        matching STM's default — seed is then irrelevant) or "random" (seeded).
+        variational is "laplace" (default; full posterior covariance nu = H^-1)
+        or "diagonal" (mean-field nu = diag(1/H_ii); faster at high K, drops the
+        off-diagonal posterior covariance)."""
         ...
 
     def fit(
@@ -395,6 +399,11 @@ class CTM:
     @property
     def converged(self) -> bool:
         """True if EM met em_tol; False if it hit the iters cap."""
+        ...
+    @property
+    def variational(self) -> str:
+        """Variational-covariance mode: "laplace" (full nu = H^-1) or "diagonal"
+        (mean-field nu = diag(1/H_ii))."""
         ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
@@ -478,10 +487,13 @@ class STM:
         sigma_shrink: float = 0.0,
         seed: int = 42,
         init: str = "spectral",
+        variational: str = "laplace",
     ) -> None:
         """init is "spectral" (default; deterministic anchor-word init matching
         STM's default) or "random" (seeded). With a content model the per-group
-        beta is always random."""
+        beta is always random. variational is "laplace" (default; full posterior
+        covariance nu = H^-1) or "diagonal" (mean-field nu = diag(1/H_ii); faster
+        at high K, drops the off-diagonal posterior covariance)."""
         ...
 
     def fit(
@@ -539,6 +551,11 @@ class STM:
     @property
     def converged(self) -> bool:
         """True if EM met em_tol; False if it hit the iters cap."""
+        ...
+    @property
+    def variational(self) -> str:
+        """Variational-covariance mode: "laplace" (full nu = H^-1) or "diagonal"
+        (mean-field nu = diag(1/H_ii))."""
         ...
     @property
     def fit_history(self) -> list[tuple[int, float]]:
