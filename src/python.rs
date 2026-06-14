@@ -5266,6 +5266,12 @@ pub struct CTM {
     eta_cov: Option<Array3<f32>>,  // (num_docs, K-1, K-1) variational covariances ν — stored as f32 to halve memory
     mu: Vec<f64>,                  // K-1 logistic-normal prior mean (for inference)
     sigma: Vec<f64>,               // (K-1)² logistic-normal prior covariance
+    /// Sigma from the last E-step (may differ from sigma when the final M-step
+    /// updated sigma after the last E-step). Used by `_recompute_eta_cov`.
+    sigma_estep: Vec<f64>,
+    /// Topic-word matrix β (K×V) used in the last E-step (before the final
+    /// M-step updated `beta`). Used by `_recompute_eta_cov` to reproduce ν.
+    beta_estep: Option<Array2<f64>>,
     corpus: Option<corpus::Corpus>,
     bound: f64,                    // final variational bound (ELBO)
     bound_history: Vec<f64>,       // bound after each EM iteration
@@ -5316,6 +5322,8 @@ impl CTM {
             eta_cov: None,
             mu: Vec::new(),
             sigma: Vec::new(),
+            sigma_estep: Vec::new(),
+            beta_estep: None,
             corpus: None,
             bound: f64::NAN,
             bound_history: Vec::new(),
@@ -5335,7 +5343,7 @@ impl CTM {
     /// for very large corpora; on moderate corpora the default `"batch"` EM is
     /// preferable. SVI uses the base logistic-normal model only.
     #[pyo3(signature = (data, *, iters=500, convergence_tol=1e-5, inference="batch",
-                        batch_size=256, tau=64.0, kappa=0.7, em_tol=None))]
+                        batch_size=256, tau=64.0, kappa=0.7, em_tol=None, keep_eta_cov=true))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5348,6 +5356,7 @@ impl CTM {
         tau: f64,
         kappa: f64,
         em_tol: Option<f64>,
+        keep_eta_cov: bool,
     ) -> PyResult<()> {
         let convergence_tol = if let Some(old_val) = em_tol {
             let warnings = py.import_bound("warnings")?;
@@ -5392,12 +5401,12 @@ impl CTM {
             let m = if svi {
                 ctm::fit_ctm_svi(
                     &corpus.docs, k, num_types, iters, batch_size, tau, kappa, shrink, spectral,
-                    &mut rng,
+                    keep_eta_cov, &mut rng,
                 )
             } else {
                 ctm::fit_ctm(
                     &corpus.docs, k, num_types, iters, convergence_tol, shrink, None, None, spectral,
-                    ctm::GammaPrior::Pooled, &mut rng,
+                    ctm::GammaPrior::Pooled, keep_eta_cov, &mut rng,
                 )
             };
             (m, corpus)
@@ -5424,16 +5433,56 @@ impl CTM {
             }
         }
 
-        let (eta_mean, eta_cov) = eta_posterior(&model);
+        // Always build eta_mean; only build eta_cov when keep_eta_cov=True
+        // (when keep_nu=false the nu array is empty and eta_posterior would panic).
+        let mean_rows = model.eta_mean();
+        let d_docs = mean_rows.len();
+        let dim = k - 1;
+        let mut eta_mean_arr = Array2::<f64>::zeros((d_docs, dim));
+        for di in 0..d_docs {
+            for i in 0..dim {
+                eta_mean_arr[[di, i]] = mean_rows[di][i];
+            }
+        }
+        let stored_eta_cov: Option<Array3<f32>> = if keep_eta_cov {
+            let cov_rows = model.eta_cov();
+            let mut cov = Array3::<f32>::zeros((d_docs, dim, dim));
+            for di in 0..d_docs {
+                for i in 0..dim {
+                    for j in 0..dim {
+                        cov[[di, i, j]] = cov_rows[di][i * dim + j] as f32;
+                    }
+                }
+            }
+            Some(cov)
+        } else {
+            None
+        };
+
+        // Store beta from the last E-step so _recompute_eta_cov uses the same
+        // beta that was active when nu was computed (pre-final-M-step).
+        let beta_estep_arr: Array2<f64> = {
+            let rows = &model.beta_estep;
+            let v = rows[0].len();
+            let mut arr = Array2::<f64>::zeros((k, v));
+            for (t, row) in rows.iter().enumerate() {
+                for (vi, &val) in row.iter().enumerate() {
+                    arr[[t, vi]] = val;
+                }
+            }
+            arr
+        };
 
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
-        self.eta_mean = Some(eta_mean);
-        self.eta_cov = Some(eta_cov);
+        self.eta_mean = Some(eta_mean_arr);
+        self.eta_cov = stored_eta_cov;
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
+        self.sigma_estep = model.sigma_estep.clone();
+        self.beta_estep = Some(beta_estep_arr);
         self.corpus = Some(corpus);
         self.bound = model.bound;
         self.bound_history = model.bound_history.clone();
@@ -5515,10 +5564,78 @@ impl CTM {
     /// ``(num_docs, num_topics-1, num_topics-1)``. Stored as float32 in memory
     /// to halve the dominant memory term; cast to float64 with
     /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
+    /// Raises RuntimeError if the model was fit with ``keep_eta_cov=False``; use
+    /// :meth:`_recompute_eta_cov` to regenerate on demand.
     #[getter]
     fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
-        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
+        self.eta_cov.as_ref()
+            .map(|c| c.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err(
+                "model was fit with keep_eta_cov=False; refit with keep_eta_cov=True, \
+                 or use posterior_theta_samples/_recompute_eta_cov which recompute it on demand"
+            ))
+    }
+
+    /// Recompute the per-document variational covariance ν on demand.
+    /// Use this when the model was fit with ``keep_eta_cov=False`` to save memory.
+    /// Returns the same ``(num_docs, K-1, K-1)`` float32 array as :attr:`eta_cov`.
+    fn _recompute_eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
+        self.require_fitted()?;
+        let corpus = self.corpus.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("no corpus retained; cannot recompute eta_cov")
+        })?;
+        let k = self.num_topics;
+        let km1 = k - 1;
+        let sparse: Vec<(Vec<usize>, Vec<f64>)> = corpus.docs.iter()
+            .map(|doc| crate::variational::doc_sparse(doc))
+            .collect();
+        // Build a minimal CtmModel stub using only the fields recompute_nu needs.
+        // Use beta_estep (the topic-word matrix from the last E-step, before the
+        // final M-step updated beta) so the Hessian computation is bit-identical
+        // to what was used when nu was originally stored.
+        let beta_src = self.beta_estep.as_ref().unwrap_or_else(|| self.beta.as_ref().unwrap());
+        let beta_v: Vec<Vec<f64>> = beta_src
+            .outer_iter().map(|r| r.to_vec()).collect();
+        let lambda_v: Vec<Vec<f64>> = self.eta_mean.as_ref().unwrap()
+            .outer_iter().map(|r| r.to_vec()).collect();
+        let d = lambda_v.len();
+        // ν is independent of the prior mean μ, so recompute_nu uses self.mu for
+        // every document. Fall back to self.sigma for loaded models (sigma_estep
+        // is not persisted).
+        let sigma_for_recompute = if !self.sigma_estep.is_empty() {
+            self.sigma_estep.clone()
+        } else {
+            self.sigma.clone()
+        };
+        let model_stub = ctm::CtmModel {
+            num_topics: k,
+            num_types: corpus.num_types(),
+            beta: beta_v.clone(),
+            beta_estep: beta_v,
+            mu: self.mu.clone(),
+            sigma: self.sigma.clone(),
+            sigma_estep: sigma_for_recompute,
+            lambda: lambda_v,
+            nu: Vec::new(),
+            gamma: None,
+            content_beta: None,
+            num_groups: 1,
+            bound: f64::NAN,
+            bound_history: Vec::new(),
+            converged: false,
+            em_iters_run: 0,
+        };
+        let nu = py.allow_threads(|| ctm::recompute_nu(&model_stub, &sparse));
+        let mut out = Array3::<f32>::zeros((d, km1, km1));
+        for di in 0..d {
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    out[[di, i, j]] = nu[di][i * km1 + j] as f32;
+                }
+            }
+        }
+        Ok(out.to_pyarray_bound(py))
     }
 
     /// The fitted logistic-normal prior covariance Σ over η, shape
@@ -5673,7 +5790,10 @@ impl CTM {
             topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
             eta_mean: arr2_back(s.eta_mean), eta_cov,
-            mu: s.mu, sigma: s.sigma, corpus: s.corpus,
+            mu: s.mu, sigma: s.sigma,
+            sigma_estep: Vec::new(),  // not persisted; falls back to sigma in _recompute_eta_cov
+            beta_estep: None,         // not persisted; falls back to self.beta
+            corpus: s.corpus,
             bound: s.bound, bound_history: s.bound_history, converged: s.converged,
         })
     }
@@ -5712,6 +5832,12 @@ pub struct STM {
     group_names: Vec<String>,
     mu: Vec<f64>,    // K-1 logistic-normal prior mean (covariate-free baseline)
     sigma: Vec<f64>, // (K-1)² logistic-normal prior covariance
+    /// Sigma from the last E-step; may differ from sigma when the final M-step
+    /// runs after the last E-step. Used by `_recompute_eta_cov`.
+    sigma_estep: Vec<f64>,
+    /// Topic-word matrix β (K×V) used in the last E-step (before the final
+    /// M-step updated `beta`). Used by `_recompute_eta_cov` to reproduce ν.
+    beta_estep: Option<Array2<f64>>,
     corpus: Option<corpus::Corpus>,
     bound: f64,                // final variational bound (ELBO)
     bound_history: Vec<f64>,   // bound after each EM iteration
@@ -5784,6 +5910,8 @@ impl STM {
             group_names: Vec::new(),
             mu: Vec::new(),
             sigma: Vec::new(),
+            sigma_estep: Vec::new(),
+            beta_estep: None,
             corpus: None,
             bound: f64::NAN,
             bound_history: Vec::new(),
@@ -5813,7 +5941,8 @@ impl STM {
     /// `gamma_prior="pooled"`.
     #[pyo3(signature = (data, prevalence=None, *, prevalence_names=None,
                         content=None, content_names=None, iters=500, convergence_tol=1e-5,
-                        gamma_prior="pooled", gamma_enet=1.0, em_tol=None, covariates=None))]
+                        gamma_prior="pooled", gamma_enet=1.0, em_tol=None, covariates=None,
+                        keep_eta_cov=true))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -5829,6 +5958,7 @@ impl STM {
         gamma_enet: f64,
         em_tol: Option<f64>,
         covariates: Option<&Bound<'_, PyAny>>,
+        keep_eta_cov: bool,
     ) -> PyResult<()> {
         let convergence_tol = if let Some(old_val) = em_tol {
             let warnings = py.import_bound("warnings")?;
@@ -5973,7 +6103,7 @@ impl STM {
             let cont_ref = content_groups.as_ref().map(|(g, n)| (g.as_slice(), *n));
             let m = ctm::fit_ctm(
                 &corpus.docs, k, num_types, iters, convergence_tol, shrink, prev_ref, cont_ref,
-                spectral, gprior, &mut rng,
+                spectral, gprior, keep_eta_cov, &mut rng,
             );
             (m, corpus)
         });
@@ -6009,19 +6139,58 @@ impl STM {
             arr
         });
 
-        let (eta_mean, eta_cov) = eta_posterior(&model);
+        // Build eta_mean; only build eta_cov when keep_eta_cov=True.
+        let mean_rows = model.eta_mean();
+        let d_docs = mean_rows.len();
+        let dim = k - 1;
+        let mut eta_mean_arr = Array2::<f64>::zeros((d_docs, dim));
+        for di in 0..d_docs {
+            for i in 0..dim {
+                eta_mean_arr[[di, i]] = mean_rows[di][i];
+            }
+        }
+        let stored_eta_cov: Option<Array3<f32>> = if keep_eta_cov {
+            let cov_rows = model.eta_cov();
+            let mut cov = Array3::<f32>::zeros((d_docs, dim, dim));
+            for di in 0..d_docs {
+                for i in 0..dim {
+                    for j in 0..dim {
+                        cov[[di, i, j]] = cov_rows[di][i * dim + j] as f32;
+                    }
+                }
+            }
+            Some(cov)
+        } else {
+            None
+        };
+
+        // Store beta from the last E-step so _recompute_eta_cov uses the same
+        // beta that was active when nu was computed (pre-final-M-step).
+        let beta_estep_arr: Array2<f64> = {
+            let rows = &model.beta_estep;
+            let v = rows[0].len();
+            let mut arr = Array2::<f64>::zeros((k, v));
+            for (t, row) in rows.iter().enumerate() {
+                for (vi, &val) in row.iter().enumerate() {
+                    arr[[t, vi]] = val;
+                }
+            }
+            arr
+        };
 
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
         self.corr = Some(corr);
-        self.eta_mean = Some(eta_mean);
-        self.eta_cov = Some(eta_cov);
+        self.eta_mean = Some(eta_mean_arr);
+        self.eta_cov = stored_eta_cov;
+        self.beta_estep = Some(beta_estep_arr);
         self.feature_names = feat_names;
         self.content_beta = model.content_beta;
         self.group_names = group_vocab;
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
+        self.sigma_estep = model.sigma_estep.clone();
         self.corpus = Some(corpus);
         self.bound = model.bound;
         self.bound_history = model.bound_history.clone();
@@ -6102,10 +6271,76 @@ impl STM {
     /// ``(num_docs, num_topics-1, num_topics-1)``. Stored as float32 in memory
     /// to halve the dominant memory term; cast to float64 with
     /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
+    /// Raises RuntimeError if the model was fit with ``keep_eta_cov=False``; use
+    /// :meth:`_recompute_eta_cov` to regenerate on demand.
     #[getter]
     fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
-        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
+        self.eta_cov.as_ref()
+            .map(|c| c.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err(
+                "model was fit with keep_eta_cov=False; refit with keep_eta_cov=True, \
+                 or use posterior_theta_samples/_recompute_eta_cov which recompute it on demand"
+            ))
+    }
+
+    /// Recompute the per-document variational covariance ν on demand.
+    /// Use this when the model was fit with ``keep_eta_cov=False`` to save memory.
+    /// Returns the same ``(num_docs, K-1, K-1)`` float32 array as :attr:`eta_cov`.
+    fn _recompute_eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
+        self.require_fitted()?;
+        let corpus = self.corpus.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("no corpus retained; cannot recompute eta_cov")
+        })?;
+        let k = self.num_topics;
+        let km1 = k - 1;
+        let sparse: Vec<(Vec<usize>, Vec<f64>)> = corpus.docs.iter()
+            .map(|doc| crate::variational::doc_sparse(doc))
+            .collect();
+        // Use beta_estep (the topic-word matrix from the last E-step, before the
+        // final M-step updated beta) so the Hessian computation is bit-identical
+        // to what was used when nu was originally stored.
+        let beta_src = self.beta_estep.as_ref().unwrap_or_else(|| self.beta.as_ref().unwrap());
+        let beta_v: Vec<Vec<f64>> = beta_src
+            .outer_iter().map(|r| r.to_vec()).collect();
+        let lambda_v: Vec<Vec<f64>> = self.eta_mean.as_ref().unwrap()
+            .outer_iter().map(|r| r.to_vec()).collect();
+        let d = lambda_v.len();
+        // ν is independent of the prior mean μ, so recompute_nu uses self.mu for
+        // every document.
+        let sigma_for_recompute = if !self.sigma_estep.is_empty() {
+            self.sigma_estep.clone()
+        } else {
+            self.sigma.clone()
+        };
+        let model_stub = ctm::CtmModel {
+            num_topics: k,
+            num_types: corpus.num_types(),
+            beta: beta_v.clone(),
+            beta_estep: beta_v,
+            mu: self.mu.clone(),
+            sigma: self.sigma.clone(),
+            sigma_estep: sigma_for_recompute,
+            lambda: lambda_v,
+            nu: Vec::new(),
+            gamma: None,
+            content_beta: None,
+            num_groups: 1,
+            bound: f64::NAN,
+            bound_history: Vec::new(),
+            converged: false,
+            em_iters_run: 0,
+        };
+        let nu = py.allow_threads(|| ctm::recompute_nu(&model_stub, &sparse));
+        let mut out = Array3::<f32>::zeros((d, km1, km1));
+        for di in 0..d {
+            for i in 0..km1 {
+                for j in 0..km1 {
+                    out[[di, i, j]] = nu[di][i * km1 + j] as f32;
+                }
+            }
+        }
+        Ok(out.to_pyarray_bound(py))
     }
 
     /// The fitted logistic-normal prior covariance Σ over η, shape
@@ -6384,6 +6619,8 @@ impl STM {
             gamma: arr2_back(s.gamma), feature_names: s.feature_names,
             content_beta: s.content_beta,
             mu: s.mu, sigma: s.sigma,
+            sigma_estep: Vec::new(),  // not persisted; falls back to sigma in _recompute_eta_cov
+            beta_estep: None,         // not persisted; falls back to self.beta
             group_names: s.group_names, corpus: s.corpus,
             bound: s.bound, bound_history: s.bound_history, converged: s.converged,
         })

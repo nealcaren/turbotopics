@@ -359,6 +359,7 @@ class CTM:
         tau: float = 64.0,
         kappa: float = 0.7,
         em_tol: Optional[float] = None,
+        keep_eta_cov: bool = True,
     ) -> None:
         """EM stops once the relative change in the variational bound falls below
         convergence_tol or after iters iterations, whichever comes first. Pass
@@ -372,6 +373,10 @@ class CTM:
         Monro step rho_t = (tau + t)^(-kappa). tau (>= 0) and kappa in (0.5, 1] set
         the learning-rate schedule; convergence_tol is ignored. SVI does not retain a
         per-iteration bound trace.
+
+        keep_eta_cov=False skips storing the per-document variational covariance (nu),
+        saving O(N*K^2) memory. The fit is bit-identical. Use _recompute_eta_cov() or
+        posterior_theta_samples() (which falls back automatically) to regenerate nu.
 
         em_tol is a deprecated alias for convergence_tol."""
         ...
@@ -407,7 +412,13 @@ class CTM:
     @property
     def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
         """Variational posterior covariances nu, shape (num_docs, K-1, K-1).
-        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed.
+        Raises RuntimeError if the model was fit with keep_eta_cov=False."""
+        ...
+    def _recompute_eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
+        """Recompute the per-document variational covariance nu on demand.
+        Use when the model was fit with keep_eta_cov=False. Returns the same
+        (num_docs, K-1, K-1) float32 array as eta_cov."""
         ...
     @property
     def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -486,6 +497,7 @@ class STM:
         gamma_enet: float = 1.0,
         em_tol: Optional[float] = None,
         covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
+        keep_eta_cov: bool = True,
     ) -> None:
         """Fit. prevalence (or covariates, a symmetric alias) is (num_docs, F)
         covariates driving topic proportions (mu_d = X_d gamma; intercept
@@ -503,6 +515,10 @@ class STM:
         with AIC-selected penalty, recommended for high-dimensional prevalence
         designs. gamma_enet is the elastic-net mix (1.0 = pure lasso, values in
         (0,1) add ridge; R stm's gamma.enet). Ignored when gamma_prior="pooled".
+
+        keep_eta_cov=False skips storing the per-document variational covariance (nu),
+        saving O(N*K^2) memory. The fit is bit-identical. Use _recompute_eta_cov() or
+        posterior_theta_samples() (which falls back automatically) to regenerate nu.
 
         em_tol is a deprecated alias for convergence_tol."""
         ...
@@ -538,7 +554,13 @@ class STM:
     @property
     def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
         """Variational posterior covariances nu, shape (num_docs, K-1, K-1).
-        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed.
+        Raises RuntimeError if the model was fit with keep_eta_cov=False."""
+        ...
+    def _recompute_eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
+        """Recompute the per-document variational covariance nu on demand.
+        Use when the model was fit with keep_eta_cov=False. Returns the same
+        (num_docs, K-1, K-1) float32 array as eta_cov."""
         ...
     @property
     def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:

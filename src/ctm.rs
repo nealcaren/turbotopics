@@ -239,8 +239,20 @@ pub struct CtmModel {
     pub lambda: Vec<Vec<f64>>, // per-doc variational means η (K-1)
     /// Per-document variational covariance ν = H⁻¹ ((K-1)² flattened, row-major),
     /// from the final E-step — the Laplace posterior of η used for
-    /// method-of-composition uncertainty.
+    /// method-of-composition uncertainty.  Empty when the model was fit with
+    /// `keep_nu = false`; use `recompute_nu` to regenerate on demand.
     pub nu: Vec<Vec<f64>>,
+    /// The prior covariance Σ that was used in the final E-step (the sigma that
+    /// produced the stored λ and ν values). For `fit_ctm`, this is the sigma from
+    /// the M-step of the penultimate EM iteration (one step behind `sigma`).
+    /// For `fit_ctm_svi`, this equals `sigma` (the final E-step uses the converged
+    /// globals). Used by `recompute_nu` to exactly reproduce the stored ν.
+    pub sigma_estep: Vec<f64>,
+    /// The topic-word matrix β (K×V) that was used in the final E-step (before
+    /// the final M-step updated `beta`). For `fit_ctm`, this is β from the
+    /// penultimate M-step. For `fit_ctm_svi`, this equals `beta` (no M-step
+    /// follows the final E-step). Used by `recompute_nu` to reproduce ν exactly.
+    pub beta_estep: Vec<Vec<f64>>,
     /// Prevalence coefficients γ (num_features × (K-1)), `Some` when prevalence
     /// covariates were supplied: `μ_d = X_d γ`. The last topic is the reference.
     pub gamma: Option<Vec<Vec<f64>>>,
@@ -748,6 +760,7 @@ pub fn fit_ctm<R: Rng>(
     content: Option<(&[usize], usize)>,
     init_spectral: bool,
     gamma_prior: GammaPrior,
+    keep_nu: bool,
     rng: &mut R,
 ) -> CtmModel {
     let k = num_topics;
@@ -825,7 +838,13 @@ pub fn fit_ctm<R: Rng>(
     let mut lambda = vec![vec![0.0f64; km1]; d];
     // Per-document variational covariance ν, refreshed each E-step; the final
     // iteration's values are exposed for method-of-composition uncertainty.
-    let mut nu_store = vec![vec![0.0f64; km1 * km1]; d];
+    // When keep_nu=false we don't store them (saves O(N·K²) memory) but still
+    // accumulate sigma_ss from them.
+    let mut nu_store: Vec<Vec<f64>> = if keep_nu {
+        vec![vec![0.0f64; km1 * km1]; d]
+    } else {
+        Vec::new()
+    };
 
     // Per-document prior mean (shared, or regression-based with prevalence).
     let doc_mu = |di: usize, gamma: &Option<Vec<Vec<f64>>>, mu_shared: &[f64]| -> Vec<f64> {
@@ -838,9 +857,19 @@ pub fn fit_ctm<R: Rng>(
     let mut bound_history: Vec<f64> = Vec::with_capacity(em_iters);
     let mut converged = false;
     let mut em_iters_run = 0usize;
+    // Track the sigma and beta used at the START of each E-step. After the loop,
+    // these hold the values that produced the stored λ/ν, which may differ from
+    // `sigma`/`beta` (updated by the last M-step). `recompute_nu` uses these to
+    // exactly reproduce the stored ν. (The per-document prior mean μ_d does not
+    // enter the Laplace Hessian, so ν is independent of μ and we need not track
+    // it — see `recompute_nu`.)
+    let mut sigma_estep = sigma.clone();
+    let mut beta_estep = beta.clone();
 
     for em in 0..em_iters {
         em_iters_run = em + 1;
+        sigma_estep = sigma.clone();  // capture sigma before E-step
+        beta_estep = beta.clone();    // capture beta before E-step
         let siginv = spd_inverse(&sigma, km1).unwrap_or_else(|| {
             let mut s = sigma.clone();
             make_diagonally_dominant(&mut s, km1);
@@ -917,7 +946,9 @@ pub fn fit_ctm<R: Rng>(
                     }
                 }
             }
-            nu_store[di] = res.nu.clone();
+            if keep_nu {
+                nu_store[di] = res.nu.clone();
+            }
             for i in 0..km1 {
                 lambda_sum[i] += opt[i];
                 for j in 0..km1 {
@@ -1015,8 +1046,10 @@ pub fn fit_ctm<R: Rng>(
         num_topics: k,
         num_types,
         beta,
+        beta_estep,
         mu: mu_shared,
         sigma,
+        sigma_estep,
         lambda,
         nu: nu_store,
         gamma,
@@ -1051,6 +1084,7 @@ pub fn fit_ctm_svi<R: Rng>(
     kappa: f64,
     sigma_shrink: f64,
     init_spectral: bool,
+    keep_nu: bool,
     rng: &mut R,
 ) -> CtmModel {
     let k = num_topics;
@@ -1084,7 +1118,11 @@ pub fn fit_ctm_svi<R: Rng>(
         sigma[i * km1 + i] = 1.0;
     }
     let mut lambda = vec![vec![0.0f64; km1]; d];
-    let mut nu_store = vec![vec![0.0f64; km1 * km1]; d];
+    let mut nu_store: Vec<Vec<f64>> = if keep_nu {
+        vec![vec![0.0f64; km1 * km1]; d]
+    } else {
+        Vec::new()
+    };
 
     let batch = batch_size.clamp(1, d.max(1));
     let mut t_step: usize = 0;
@@ -1144,7 +1182,9 @@ pub fn fit_ctm_svi<R: Rng>(
                     }
                 }
                 lambda[di] = opt.clone();
-                nu_store[di] = res.nu.clone();
+                if keep_nu {
+                    nu_store[di] = res.nu.clone();
+                }
                 etas.push(opt);
             }
             let bsz = chunk.len() as f64;
@@ -1210,16 +1250,25 @@ pub fn fit_ctm_svi<R: Rng>(
         );
         let res = ctm_hpb(&opt, &beta, words, counts, &mu_shared, &siginv, entropy);
         lambda[di] = opt;
-        nu_store[di] = res.nu;
+        if keep_nu {
+            nu_store[di] = res.nu;
+        }
         total_bound += res.bound;
     }
+
+    // The final full E-step uses the converged sigma and beta (no M-step follows),
+    // so sigma_estep = sigma and beta_estep = beta.
+    let sigma_estep = sigma.clone();
+    let beta_estep = beta.clone();
 
     CtmModel {
         num_topics: k,
         num_types,
         beta,
+        beta_estep,
         mu: mu_shared,
         sigma,
+        sigma_estep,
         lambda,
         nu: nu_store,
         gamma: None,
@@ -1230,6 +1279,56 @@ pub fn fit_ctm_svi<R: Rng>(
         converged: true,
         em_iters_run: epochs,
     }
+}
+
+/// Recompute the per-document variational covariance ν from the stored
+/// variational means λ and the fitted global parameters.  Used when the model
+/// was fit with `keep_nu = false` to reconstruct ν on demand (e.g. for
+/// method-of-composition uncertainty). Parallelized with rayon.
+///
+/// The Laplace covariance ν = H⁻¹ depends only on λ, β and Σ⁻¹ — the prior mean
+/// μ cancels out of the Hessian — so we evaluate at the shared `model.mu` and the
+/// E-step β/Σ (`beta_estep`/`sigma_estep`) to reproduce the stored ν exactly.
+/// `sparse` is the same `(words, counts)` representation built from the raw docs.
+pub fn recompute_nu(
+    model: &CtmModel,
+    sparse: &[(Vec<usize>, Vec<f64>)],
+) -> Vec<Vec<f64>> {
+    use rayon::prelude::*;
+    let d = sparse.len();
+    let km1 = model.num_topics - 1;
+    // Use sigma_estep (the sigma that was used in the last E-step) rather than
+    // model.sigma (which was updated by the final M-step and may differ).
+    let sig = &model.sigma_estep;
+    let siginv = crate::linalg::spd_inverse(sig, km1).unwrap_or_else(|| {
+        let mut s = sig.clone();
+        crate::linalg::make_diagonally_dominant(&mut s, km1);
+        crate::linalg::spd_inverse(&s, km1).unwrap()
+    });
+    let entropy = match crate::linalg::cholesky(sig, km1) {
+        Some(l) => crate::linalg::half_logdet(&l, km1),
+        None => 0.0,
+    };
+    (0..d)
+        .into_par_iter()
+        .map(|di| {
+            let (words, counts) = &sparse[di];
+            // Use beta_estep (the beta that was active during the last E-step)
+            // rather than model.beta (which was updated by the final M-step). The
+            // prior mean does not enter the Hessian, so model.mu is used for all
+            // documents (ν is independent of μ).
+            let res = ctm_hpb(
+                &model.lambda[di],
+                &model.beta_estep,
+                words,
+                counts,
+                &model.mu,
+                &siginv,
+                entropy,
+            );
+            res.nu
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1287,7 +1386,7 @@ mod tests {
                 doc
             })
             .collect();
-        let m = fit_ctm_svi(&docs, nb, v, 20, 32, 16.0, 0.7, 0.0, false, &mut rng);
+        let m = fit_ctm_svi(&docs, nb, v, 20, 32, 16.0, 0.7, 0.0, false, true, &mut rng);
         // Each planted block is the top of some topic.
         let mut covered = std::collections::HashSet::new();
         for t in 0..nb {
@@ -1311,7 +1410,7 @@ mod tests {
             .collect();
         let run = || {
             let mut rng = ChaCha8Rng::seed_from_u64(7);
-            fit_ctm_svi(&docs, 3, 9, 10, 16, 16.0, 0.7, 0.0, false, &mut rng).beta
+            fit_ctm_svi(&docs, 3, 9, 10, 16, 16.0, 0.7, 0.0, false, true, &mut rng).beta
         };
         let (a, b) = (run(), run());
         for (ra, rb) in a.iter().zip(b.iter()) {
@@ -1336,7 +1435,7 @@ mod tests {
                 docs.push(vec![6, 7, 8, 6, 7, 8, 6, 7, 8, 6]);
             }
         }
-        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, GammaPrior::Pooled, &mut rng);
+        let model = fit_ctm(&docs, 3, 9, 25, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng);
         let theta = model.doc_topics();
         // Sanity: θ rows sum to 1 and are valid.
         for row in &theta {
@@ -1367,7 +1466,7 @@ mod tests {
             }
         }
         // K=2 (CTM needs >=2 topics); content groups = 2.
-        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, GammaPrior::Pooled, &mut rng);
+        let model = fit_ctm(&docs, 2, 4, 30, 0.0, 0.0, None, Some((&groups, 2)), false, GammaPrior::Pooled, true, &mut rng);
         let cb = model.content_beta.expect("content_beta present");
         // cb[group][topic][word]. The dominant topic for group 0 should favour
         // {0,1}; for group 1 {2,3}. Check that for each group some topic does.
@@ -1395,7 +1494,7 @@ mod tests {
             }
         }
 
-        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, GammaPrior::Pooled, &mut rng);
+        let converged = fit_ctm(&docs, 2, 6, 100, 1e-5, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng);
         // The bound trajectory is (weakly) monotone increasing.
         let h = &converged.bound_history;
         assert!(h.len() >= 2);
@@ -1408,7 +1507,7 @@ mod tests {
 
         // em_tol = 0 disables early stopping: run the full cap.
         let mut rng2 = ChaCha8Rng::seed_from_u64(7);
-        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, GammaPrior::Pooled, &mut rng2);
+        let capped = fit_ctm(&docs, 2, 6, 8, 0.0, 0.0, None, None, true, GammaPrior::Pooled, true, &mut rng2);
         assert!(!capped.converged);
         assert_eq!(capped.em_iters_run, 8);
         assert_eq!(capped.bound_history.len(), 8);
@@ -1482,7 +1581,7 @@ mod tests {
             vec![1, 1, 2, 0, 1],
             vec![2, 2, 0, 1, 2],
         ];
-        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, &mut rng);
+        let model = fit_ctm(&docs, 3, 3, 5, 0.0, 0.0, None, None, false, GammaPrior::Pooled, true, &mut rng);
 
         let base_violations = check_conformance(&model);
         assert!(

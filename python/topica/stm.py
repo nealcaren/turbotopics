@@ -950,7 +950,10 @@ def posterior_theta_samples(model, nsims=25, seed=0):
     Returns an array of shape ``(nsims, num_docs, num_topics)``.
     """
     lam = np.asarray(model.eta_mean, dtype=np.float64)  # (D, K-1)
-    cov = np.asarray(model.eta_cov, dtype=np.float64)   # (D, K-1, K-1)
+    try:
+        cov = np.asarray(model.eta_cov, dtype=np.float64)   # (D, K-1, K-1)
+    except RuntimeError:
+        cov = np.asarray(model._recompute_eta_cov(), dtype=np.float64)
     d, km1 = lam.shape
     k = km1 + 1
     rng = np.random.default_rng(seed)

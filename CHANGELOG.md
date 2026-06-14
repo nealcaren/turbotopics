@@ -37,6 +37,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- Memory: `STM`/`CTM` `fit` take `keep_eta_cov=True`. With `keep_eta_cov=False`,
+  the per-document variational covariance is not stored, dropping the fit
+  footprint from O(N·K²) to O(N·K) (no extra per-document state is retained). The
+  fit is bit-identical either way; method-of-composition uncertainty
+  (`posterior_theta_samples` / `estimate_effect` with draws / `standard_errors`)
+  recomputes the covariance exactly on demand, and the `eta_cov` property raises
+  an actionable error when it was not kept (#160, part of #158).
 - Memory: the logistic-normal models (`STM`, `CTM`, `STS`) now store the
   per-document variational covariance `eta_cov` as float32 instead of float64,
   halving the dominant memory term (the `(num_docs, K-1, K-1)` array). The
