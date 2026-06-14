@@ -2609,6 +2609,7 @@ class KeyATM:
         iters: int = 1500,
         covariates: numpy.typing.NDArray[numpy.float64] | Sequence[Sequence[float]] | None = None,
         feature_names: list[str] | None = None,
+        times: Sequence[float] | Sequence[str] | None = None,
         timestamps: Sequence[float] | Sequence[str] | None = None,
         num_states: int = 5,
         weights: str = "information-theory",

@@ -79,12 +79,16 @@ CTOR_FIRST_EXCEPT = {
 # native primary name (features / prevalence) kept for reference-package fidelity.
 COVARIATE_MODELS = {"DMR", "GDMR", "STM", "STS", "KeyATM"}
 
+# Models that take a per-document time index. Each must accept a ``times=``
+# keyword (the canonical cross-model name). KeyATM keeps ``timestamps=`` as an
+# accepted alias.
+TEMPORAL_MODELS = {"DTM", "KeyATM"}
+
 # Tracked drift: (model, param) -> reason. These are known and intentionally not
 # yet aligned; remove an entry once the drift is fixed. The test treats them as
-# allowed so the suite stays green and this map is the worklist.
-KNOWN_DRIFT = {
-    ("KeyATM", "timestamps"): "temporal arg named 'timestamps'; DTM uses 'times' (see drift issue)",
-}
+# allowed so the suite stays green and this map is the worklist. Empty == the
+# burn-down is clear.
+KNOWN_DRIFT: dict = {}
 
 
 @pytest.mark.parametrize("name,cls", MODELS, ids=MODEL_IDS)
@@ -138,6 +142,17 @@ def test_covariate_models_accept_covariates_alias(name):
     assert "covariates" in fit_names, (
         f"{name}.fit must accept a 'covariates=' alias for the document "
         f"covariate design matrix"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(TEMPORAL_MODELS))
+def test_temporal_models_accept_times(name):
+    """Every temporal model accepts a ``times`` argument (the canonical name);
+    ``timestamps`` may remain as an alias but ``times`` must exist."""
+    cls = getattr(topica, name)
+    fit_names = {p.name for p in _fit_params(cls)}
+    assert "times" in fit_names, (
+        f"{name}.fit must accept 'times' (the canonical per-document time index)"
     )
 
 

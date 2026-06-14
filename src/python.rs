@@ -11874,14 +11874,15 @@ impl KeyATM {
     /// the learned `λ` is exposed as `feature_effects`. With no `covariates`,
     /// this is the base symmetric-α keyATM.
     ///
-    /// Pass `timestamps` (one value per document) for the **dynamic** keyATM: a
+    /// Pass `times` (one value per document) for the **dynamic** keyATM: a
     /// Chib (1998) change-point HMM lets topic prevalence shift over time across
-    /// `num_states` latent regimes. Documents are sorted by timestamp internally;
+    /// `num_states` latent regimes. Documents are sorted by time internally;
     /// the smoothed prevalence path is exposed as `time_prevalence` (aligned with
-    /// `time_labels`) and the per-segment regime as `time_state`. `timestamps`
-    /// and `covariates` are mutually exclusive.
+    /// `time_labels`) and the per-segment regime as `time_state`. `times`
+    /// and `covariates` are mutually exclusive. `timestamps=` is an accepted
+    /// alias for `times=` (the canonical cross-model name, as in DTM).
     #[pyo3(signature = (data, *, iters=1500, covariates=None, feature_names=None,
-                        timestamps=None, num_states=5, weights="information-theory",
+                        times=None, timestamps=None, num_states=5, weights="information-theory",
                         num_threads=None, optimize_interval=50, burn_in=200, prior_variance=1.0,
                         lbfgs_iters=20, progress_interval=0, prior_offset=None,
                         keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64,
@@ -11894,6 +11895,7 @@ impl KeyATM {
         iters: usize,
         covariates: Option<&Bound<'_, PyAny>>,
         feature_names: Option<Vec<String>>,
+        times: Option<&Bound<'_, PyAny>>,
         timestamps: Option<&Bound<'_, PyAny>>,
         num_states: usize,
         weights: &str,
@@ -11909,6 +11911,17 @@ impl KeyATM {
         convergence_tol: f64,
         report_interval: Option<usize>,
     ) -> PyResult<()> {
+        // `times` is the canonical cross-model name for a per-document time index
+        // (as in DTM); `timestamps` is accepted as an alias. Exactly one.
+        let timestamps: Option<&Bound<'_, PyAny>> = match (times, timestamps) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "KeyATM.fit: pass either times= or timestamps=, not both",
+                ));
+            }
+            (Some(t), None) | (None, Some(t)) => Some(t),
+            (None, None) => None,
+        };
         let progress_interval = if let Some(old_val) = report_interval {
             let warnings = py.import_bound("warnings")?;
             warnings.call_method1("warn", (

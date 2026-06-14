@@ -120,19 +120,27 @@ The principle: **share the skeleton, keep the organs.** A reader who knows DMR
 can drive GDMR; a reader who knows g-DMR finds the parameters the literature
 names.
 
-## Tracked drift
+## Resolved naming decisions
 
-Real inconsistencies in the shipped surface, kept visible so they are decided
-deliberately rather than propagated. Each is recorded against the relevant issue;
-`tests/test_naming_conventions.py` holds the machine-readable `KNOWN_DRIFT` list.
+These were the candidate inconsistencies (#155). Each is now decided, so the
+`KNOWN_DRIFT` list in `tests/test_naming_conventions.py` is empty.
 
-- **`times` (DTM) vs `timestamps` (KeyATM)** — two names for a temporal index. A
-  new temporal model should use `times`; do not introduce a third name.
-- **`check_every` breaks the `*_interval` pattern** — it is the cadence for
-  convergence checks but is not `check_interval`. Frozen, so additive only.
-- **Gaussian-prior naming** — `prior_variance` (DMR, a variance) vs `sigma`/
-  `sigma0` (GDMR, std-devs). A future convention should pick variance-or-std and
-  document the mapping; GDMR keeps the literature's std-devs for now.
-- **`labels` (LabeledLDA) vs `groups` (SAGE)** — both are a per-document
-  categorical; the split is by role (topic labels vs content groups) and is
-  probably right, but worth a deliberate confirmation.
+- **Temporal index — `times`.** Canonical across models (DTM's positional arg).
+  KeyATM now accepts `times=` and keeps `timestamps=` as an alias. A
+  `test_temporal_models_accept_times` check enforces `times` on every temporal
+  model; new temporal models must use it and not introduce a third name.
+- **`check_every` is kept** for the convergence-check cadence. The `*_interval`
+  pattern names how often we *do* something (sample, optimize, report);
+  `check_every` names how often we *test* convergence, a deliberately distinct
+  concept, so it is not renamed to `check_interval`.
+- **Gaussian-prior naming follows each model's lineage.** `DMR` uses
+  `prior_variance` (a variance, matching its MALLET-family lineage); `GDMR` uses
+  `sigma`/`sigma0` (std-devs, matching the g-DMR literature) and additionally
+  needs two scales plus `decay`, which a single `prior_variance` cannot express.
+  These are different parameterizations of different priors, so they keep
+  different names.
+- **`labels` (LabeledLDA) vs `groups` (SAGE) are different things.** LabeledLDA's
+  `labels` restrict which topics a document may use (a per-document topic set);
+  SAGE's `groups` select a content group that reshapes the topic-word
+  distribution. Different roles, so different names — the right outcome under the
+  one-concept-one-name rule.

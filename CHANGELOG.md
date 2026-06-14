@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `KeyATM.fit` accepts `times=` as the canonical per-document time index (the
+  same name DTM uses), with `timestamps=` kept as an alias. Resolves the temporal
+  naming split; `tests/test_naming_conventions.py` now enforces `times` on every
+  temporal model, and the naming-drift burn-down (#155) is clear (the other
+  candidates — `check_every`, `prior_variance` vs `sigma`/`sigma0`, `labels` vs
+  `groups` — are decided as intentionally distinct, documented in the conventions
+  guide).
 - `GDMR` gains `metadata_names` (label the continuous dimensions, via
   `fit(..., metadata_names=[...])`) and a `feature_names` property that labels the
   derived Legendre basis terms (e.g. `year^2`) aligned with `feature_effects` —
