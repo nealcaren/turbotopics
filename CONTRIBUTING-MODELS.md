@@ -51,6 +51,12 @@ checks run; the binding is plumbing.
    `parity/`. Describe the validation in the PR.
 6. **Prose is in the house register.** README, `docs/`, and docstrings use no em
    dashes, an agent-led "we", concrete claims over hedging, and no LLM filler.
+7. **Names follow the shared vocabulary.** The iteration count is `iters`, the
+   seed is `seed=42`, counts are `num_*`, a covariate design is reachable as
+   `covariates=`, and so on. See
+   [`docs/contributing/conventions.md`](docs/contributing/conventions.md); the
+   contract is enforced by `tests/test_naming_conventions.py`, which fails when a
+   new model breaks a rule.
 
 ## The build and test loop
 

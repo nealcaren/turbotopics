@@ -161,6 +161,25 @@ variational Bayes; the soft expected counts feed the λ optimizer directly) for
 higher-coherence topics when fit time is not the constraint. `SeededLDA` takes
 the same two. Use the default `"sparse"` up to a couple hundred topics.
 
+## GDMR
+
+Generalized DMR (g-DMR; Lee & Song 2020): DMR over one or more *continuous*
+metadata variables, where the covariates enter through a Legendre-polynomial
+basis and a decay prior smooths higher-order terms. The result is a topic
+distribution function (TDF) you can read off at any metadata value, so you can
+trace how each topic's prevalence varies smoothly along a continuous axis (year,
+citation impact, age).
+
+```python
+model = topica.GDMR(num_topics=20, degrees=[3], seed=1)
+model.fit(docs, year)                 # `features=`/`covariates=`/`metadata=` all accepted
+curve = model.tdf_linspace(1990, 2020, num=31)   # (31, num_topics) prevalence surface
+```
+
+`GDMR` mirrors `DMR`'s interface; `degrees`, `metadata_range`, and the prior
+scales `sigma`/`sigma0`/`decay` configure the basis, and `tdf` / `tdf_linspace`
+evaluate the fitted surface.
+
 ## DTM
 
 The Dynamic Topic Model: a fixed number of topics whose word distributions

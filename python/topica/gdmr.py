@@ -1,0 +1,891 @@
+"""Generalized DMR (g-DMR) topic model.
+
+GDMR (Lee & Song 2020) extends DMR by replacing the raw document features with
+a Legendre-polynomial tensor-product basis over one or more *continuous* metadata
+variables, plus a decay prior that progressively shrinks higher-order basis terms.
+The result is a smooth topic-distribution function (TDF) over the continuous
+metadata domain.
+
+We implement GDMR as a Python wrapper around the compiled ``topica.DMR`` engine.
+The Legendre basis is constructed in NumPy and passed to DMR as its feature
+matrix; the decay prior is realized via column scaling (the "scaling trick"), which
+maps a heterogeneous per-column Gaussian prior onto the uniform-prior DMR without
+any changes to the Rust core.
+
+Reference
+---------
+Lee, M., & Song, M. (2020). Gibbs sampling for G-DMR. (tomotopy GDMRModel.)
+"""
+
+from __future__ import annotations
+
+import pickle
+from itertools import product as _iproduct
+from math import prod as _prod
+from pathlib import Path
+from typing import Sequence
+
+import numpy as np
+
+from ._topica import DMR, Corpus
+
+
+# ---------------------------------------------------------------------------
+# Legendre-basis helpers
+# ---------------------------------------------------------------------------
+
+def _legendre_polys(t: np.ndarray, max_deg: int) -> np.ndarray:
+    """Evaluate Legendre polynomials P_0 ... P_{max_deg} at each point in t.
+
+    Parameters
+    ----------
+    t:
+        1-D array of values in [-1, 1].
+    max_deg:
+        Highest polynomial degree to include.
+
+    Returns
+    -------
+    Array of shape ``(len(t), max_deg + 1)``.
+    """
+    n = len(t)
+    P = np.empty((n, max_deg + 1), dtype=np.float64)
+    P[:, 0] = 1.0
+    if max_deg >= 1:
+        P[:, 1] = t
+    for k in range(2, max_deg + 1):
+        # Bonnet's recursion: (k)*P_k = (2k-1)*t*P_{k-1} - (k-1)*P_{k-2}
+        P[:, k] = ((2 * k - 1) * t * P[:, k - 1] - (k - 1) * P[:, k - 2]) / k
+    return P
+
+
+def _build_basis(metadata: np.ndarray, degrees: list[int],
+                 metadata_range: list[tuple[float, float]]) -> np.ndarray:
+    """Build the Legendre tensor-product basis matrix.
+
+    Each continuous dimension d is mapped from ``metadata_range[d]`` to
+    ``[-1, 1]``, clipped, then its Legendre polynomials through degree
+    ``degrees[d]`` are evaluated.  The full basis is the Cartesian product of
+    all per-dimension polynomial vectors, giving
+    ``prod(deg + 1 for deg in degrees)`` columns.
+
+    Parameters
+    ----------
+    metadata:
+        Array of shape ``(num_docs, D)``.
+    degrees:
+        Per-dimension maximum Legendre degree.
+    metadata_range:
+        Per-dimension ``(lo, hi)`` bounds used for the [-1, 1] mapping.
+
+    Returns
+    -------
+    Array of shape ``(num_docs, num_basis)`` with **no** intercept prepended
+    (the all-constant column is the order-0 Legendre product and is already
+    present).
+    """
+    num_docs, D = metadata.shape
+    # Collect per-dimension polynomial matrices
+    per_dim: list[np.ndarray] = []
+    for d in range(D):
+        lo, hi = metadata_range[d]
+        span = hi - lo if hi != lo else 1.0
+        t = np.clip(2.0 * (metadata[:, d] - lo) / span - 1.0, -1.0, 1.0)
+        per_dim.append(_legendre_polys(t, degrees[d]))  # (num_docs, deg+1)
+
+    # Tensor product over dimensions
+    # For D=1 this is just per_dim[0].
+    # For D>1 we iterate over all multi-index tuples.
+    degree_ranges = [range(deg + 1) for deg in degrees]
+    multi_indices = list(_iproduct(*degree_ranges))  # all (p0, p1, ...) combos
+    num_basis = len(multi_indices)
+    basis = np.empty((num_docs, num_basis), dtype=np.float64)
+    for col, idx in enumerate(multi_indices):
+        col_vals = np.ones(num_docs, dtype=np.float64)
+        for d, p in enumerate(idx):
+            col_vals *= per_dim[d][:, p]
+        basis[:, col] = col_vals
+    return basis
+
+
+def _basis_order(degrees: list[int]) -> np.ndarray:
+    """Return the polynomial order (sum of per-dim degrees) for each basis column."""
+    degree_ranges = [range(deg + 1) for deg in degrees]
+    return np.array([sum(idx) for idx in _iproduct(*degree_ranges)], dtype=np.float64)
+
+
+def _column_scales(degrees: list[int], sigma: float, sigma0: float,
+                   decay: float) -> np.ndarray:
+    """Compute the column scaling factors c_j = sqrt(v_j / v0).
+
+    The base variance is v0 = sigma0**2 (the uniform-prior DMR will use
+    ``prior_variance=v0``).  Each basis column's true target variance is:
+
+    - Order 0: sigma**2
+    - Order s >= 1: sigma0**2 if decay == 0, else sigma0**2 * decay**s
+
+    The scaling maps this onto the uniform prior:
+        true prior N(0, v_j)  =>  DMR prior N(0, v0) on b_j = lambda_j / c_j
+
+    So c_j = sqrt(v_j / v0).
+    """
+    orders = _basis_order(degrees)
+    v0 = sigma0 ** 2
+    scales = np.empty(len(orders), dtype=np.float64)
+    for j, s in enumerate(orders):
+        if s == 0:
+            v_j = sigma ** 2
+        elif decay <= 0.0:
+            v_j = v0
+        else:
+            v_j = v0 * (decay ** s)
+        scales[j] = np.sqrt(v_j / v0)
+    return scales
+
+
+def _resolve_covariates(features, covariates, metadata, *, where, required):
+    """Resolve the covariate argument from its three accepted spellings.
+
+    GDMR follows DMR's vocabulary: ``features`` is canonical, ``covariates`` is
+    a no-deprecation alias, and ``metadata`` is an alias for users porting from
+    tomotopy's ``GDMRModel``. Exactly one may be supplied.
+    """
+    supplied = [(n, v) for n, v in
+                (("features", features), ("covariates", covariates),
+                 ("metadata", metadata)) if v is not None]
+    if len(supplied) > 1:
+        names = ", ".join(n for n, _ in supplied)
+        raise ValueError(
+            f"{where}: pass only one of features=/covariates=/metadata= "
+            f"(got {names})"
+        )
+    if not supplied:
+        if required:
+            raise ValueError(
+                f"{where}: continuous covariates are required "
+                f"(pass features=, or its aliases covariates=/metadata=)"
+            )
+        return None
+    return supplied[0][1]
+
+
+# ---------------------------------------------------------------------------
+# GDMR class
+# ---------------------------------------------------------------------------
+
+class GDMR:
+    """Generalized DMR topic model (g-DMR; Lee & Song 2020).
+
+    GDMR replaces the raw document covariates of DMR with a Legendre
+    tensor-product polynomial basis over one or more continuous metadata
+    variables.  A decay prior progressively shrinks the higher-order basis
+    terms, producing a smooth topic-distribution function (TDF) over the
+    continuous metadata domain.
+
+    We implement GDMR as a thin wrapper around the compiled ``topica.DMR``
+    engine.  The Legendre basis is realized in NumPy and passed to DMR as its
+    feature matrix; the decay prior is realized via column scaling (the
+    "scaling trick"), so no changes to the Rust core are required.
+
+    Parameters
+    ----------
+    num_topics:
+        Number of topics K.
+    degrees:
+        Per continuous-metadata-dimension maximum Legendre degree.  Length
+        must equal the number of metadata dimensions D.  ``degrees=[3]``
+        gives a cubic TDF over a single continuous covariate.
+    beta:
+        Dirichlet word smoothing parameter (passed through to DMR).
+    optimize_interval:
+        How often (in Gibbs sweeps) to run the L-BFGS lambda-optimization.
+    burn_in:
+        Sweeps before optimization begins.
+    seed:
+        RNG seed.
+    sigma:
+        Prior std on the order-0 (intercept) basis term.
+    sigma0:
+        Prior std on order >= 1 basis terms when ``decay == 0``.
+    decay:
+        Positive values shrink higher-order basis terms: variance for order-s
+        term is ``sigma0**2 * decay**s``.  Set to 0.0 to disable.
+    metadata_range:
+        Per-dimension ``(lo, hi)`` bounds for the [-1, 1] mapping.  If None,
+        we infer from the training data at fit time.
+    lbfgs_iters:
+        L-BFGS step cap per optimization round.
+    sampler:
+        Gibbs sampler variant: ``"sparse"`` (default), ``"warp"``, or
+        ``"cvb0"``.  See ``topica.DMR`` for details.
+    """
+
+    def __init__(
+        self,
+        num_topics: int,
+        *,
+        degrees: list[int],
+        beta: float = 0.01,
+        optimize_interval: int = 50,
+        burn_in: int = 200,
+        seed: int = 42,
+        sigma: float = 1.0,
+        sigma0: float = 3.0,
+        decay: float = 0.0,
+        metadata_range: list[tuple[float, float]] | None = None,
+        lbfgs_iters: int = 20,
+        sampler: str = "sparse",
+    ) -> None:
+        if num_topics < 1:
+            raise ValueError("num_topics must be >= 1")
+        if beta <= 0:
+            raise ValueError("beta must be > 0")
+        if not degrees:
+            raise ValueError("degrees must be a non-empty list of ints")
+        if any(d < 0 for d in degrees):
+            raise ValueError("each element of degrees must be >= 0")
+        if sigma <= 0:
+            raise ValueError("sigma must be > 0")
+        if sigma0 <= 0:
+            raise ValueError("sigma0 must be > 0")
+        if decay < 0:
+            raise ValueError("decay must be >= 0")
+
+        self._num_topics = num_topics
+        self._degrees = list(degrees)
+        self._beta = beta
+        self._optimize_interval = optimize_interval
+        self._burn_in = burn_in
+        self._seed = seed
+        self._sigma = sigma
+        self._sigma0 = sigma0
+        self._decay = decay
+        self._metadata_range: list[tuple[float, float]] | None = (
+            [tuple(r) for r in metadata_range] if metadata_range is not None else None
+        )
+        self._lbfgs_iters = lbfgs_iters
+        self._sampler = sampler
+
+        # column scales are computed once metadata_range is known (at fit)
+        self._col_scales: np.ndarray | None = None
+        # the inner DMR engine
+        self._dmr: DMR | None = None
+        self._fitted = False
+
+    # ------------------------------------------------------------------
+    # fit
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        data: "Corpus | Sequence[Sequence[str]]",
+        features=None,
+        *,
+        iters: int = 1000,
+        num_samples: int = 5,
+        sample_interval: int = 25,
+        keep_theta_draws: bool = True,
+        convergence_tol: float = 0.0,
+        check_every: int = 10,
+        covariates=None,
+        metadata=None,
+    ) -> None:
+        """Fit GDMR by collapsed Gibbs with the Legendre-basis DMR prior.
+
+        We construct the Legendre tensor-product basis from the continuous
+        covariates, apply column scaling to realize the decay prior, then hand
+        off to the compiled ``topica.DMR`` engine for sampling and L-BFGS
+        optimization. After fitting we recover the true lambda coefficients
+        (``feature_effects``) by undoing the column scaling.
+
+        Parameters
+        ----------
+        data:
+            A ``topica.Corpus`` or a list of token lists.
+        features:
+            Array-like of shape ``(num_docs, D)`` of continuous covariate values
+            where D equals ``len(degrees)``. Values outside ``metadata_range``
+            are clipped to [-1, 1] in Legendre space. As in :class:`DMR`,
+            ``covariates=`` is an accepted alias; ``metadata=`` is also accepted
+            for users porting from tomotopy's ``GDMRModel``. Pass exactly one.
+        iters:
+            Total Gibbs sweeps.
+        num_samples:
+            Number of topic-word phi snapshots to average.
+        sample_interval:
+            Sweeps between phi snapshots.
+        keep_theta_draws:
+            Whether to retain thinned MCMC theta draws.
+        convergence_tol:
+            Relative-change early-stop threshold (0 disables).
+        check_every:
+            Sweeps between convergence checks.
+        covariates:
+            Alias for ``features`` (topica's DMR vocabulary).
+        metadata:
+            Alias for ``features`` (tomotopy ``GDMRModel`` vocabulary).
+        """
+        features = _resolve_covariates(
+            features, covariates, metadata, where="GDMR.fit", required=True
+        )
+        meta = np.asarray(features, dtype=np.float64)
+        if meta.ndim == 1:
+            meta = meta[:, np.newaxis]
+        if meta.ndim != 2:
+            raise ValueError("covariates must be 1-D (single dim) or 2-D (num_docs, D)")
+        if not np.all(np.isfinite(meta)):
+            raise ValueError("covariates contain non-finite values (NaN or inf)")
+        num_docs, D = meta.shape
+        if D != len(self._degrees):
+            raise ValueError(
+                f"covariates have {D} dimensions but degrees has {len(self._degrees)}"
+            )
+
+        # Infer metadata_range from data if not provided
+        if self._metadata_range is None:
+            self._metadata_range = [
+                (float(meta[:, d].min()), float(meta[:, d].max()))
+                for d in range(D)
+            ]
+        else:
+            if len(self._metadata_range) != D:
+                raise ValueError(
+                    f"metadata_range has {len(self._metadata_range)} entries but "
+                    f"metadata has {D} dimensions"
+                )
+
+        # Build Legendre basis: shape (num_docs, num_basis)
+        # Note: no intercept prepended — the order-0 Legendre product IS the intercept.
+        # DMR.fit prepends its own intercept column, so we must NOT include the
+        # order-0 constant column ourselves; instead we pass the remaining basis
+        # columns and let DMR prepend its intercept.
+        #
+        # But: the contract defines num_basis = prod(deg+1), which INCLUDES the
+        # order-0 column. DMR also prepends an intercept. We therefore build the
+        # full Legendre basis (all columns including the constant), then pass
+        # the columns EXCLUDING the order-0 constant to DMR.fit so that after
+        # DMR prepends its own intercept the total columns match the full Legendre
+        # basis (intercept at index 0, then the order >= 1 Legendre columns).
+        full_basis = _build_basis(meta, self._degrees, self._metadata_range)
+        # full_basis[:, 0] is the all-ones intercept (order-0 Legendre product)
+        # DMR will prepend its own intercept, so we pass only the order >= 1 columns.
+        non_intercept_basis = full_basis[:, 1:]  # (num_docs, num_basis - 1)
+
+        # Column scales for ALL basis columns (including the order-0 term).
+        all_col_scales = _column_scales(self._degrees, self._sigma, self._sigma0, self._decay)
+        # Store for recovery later: same ordering as full_basis columns.
+        self._col_scales = all_col_scales
+
+        # For DMR, column 0 will be its own intercept (maps to our order-0 Legendre
+        # column); columns 1..num_basis-1 are the non-intercept Legendre columns.
+        # Scale the non-intercept columns now.
+        # Scale for the DMR intercept column comes from all_col_scales[0].
+        # We realize scale[0] via prior_variance adjustment: the DMR intercept has
+        # prior N(0, prior_variance=v0) uniformly. To give it variance v_0 = sigma**2
+        # while giving order>=1 columns variance v0 = sigma0**2, we need separate
+        # treatment for the intercept.
+        #
+        # Easier approach: fold the intercept scaling into the data.
+        # DMR prepends a column of ones to the feature matrix. That column will receive
+        # the uniform DMR prior. To make it effectively have prior variance sigma**2
+        # instead of sigma0**2, we can replace that ones-column with ones*c_0
+        # (where c_0 = sigma/sigma0). But DMR always prepends ones — we cannot
+        # override that column from outside.
+        #
+        # Resolution: set prior_variance = sigma**2 (the intercept scale), and for the
+        # non-intercept columns scale by c_j = sqrt(v_j / sigma**2). This makes the
+        # intercept column correct and all other columns correct relative to sigma**2.
+        #
+        # per-column target variances:
+        #   order 0  (intercept): sigma^2
+        #   order s>=1: sigma0^2 * decay^s  (or sigma0^2 when decay=0)
+        # DMR prior: N(0, prior_variance) uniformly — we set prior_variance = sigma^2.
+        # So column-scale for column j (order s_j) is:
+        #   c_j = sqrt(v_j / sigma^2)
+        #   => order 0: c_0 = 1  (no scaling needed on the DMR intercept column)
+        #   => order s>0: c_j = sigma0/sigma * sqrt(decay^s)  (or sigma0/sigma when decay=0)
+
+        v_intercept = self._sigma ** 2  # prior_variance to pass to DMR
+        # Recompute non-intercept column scales relative to v_intercept
+        orders = _basis_order(self._degrees)
+        v0_ref = v_intercept  # reference variance = sigma^2
+        v0_order1 = self._sigma0 ** 2
+        non_intercept_scales = np.empty(len(orders) - 1, dtype=np.float64)
+        for j, s in enumerate(orders[1:]):  # orders[1:] are orders of non-intercept cols
+            if self._decay <= 0.0:
+                v_j = v0_order1
+            else:
+                v_j = v0_order1 * (self._decay ** s)
+            non_intercept_scales[j] = np.sqrt(v_j / v0_ref)
+
+        # Apply scaling to feature columns
+        scaled_features = non_intercept_basis * non_intercept_scales[np.newaxis, :]
+
+        # Build feature names for DMR
+        degree_ranges = [range(deg + 1) for deg in self._degrees]
+        multi_indices = list(_iproduct(*degree_ranges))
+        # Skip the first multi-index (the all-zeros one = intercept) since DMR handles it
+        feature_names = [
+            "L" + "_".join(str(p) for p in idx) for idx in multi_indices[1:]
+        ]
+
+        # Build inner DMR
+        self._dmr = DMR(
+            self._num_topics,
+            beta=self._beta,
+            optimize_interval=self._optimize_interval,
+            burn_in=self._burn_in,
+            seed=self._seed,
+            prior_variance=v_intercept,
+            lbfgs_iters=self._lbfgs_iters,
+            sampler=self._sampler,
+        )
+
+        self._dmr.fit(
+            data,
+            scaled_features,
+            feature_names=feature_names,
+            iters=iters,
+            num_samples=num_samples,
+            sample_interval=sample_interval,
+            keep_theta_draws=keep_theta_draws,
+            convergence_tol=convergence_tol,
+            check_every=check_every,
+        )
+
+        # Store scales for coefficient recovery (intercept + non-intercept)
+        # full_lambda_j (true) = dmr_lambda_j * c_j
+        # DMR column 0 (intercept): c = 1 (since prior_variance = sigma^2 and we set
+        # that to match order-0)
+        # DMR columns 1..N: c = non_intercept_scales[j-1]
+        self._recover_scales = np.concatenate([[1.0], non_intercept_scales])
+        self._fitted = True
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _require_fitted(self):
+        if not self._fitted or self._dmr is None:
+            raise RuntimeError("model is not fitted yet; call fit() first")
+
+    def _get_true_feature_effects(self) -> np.ndarray:
+        """Return true lambda (num_topics, num_basis) after undoing column scaling."""
+        # DMR feature_effects has shape (num_topics, num_basis)
+        # where column 0 is the DMR-prepended intercept, columns 1.. are our
+        # non-intercept Legendre columns.
+        dmr_fe = self._dmr.feature_effects  # (num_topics, num_basis)
+        return dmr_fe * self._recover_scales[np.newaxis, :]
+
+    def _build_basis_for_eval(self, metadata: np.ndarray) -> np.ndarray:
+        """Build Legendre basis for evaluation, shape (P, num_basis)."""
+        self._require_fitted()
+        meta = np.asarray(metadata, dtype=np.float64)
+        single_point = meta.ndim == 1
+        if single_point:
+            meta = meta[np.newaxis, :]
+        if meta.ndim != 2:
+            raise ValueError("metadata must be 1-D (single point) or 2-D (P, D)")
+        if meta.shape[1] != len(self._degrees):
+            raise ValueError(
+                f"metadata has {meta.shape[1]} dimensions but model has "
+                f"{len(self._degrees)}"
+            )
+        basis = _build_basis(meta, self._degrees, self._metadata_range)
+        return basis, single_point
+
+    # ------------------------------------------------------------------
+    # tdf
+    # ------------------------------------------------------------------
+
+    def tdf(self, metadata, *, normalize: bool = True) -> np.ndarray:
+        """Topic-distribution function at one or more metadata points.
+
+        Evaluates the fitted surface at ``metadata`` and returns topic
+        prevalences implied by the Legendre-basis DMR prior.
+
+        Parameters
+        ----------
+        metadata:
+            Array-like of shape ``(D,)`` for a single point or ``(P, D)`` for
+            P points, in original metadata units (mapped internally via
+            ``metadata_range``).
+        normalize:
+            If True (default), normalize each row so topic prevalences sum to 1.
+            If False, return the raw alpha = exp(lambda @ phi(metadata)).
+
+        Returns
+        -------
+        Array of shape ``(num_topics,)`` for a single point, or
+        ``(P, num_topics)`` for P points.
+        """
+        self._require_fitted()
+        basis, single_point = self._build_basis_for_eval(metadata)
+        fe = self._get_true_feature_effects()  # (K, num_basis)
+        logalpha = basis @ fe.T  # (P, K)
+        alpha = np.exp(logalpha)
+        if normalize:
+            alpha = alpha / alpha.sum(axis=1, keepdims=True)
+        if single_point:
+            return alpha[0]
+        return alpha
+
+    # ------------------------------------------------------------------
+    # tdf_linspace
+    # ------------------------------------------------------------------
+
+    def tdf_linspace(
+        self,
+        start,
+        stop,
+        num: int,
+        *,
+        endpoint: bool = True,
+        normalize: bool = True,
+    ) -> np.ndarray:
+        """Evaluate the TDF on a regular grid over the metadata domain.
+
+        For D == 1: ``start`` and ``stop`` are scalars (or length-1 arrays).
+        Returns an array of shape ``(num, num_topics)``.
+
+        For D > 1: ``start`` and ``stop`` have length D.  Returns a tensor
+        grid of shape ``(num, ..., num, num_topics)`` with D leading axes of
+        size ``num``.  The 1-D case is the primary tested path.
+
+        Parameters
+        ----------
+        start:
+            Lower bound of the evaluation range.  Scalar for D == 1, or
+            length-D for D > 1.
+        stop:
+            Upper bound of the evaluation range.
+        num:
+            Number of grid points per dimension.
+        endpoint:
+            Include ``stop`` in the grid (default True, matching np.linspace).
+        normalize:
+            See :meth:`tdf`.
+
+        Returns
+        -------
+        Array of shape ``(num, num_topics)`` for D == 1, or
+        ``(num, ..., num, num_topics)`` for D > 1.
+        """
+        self._require_fitted()
+        D = len(self._degrees)
+        start_arr = np.atleast_1d(np.asarray(start, dtype=np.float64))
+        stop_arr = np.atleast_1d(np.asarray(stop, dtype=np.float64))
+        if start_arr.shape != (D,) or stop_arr.shape != (D,):
+            raise ValueError(
+                f"start and stop must be scalars (D=1) or length-{D} arrays (D={D})"
+            )
+
+        if D == 1:
+            pts = np.linspace(start_arr[0], stop_arr[0], num, endpoint=endpoint)
+            meta_grid = pts[:, np.newaxis]  # (num, 1)
+            result = self.tdf(meta_grid, normalize=normalize)  # (num, K)
+            return result
+        else:
+            # Build D-dimensional meshgrid
+            axes = [
+                np.linspace(start_arr[d], stop_arr[d], num, endpoint=endpoint)
+                for d in range(D)
+            ]
+            grids = np.meshgrid(*axes, indexing="ij")  # each (num, ..., num)
+            flat_pts = np.stack([g.ravel() for g in grids], axis=1)  # (num^D, D)
+            flat_result = self.tdf(flat_pts, normalize=normalize)  # (num^D, K)
+            K = flat_result.shape[1]
+            new_shape = [num] * D + [K]
+            return flat_result.reshape(new_shape)
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def topic_word(self) -> np.ndarray:
+        """Topic-word matrix phi, shape ``(num_topics, num_words)``, rows sum to 1."""
+        self._require_fitted()
+        return self._dmr.topic_word
+
+    @property
+    def doc_topic(self) -> np.ndarray:
+        """Document-topic matrix theta, shape ``(num_docs, num_topics)``, rows sum to 1."""
+        self._require_fitted()
+        return self._dmr.doc_topic
+
+    @property
+    def alpha(self) -> np.ndarray:
+        """Baseline topic prevalence at the basis origin, shape ``(num_topics,)``.
+
+        Equals ``exp(lambda_intercept)``, the per-topic prior when all
+        Legendre basis columns are zero (i.e., at the metadata-range midpoint
+        mapped to Legendre 0).
+        """
+        self._require_fitted()
+        fe = self._get_true_feature_effects()
+        return np.exp(fe[:, 0])
+
+    @property
+    def feature_effects(self) -> np.ndarray:
+        """Learned lambda over the Legendre basis, shape ``(num_topics, num_basis)``.
+
+        Column 0 is the intercept (order-0 Legendre product).  Subsequent
+        columns correspond to the remaining basis terms in the tensor-product
+        enumeration order.
+        """
+        self._require_fitted()
+        return self._get_true_feature_effects()
+
+    @property
+    def degrees(self) -> list[int]:
+        """Maximum Legendre degree per metadata dimension (read-only)."""
+        return list(self._degrees)
+
+    @property
+    def metadata_range(self) -> list[tuple[float, float]]:
+        """Per-dimension ``(lo, hi)`` bounds used for the [-1, 1] mapping."""
+        self._require_fitted()
+        return list(self._metadata_range)
+
+    @property
+    def sigma(self) -> float:
+        """Prior std on the order-0 (intercept) basis term."""
+        return self._sigma
+
+    @property
+    def sigma0(self) -> float:
+        """Prior std on order >= 1 basis terms (before decay scaling)."""
+        return self._sigma0
+
+    @property
+    def decay(self) -> float:
+        """Decay exponent for higher-order prior shrinkage (0 disables decay)."""
+        return self._decay
+
+    @property
+    def vocabulary(self) -> list[str]:
+        """Word vocabulary in corpus token-ID order."""
+        self._require_fitted()
+        return self._dmr.vocabulary
+
+    @property
+    def doc_names(self) -> list[str]:
+        """Per-document identifiers in corpus order."""
+        self._require_fitted()
+        return self._dmr.doc_names
+
+    @property
+    def num_topics(self) -> int:
+        """Number of topics K."""
+        return self._num_topics
+
+    @property
+    def topic_names(self) -> list[str]:
+        """Per-topic labels. Defaults to ``["topic_0", ...]`` after fit."""
+        self._require_fitted()
+        return self._dmr.topic_names
+
+    @topic_names.setter
+    def topic_names(self, value: list[str]) -> None:
+        self._require_fitted()
+        self._dmr.topic_names = value
+
+    @property
+    def doc_lengths(self) -> list[int]:
+        """Number of tokens in each training document."""
+        self._require_fitted()
+        return self._dmr.doc_lengths
+
+    @property
+    def theta_draws(self) -> "np.ndarray | None":
+        """Thinned MCMC theta draws ``(num_draws, num_docs, num_topics)`` or None."""
+        self._require_fitted()
+        return self._dmr.theta_draws
+
+    @property
+    def fit_history(self) -> list[tuple[int, float]]:
+        """Per-iteration ``(iteration, objective)`` trace."""
+        self._require_fitted()
+        return self._dmr.fit_history
+
+    @property
+    def converged(self) -> bool:
+        """True if fit early-stopped due to convergence."""
+        self._require_fitted()
+        return self._dmr.converged
+
+    # ------------------------------------------------------------------
+    # Methods
+    # ------------------------------------------------------------------
+
+    def top_words(self, n: int = 10, *, topic=None):
+        """Top n words per topic as ``(word, probability)`` pairs.
+
+        Parameters
+        ----------
+        n:
+            Number of top words to return per topic.
+        topic:
+            If given, return only the list for that topic index.
+            If None (default), return a list of lists (one per topic).
+        """
+        self._require_fitted()
+        return self._dmr.top_words(n, topic=topic)
+
+    def coherence(self, n: int = 10) -> np.ndarray:
+        """UMass topic coherence per topic, shape ``(num_topics,)``."""
+        self._require_fitted()
+        return self._dmr.coherence(n)
+
+    def transform(
+        self,
+        data,
+        features=None,
+        *,
+        iters: int = 100,
+        burn_in: int = 10,
+        num_samples: int = 10,
+        sample_interval: int = 5,
+        seed=None,
+        covariates=None,
+        metadata=None,
+    ) -> np.ndarray:
+        """Infer document-topic theta for new documents.
+
+        Parameters
+        ----------
+        data:
+            A ``topica.Corpus`` or list of token lists.
+        features:
+            Optional continuous covariate array-like of shape ``(num_new_docs, D)``.
+            If provided, the Legendre-basis DMR prior is used for each document;
+            if None, the intercept-only baseline is used. ``covariates=`` and
+            ``metadata=`` are accepted aliases (see :meth:`fit`).
+        iters:
+            Inference sweeps.
+        burn_in:
+            Sweeps before sampling begins.
+        num_samples:
+            Number of theta snapshots to average.
+        sample_interval:
+            Sweeps between snapshots.
+        seed:
+            Optional RNG seed override.
+        covariates:
+            Alias for ``features`` (topica's DMR vocabulary).
+        metadata:
+            Alias for ``features`` (tomotopy ``GDMRModel`` vocabulary).
+
+        Returns
+        -------
+        Array of shape ``(num_new_docs, num_topics)``.
+        """
+        self._require_fitted()
+        features = _resolve_covariates(
+            features, covariates, metadata, where="GDMR.transform", required=False
+        )
+        if features is not None:
+            meta = np.asarray(features, dtype=np.float64)
+            if meta.ndim == 1:
+                meta = meta[:, np.newaxis]
+            # Build Legendre basis for new docs
+            full_basis = _build_basis(meta, self._degrees, self._metadata_range)
+            non_intercept_basis = full_basis[:, 1:]
+            # Apply same non-intercept scales
+            non_intercept_scales = self._recover_scales[1:]
+            scaled_features = non_intercept_basis * non_intercept_scales[np.newaxis, :]
+            return self._dmr.transform(
+                data,
+                scaled_features,
+                iters=iters,
+                burn_in=burn_in,
+                num_samples=num_samples,
+                sample_interval=sample_interval,
+                seed=seed,
+            )
+        else:
+            return self._dmr.transform(
+                data,
+                iters=iters,
+                burn_in=burn_in,
+                num_samples=num_samples,
+                sample_interval=sample_interval,
+                seed=seed,
+            )
+
+    def save(self, path: str) -> None:
+        """Persist the fitted GDMR model to ``path``.
+
+        We save the GDMR wrapper state (degrees, metadata_range, sigma, sigma0,
+        decay, recover_scales, constructor parameters) alongside the inner DMR
+        model, using Python pickle for the wrapper envelope and the DMR native
+        save format.  Reload with :meth:`GDMR.load`.
+        """
+        self._require_fitted()
+        p = Path(path)
+        dmr_path = str(p) + "._inner_dmr"
+        self._dmr.save(dmr_path)
+        state = {
+            "version": 1,
+            "num_topics": self._num_topics,
+            "degrees": self._degrees,
+            "beta": self._beta,
+            "optimize_interval": self._optimize_interval,
+            "burn_in": self._burn_in,
+            "seed": self._seed,
+            "sigma": self._sigma,
+            "sigma0": self._sigma0,
+            "decay": self._decay,
+            "metadata_range": self._metadata_range,
+            "lbfgs_iters": self._lbfgs_iters,
+            "sampler": self._sampler,
+            "recover_scales": self._recover_scales,
+            "col_scales": self._col_scales,
+            "fitted": self._fitted,
+            "dmr_path": dmr_path,
+        }
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+    @staticmethod
+    def load(path: str) -> "GDMR":
+        """Load a GDMR model previously written by :meth:`save`.
+
+        Parameters
+        ----------
+        path:
+            File path passed to :meth:`save`.
+
+        Returns
+        -------
+        A fitted ``GDMR`` instance.
+        """
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        m = GDMR(
+            state["num_topics"],
+            degrees=state["degrees"],
+            beta=state["beta"],
+            optimize_interval=state["optimize_interval"],
+            burn_in=state["burn_in"],
+            seed=state["seed"],
+            sigma=state["sigma"],
+            sigma0=state["sigma0"],
+            decay=state["decay"],
+            metadata_range=state["metadata_range"],
+            lbfgs_iters=state["lbfgs_iters"],
+            sampler=state["sampler"],
+        )
+        m._dmr = DMR.load(state["dmr_path"])
+        m._recover_scales = state["recover_scales"]
+        m._col_scales = state["col_scales"]
+        m._fitted = state["fitted"]
+        return m
+
+    def __repr__(self) -> str:
+        return (
+            f"GDMR(num_topics={self._num_topics}, "
+            f"degrees={self._degrees}, "
+            f"fitted={self._fitted})"
+        )

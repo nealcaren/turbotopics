@@ -108,6 +108,7 @@ def summary(model, topn=8):
     return "\n".join(lines)
 
 
+from .gdmr import GDMR  # noqa: E402  (pure-Python Legendre-basis DMR wrapper)
 from . import stm  # noqa: E402  (stm imports names defined above)
 from .stm import align_corpus, spline, interaction  # noqa: E402  (general covariate-design helpers)
 from . import keyatm  # noqa: E402  (keyATM-specific workflow helpers)
@@ -211,6 +212,7 @@ from .formulas import design_matrix  # noqa: E402
 __all__ = [
     "LDA",
     "DMR",
+    "GDMR",
     "LabeledLDA",
     "SAGE",
     "CTM",
