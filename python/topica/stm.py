@@ -306,6 +306,16 @@ def estimate_effect(
       bounds where OLS can wander outside them (Papke & Wooldridge). Non-identity
       links report heteroskedasticity- or cluster-robust standard errors.
 
+    Specifying the design. Give the covariates one of two ways: a prebuilt design
+    matrix as ``X`` (with ``feature_names``), or an R-style ``formula`` together
+    with a ``data`` frame, which builds ``X`` for you via
+    :func:`topica.design_matrix`. **Use the same design you fit the model with.**
+    The effects regression is on the covariates you pass here, not on whatever
+    went into ``STM.fit``; if they differ, the coefficients answer a different
+    question than the model. The reliable pattern is to build the design once and
+    pass the identical ``X`` (or the identical ``formula`` + ``data``) to both
+    ``fit`` and ``estimate_effect``.
+
     Parameters
     ----------
     doc_topic : array or fitted model
@@ -320,6 +330,14 @@ def estimate_effect(
         ``add_intercept`` is True.
     feature_names : list[str], optional
         Column names for ``X``. Defaults to ``feature_0 ...``.
+    data : pandas.DataFrame, optional
+        Used with ``formula`` to build the design matrix; ignored when ``X`` is
+        given. A string ``cluster`` is read as a column of this frame.
+    formula : str, optional
+        R-style formula (e.g. ``"~ party + spline(year, df=3)"``) evaluated
+        against ``data`` to build ``X`` and ``feature_names``, via
+        :func:`topica.design_matrix` (needs the optional ``topica[formula]``
+        extra). Pass either ``X`` or ``formula`` + ``data``, not both.
     topics : sequence[int], optional
         Restrict to these topics. Defaults to all.
     ci : float

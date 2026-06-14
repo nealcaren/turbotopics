@@ -98,6 +98,18 @@ Build non-linear and interaction terms with `topica.spline` and
 `topica.interaction`. Full detail and the journal-grade treatment are in the
 [Publishing](../publishing/effects.md) track.
 
+!!! warning "Use the same design for `fit` and `estimate_effect`"
+    `estimate_effect` regresses on the covariates you pass it, not on whatever
+    went into `STM.fit`. Pass the **same** `X` (or the same `formula` + `data`)
+    to both, or the coefficients answer a different question than the model.
+
+    Two equivalent ways to supply the design: a prebuilt matrix
+    (`estimate_effect(draws, X, feature_names=names)`) or a formula
+    (`estimate_effect(draws, data=meta, formula="~ party + year")`, which builds
+    `X` for you and needs the optional `topica[formula]` extra). Use the matrix
+    form when you already built `X` for `fit` (the common case); use the formula
+    form for quick exploration straight from a DataFrame.
+
 ## Predicted prevalence
 
 `topica.predicted_prevalence` computes predicted topic prevalence at chosen

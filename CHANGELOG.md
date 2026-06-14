@@ -39,6 +39,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
   `topica.stm.*` paths remain as compatibility aliases) (#149, #152).
 - `design_matrix` and `from_dataframe` docstrings now name the optional
   `topica[formula]` extra so the requirement is visible before runtime (#150).
+- `estimate_effect` documents the two ways to specify the design (`X` +
+  `feature_names` vs `formula` + `data`, the latter previously undocumented) and
+  the invariant that the effects design must match the one used in `fit`; the
+  covariates guide gains the same note. `STM.fit`'s `prevalence=`/`covariates=`
+  pair is intentional (R-`stm` native name plus the universal cross-model alias,
+  per the conventions guide), so both are kept (#154).
 - Softened several cross-implementation claims to match what the artifacts show
   (design-review #02/#05/#06): keyATM/seededlda "verified word-for-word" → topic
   agreement via the reproducible `parity/` harness; BERTopic/Top2Vec "matching
