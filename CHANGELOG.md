@@ -37,6 +37,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- Memory: the logistic-normal models (`STM`, `CTM`, `STS`) now store the
+  per-document variational covariance `eta_cov` as float32 instead of float64,
+  halving the dominant memory term (the `(num_docs, K-1, K-1)` array). The
+  `eta_cov` property now returns a float32 array; consumers that need float64
+  (e.g. `posterior_theta_samples`, `estimate_effect`) upcast internally. The
+  on-disk save format is unchanged (covariances are still serialized as float64),
+  so existing saved models load unchanged (#159, part of #158).
 - The covariate-design helpers `spline` and `interaction` are now exported at the
   top level as `topica.spline` / `topica.interaction`, matching the `formulas`
   docstring and reflecting that they build design-matrix blocks usable by any

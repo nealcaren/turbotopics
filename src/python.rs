@@ -5222,21 +5222,23 @@ fn infer_theta_batch_per_doc(
 }
 
 /// Build the (eta_mean, eta_cov) numpy arrays for any logistic-normal model from
-/// its `LogisticNormalModel` posterior: mean is (D, eta_dim), cov is
-/// (D, eta_dim, eta_dim) un-flattening each row of `eta_cov()`. Generic over the
+/// its `LogisticNormalModel` posterior: mean is (D, eta_dim) f64, cov is
+/// (D, eta_dim, eta_dim) f32 un-flattening each row of `eta_cov()`. Generic over the
 /// fitted struct — CtmModel (K-1) and StsModel (2K-1) share this path.
-fn eta_posterior(m: &dyn LogisticNormalModel) -> (Array2<f64>, Array3<f64>) {
+/// The covariance is stored as f32 to halve the dominant memory term; callers
+/// that need f64 precision (save/load, numpy) cast as needed.
+fn eta_posterior(m: &dyn LogisticNormalModel) -> (Array2<f64>, Array3<f32>) {
     let mean_rows = m.eta_mean();
     let cov_rows = m.eta_cov();
     let d = mean_rows.len();
     let dim = m.eta_dim();
     let mut mean = Array2::<f64>::zeros((d, dim));
-    let mut cov = Array3::<f64>::zeros((d, dim, dim));
+    let mut cov = Array3::<f32>::zeros((d, dim, dim));
     for di in 0..d {
         for i in 0..dim {
             mean[[di, i]] = mean_rows[di][i];
             for j in 0..dim {
-                cov[[di, i, j]] = cov_rows[di][i * dim + j];
+                cov[[di, i, j]] = cov_rows[di][i * dim + j] as f32;
             }
         }
     }
@@ -5261,7 +5263,7 @@ pub struct CTM {
     theta: Option<Array2<f64>>, // (num_docs, num_topics)
     corr: Option<Array2<f64>>,  // (num_topics, num_topics)
     eta_mean: Option<Array2<f64>>, // (num_docs, num_topics-1) variational means λ
-    eta_cov: Option<Array3<f64>>,  // (num_docs, K-1, K-1) variational covariances ν
+    eta_cov: Option<Array3<f32>>,  // (num_docs, K-1, K-1) variational covariances ν — stored as f32 to halve memory
     mu: Vec<f64>,                  // K-1 logistic-normal prior mean (for inference)
     sigma: Vec<f64>,               // (K-1)² logistic-normal prior covariance
     corpus: Option<corpus::Corpus>,
@@ -5510,9 +5512,11 @@ impl CTM {
     }
 
     /// Per-document variational posterior covariances ν of η, shape
-    /// ``(num_docs, num_topics-1, num_topics-1)``.
+    /// ``(num_docs, num_topics-1, num_topics-1)``. Stored as float32 in memory
+    /// to halve the dominant memory term; cast to float64 with
+    /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
     #[getter]
-    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
         Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
@@ -5636,11 +5640,14 @@ impl CTM {
     /// Save the fitted model to `path`. Reload with `CTM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
+        // eta_cov is stored as f32 in memory; upcast to f64 for the on-disk format
+        // so existing saved models remain compatible.
+        let eta_cov_f64 = self.eta_cov.as_ref().map(|c| c.mapv(|x| x as f64));
         write_state(path, MODEL_TAG_CTM, &CtmState {
             num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
             init_spectral: self.init_spectral, fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
-            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&eta_cov_f64),
             mu: self.mu.clone(), sigma: self.sigma.clone(),
             corpus: self.corpus.clone(),
             bound: self.bound, bound_history: self.bound_history.clone(),
@@ -5658,12 +5665,14 @@ impl CTM {
         } else {
             s.topic_names
         };
+        // eta_cov is saved as f64 for format compatibility; downcast to f32 in memory.
+        let eta_cov = arr3_back(s.eta_cov).map(|c| c.mapv(|x| x as f32));
         Ok(CTM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
             init_spectral: s.init_spectral, fitted: s.fitted,
             topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
-            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            eta_mean: arr2_back(s.eta_mean), eta_cov,
             mu: s.mu, sigma: s.sigma, corpus: s.corpus,
             bound: s.bound, bound_history: s.bound_history, converged: s.converged,
         })
@@ -5696,7 +5705,7 @@ pub struct STM {
     theta: Option<Array2<f64>>,
     corr: Option<Array2<f64>>,
     eta_mean: Option<Array2<f64>>, // (num_docs, num_topics-1) variational means λ
-    eta_cov: Option<Array3<f64>>,  // (num_docs, K-1, K-1) variational covariances ν
+    eta_cov: Option<Array3<f32>>,  // (num_docs, K-1, K-1) variational covariances ν — stored as f32 to halve memory
     gamma: Option<Array2<f64>>, // (num_features, num_topics-1); None if no prevalence
     feature_names: Vec<String>,
     content_beta: Option<Vec<Vec<Vec<f64>>>>, // G×K×V; None if no content
@@ -6090,9 +6099,11 @@ impl STM {
     }
 
     /// Per-document variational posterior covariances ν of η, shape
-    /// ``(num_docs, num_topics-1, num_topics-1)``.
+    /// ``(num_docs, num_topics-1, num_topics-1)``. Stored as float32 in memory
+    /// to halve the dominant memory term; cast to float64 with
+    /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
     #[getter]
-    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
         Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
@@ -6334,11 +6345,14 @@ impl STM {
     /// Save the fitted model to `path`. Reload with `STM.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
+        // eta_cov is stored as f32 in memory; upcast to f64 for the on-disk format
+        // so existing saved models remain compatible.
+        let eta_cov_f64 = self.eta_cov.as_ref().map(|c| c.mapv(|x| x as f64));
         write_state(path, MODEL_TAG_STM, &StmState {
             num_topics: self.num_topics, sigma_shrink: self.sigma_shrink, seed: self.seed,
             init_spectral: self.init_spectral, fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta), corr: arr2_opt(&self.corr),
-            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&eta_cov_f64),
             gamma: arr2_opt(&self.gamma), feature_names: self.feature_names.clone(),
             content_beta: self.content_beta.clone(),
             mu: self.mu.clone(), sigma: self.sigma.clone(),
@@ -6359,12 +6373,14 @@ impl STM {
         } else {
             s.topic_names
         };
+        // eta_cov is saved as f64 for format compatibility; downcast to f32 in memory.
+        let eta_cov = arr3_back(s.eta_cov).map(|c| c.mapv(|x| x as f32));
         Ok(STM {
             num_topics: s.num_topics, sigma_shrink: s.sigma_shrink, seed: s.seed,
             init_spectral: s.init_spectral, fitted: s.fitted,
             topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta), corr: arr2_back(s.corr),
-            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            eta_mean: arr2_back(s.eta_mean), eta_cov,
             gamma: arr2_back(s.gamma), feature_names: s.feature_names,
             content_beta: s.content_beta,
             mu: s.mu, sigma: s.sigma,
@@ -6583,7 +6599,7 @@ pub struct STS {
     mv: Vec<f64>,           // V
     sigma: Vec<f64>,        // (2K-1)²
     eta_mean: Option<Array2<f64>>,  // D×(2K-1)
-    eta_cov: Option<Array3<f64>>,   // D×(2K-1)×(2K-1)
+    eta_cov: Option<Array3<f32>>,   // D×(2K-1)×(2K-1) — stored as f32 to halve memory
     corpus: Option<corpus::Corpus>,
     bound: f64,
     bound_history: Vec<f64>,
@@ -6919,9 +6935,11 @@ impl STS {
     }
 
     /// Per-document variational posterior covariances ν of η, shape
-    /// ``(num_docs, 2*num_topics-1, 2*num_topics-1)``.
+    /// ``(num_docs, 2*num_topics-1, 2*num_topics-1)``. Stored as float32 in memory
+    /// to halve the dominant memory term; cast to float64 with
+    /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
     #[getter]
-    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
         Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
     }
@@ -7001,12 +7019,15 @@ impl STS {
     /// Save the fitted model to `path`. Reload with :meth:`STS.load`.
     fn save(&self, path: &str) -> PyResult<()> {
         self.require_fitted()?;
+        // eta_cov is stored as f32 in memory; upcast to f64 for the on-disk format
+        // so existing saved models remain compatible.
+        let eta_cov_f64 = self.eta_cov.as_ref().map(|c| c.mapv(|x| x as f64));
         write_state(path, MODEL_TAG_STS, &StsState {
             num_topics: self.num_topics, seed: self.seed, init_spectral: self.init_spectral,
             fitted: self.fitted,
             beta: arr2_opt(&self.beta), theta: arr2_opt(&self.theta),
             sentiment: arr2_opt(&self.sentiment), gamma: arr2_opt(&self.gamma),
-            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&self.eta_cov),
+            eta_mean: arr2_opt(&self.eta_mean), eta_cov: arr3_opt(&eta_cov_f64),
             feature_names: self.feature_names.clone(),
             kappa_t: self.kappa_t.clone(), kappa_s: self.kappa_s.clone(),
             mv: self.mv.clone(), sigma: self.sigma.clone(),
@@ -7025,12 +7046,14 @@ impl STS {
         } else {
             s.topic_names
         };
+        // eta_cov is saved as f64 for format compatibility; downcast to f32 in memory.
+        let eta_cov = arr3_back(s.eta_cov).map(|c| c.mapv(|x| x as f32));
         Ok(STS {
             num_topics: s.num_topics, seed: s.seed, init_spectral: s.init_spectral,
             fitted: s.fitted, topic_names,
             beta: arr2_back(s.beta), theta: arr2_back(s.theta),
             sentiment: arr2_back(s.sentiment), gamma: arr2_back(s.gamma),
-            eta_mean: arr2_back(s.eta_mean), eta_cov: arr3_back(s.eta_cov),
+            eta_mean: arr2_back(s.eta_mean), eta_cov,
             feature_names: s.feature_names,
             kappa_t: s.kappa_t, kappa_s: s.kappa_s, mv: s.mv, sigma: s.sigma,
             corpus: s.corpus, bound: s.bound, bound_history: s.bound_history,

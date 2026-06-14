@@ -405,8 +405,9 @@ class CTM:
         """Variational posterior means lambda, shape (num_docs, num_topics-1)."""
         ...
     @property
-    def eta_cov(self) -> numpy.typing.NDArray[numpy.float64]:
-        """Variational posterior covariances nu, shape (num_docs, K-1, K-1)."""
+    def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
+        """Variational posterior covariances nu, shape (num_docs, K-1, K-1).
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
         ...
     @property
     def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -535,8 +536,9 @@ class STM:
         With eta_cov, the logistic-normal posterior for method-of-composition."""
         ...
     @property
-    def eta_cov(self) -> numpy.typing.NDArray[numpy.float64]:
-        """Variational posterior covariances nu, shape (num_docs, K-1, K-1)."""
+    def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
+        """Variational posterior covariances nu, shape (num_docs, K-1, K-1).
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
         ...
     @property
     def topic_covariance(self) -> numpy.typing.NDArray[numpy.float64]:
@@ -698,9 +700,10 @@ class STS:
         With eta_cov, the joint prevalence/sentiment posterior."""
         ...
     @property
-    def eta_cov(self) -> numpy.typing.NDArray[numpy.float64]:
+    def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
         """Per-document variational posterior covariances of eta,
-        (num_docs, 2*num_topics-1, 2*num_topics-1)."""
+        (num_docs, 2*num_topics-1, 2*num_topics-1).
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
         ...
     @property
     def doc_names(self) -> list[str]:
