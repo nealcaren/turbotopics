@@ -10,7 +10,8 @@
 #
 # Prereq: generate the figures first --
 #   python paper/replication.py --quick   # fig_poliblog_effect.pdf, fig_poliblog_report.pdf
-#   python benchmarks/bench.py            # fig_thread_scaling.pdf (needs R/MALLET; quiet machine)
+#   python benchmarks/bench.py            # fig_thread_scaling.pdf, fig_memory.pdf (needs R/MALLET; quiet machine)
+#   python benchmarks/bench_scaling.py    # fig_scaling.pdf (K-scaling memory/speed; quiet machine)
 # Usage:  bash paper/make_arxiv.sh
 set -euo pipefail
 

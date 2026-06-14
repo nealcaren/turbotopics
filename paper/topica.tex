@@ -329,6 +329,7 @@ Model & What it is for & Reference \\
 \multicolumn{3}{l}{\emph{Count-based}}\\
 \code{LDA}          & Classic topics, fast collapsed-Gibbs (SparseLDA; WarpLDA / CVB0 optional) & \citet{blei2003lda, yao2009sparselda} \\
 \code{DMR}          & Topics conditioned on document metadata              & \citet{mimno2008dmr} \\
+\code{GDMR}         & DMR over continuous metadata (Legendre basis)        & \citet{lee2020gdmr} \\
 \code{LabeledLDA}   & Supervised topics tied to document labels            & \citet{ramage2009llda} \\
 \code{CTM}          & Correlated topics (logistic-normal)                  & \citet{blei2007ctm} \\
 \code{ProdLDA}      & Sharper topics via a product-of-experts VAE          & \citet{srivastava2017prodlda} \\
@@ -630,13 +631,42 @@ scientists, since \proglang{R} \pkg{stm} is the field standard and its fits can
 take minutes. Table~\ref{tab:stm} shows \pkg{topica} fitting the same model three
 to six times faster on a single core and ten to twenty-two times faster across
 cores. It also fits in under a third of \proglang{R} \pkg{stm}'s memory
-(about 490MB against 1.6GB at 5{,}000 documents), since it holds the corpus and
-the variational state in compact native arrays rather than \proglang{R} objects.
+(about 480MB against 1.5GB at 5{,}000 documents and $K=20$), since it holds the
+corpus and the variational state in compact native arrays rather than
+\proglang{R} objects.
 The keyword-assisted model matches \proglang{R} \pkg{keyATM}'s
 \proglang{C++} sampler single-threaded (22.8s versus 23.5s on a
 2{,}000-document, 10-topic fit of 1{,}000 sweeps) and runs about 1.7 times as fast
 on four cores (13.7s), through a document-partitioned parallel sweep that the
 \proglang{R} package has no equivalent of.
+
+Those figures are at $K=20$. The Laplace E-step stores a $(K-1)\times(K-1)$
+posterior covariance per document, an $O(NK^2)$ term that dominates both memory
+and time as the topic count grows, so \pkg{topica} gives two controls for the
+large-$K$ regime (Figure~\ref{fig:scaling}). Storing that covariance as
+\code{float32} halves it by default, and \code{keep\_eta\_cov=False} drops it
+entirely, recomputing each document's covariance on demand only when
+method-of-composition standard errors are requested; on the same
+5{,}000-document corpus at $K=200$ this holds peak memory near 0.4GB against about
+4.0GB for the stored full covariance, and roughly flat in $K$. Independently,
+\code{variational="diagonal"} replaces the full Laplace covariance with a
+mean-field diagonal, skipping the per-document $O(K^3)$ inverse: the same $K=200$
+fit drops from about 92s to 13s, at the cost of the off-diagonal posterior
+correlations. The default path is unchanged and bit-for-bit identical to prior
+releases.
+
+\begin{figure}[t!]
+\centering
+\includegraphics[width=0.85\textwidth]{fig_scaling}
+\caption{Topic-count scaling of the logistic-normal fit on a 5{,}000-document
+synthetic corpus (10 EM iterations). Left: peak resident memory with the default
+stored covariance grows as $O(K^2)$, while \code{keep\_eta\_cov=False} recomputes
+it on demand and stays roughly flat in $K$. Right: fit time for the default
+Laplace E-step against the mean-field \code{variational="diagonal"} mode, which
+skips the per-document $O(K^3)$ inverse. Reproduced by
+\code{benchmarks/bench\_scaling.py}.}
+\label{fig:scaling}
+\end{figure}
 
 We report the LDA comparison straight, because it does not uniformly favor us.
 Against \pkg{MALLET}, the original \proglang{Java} sampler, the two are at parity

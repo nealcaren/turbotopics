@@ -62,6 +62,7 @@ benchmarks/k_crossover_results.json
 benchmarks/k_crossover.md
 paper/fig_thread_scaling.pdf
 paper/fig_memory.pdf
+paper/fig_scaling.pdf
 
 # Misc local-only files
 API_FROZEN.md
