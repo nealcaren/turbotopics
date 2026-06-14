@@ -5221,29 +5221,6 @@ fn infer_theta_batch_per_doc(
     out
 }
 
-/// Build the (eta_mean, eta_cov) numpy arrays for any logistic-normal model from
-/// its `LogisticNormalModel` posterior: mean is (D, eta_dim) f64, cov is
-/// (D, eta_dim, eta_dim) f32 un-flattening each row of `eta_cov()`. Generic over the
-/// fitted struct — CtmModel (K-1) and StsModel (2K-1) share this path.
-/// The covariance is stored as f32 to halve the dominant memory term; callers
-/// that need f64 precision (save/load, numpy) cast as needed.
-fn eta_posterior(m: &dyn LogisticNormalModel) -> (Array2<f64>, Array3<f32>) {
-    let mean_rows = m.eta_mean();
-    let cov_rows = m.eta_cov();
-    let d = mean_rows.len();
-    let dim = m.eta_dim();
-    let mut mean = Array2::<f64>::zeros((d, dim));
-    let mut cov = Array3::<f32>::zeros((d, dim, dim));
-    for di in 0..d {
-        for i in 0..dim {
-            mean[[di, i]] = mean_rows[di][i];
-            for j in 0..dim {
-                cov[[di, i, j]] = cov_rows[di][i * dim + j] as f32;
-            }
-        }
-    }
-    (mean, cov)
-}
 
 /// Correlated Topic Model (Blei & Lafferty; the STM core). Topics are drawn
 /// from a logistic-normal prior with a full covariance, so they can correlate —
@@ -5434,7 +5411,7 @@ impl CTM {
         }
 
         // Always build eta_mean; only build eta_cov when keep_eta_cov=True
-        // (when keep_nu=false the nu array is empty and eta_posterior would panic).
+        // (when keep_nu=false the nu array is empty; only build eta_cov when kept).
         let mean_rows = model.eta_mean();
         let d_docs = mean_rows.len();
         let dim = k - 1;
@@ -5481,8 +5458,12 @@ impl CTM {
         self.eta_cov = stored_eta_cov;
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
-        self.sigma_estep = model.sigma_estep.clone();
-        self.beta_estep = Some(beta_estep_arr);
+        // Retain the E-step snapshots only when eta_cov was NOT kept, so the
+        // default path carries no extra state (recompute uses the stored eta_cov).
+        if !keep_eta_cov {
+            self.sigma_estep = model.sigma_estep.clone();
+            self.beta_estep = Some(beta_estep_arr);
+        }
         self.corpus = Some(corpus);
         self.bound = model.bound;
         self.bound_history = model.bound_history.clone();
@@ -6184,13 +6165,19 @@ impl STM {
         self.corr = Some(corr);
         self.eta_mean = Some(eta_mean_arr);
         self.eta_cov = stored_eta_cov;
-        self.beta_estep = Some(beta_estep_arr);
+        // E-step β snapshot: retained only when eta_cov was NOT kept (see below).
+        if !keep_eta_cov {
+            self.beta_estep = Some(beta_estep_arr);
+        }
         self.feature_names = feat_names;
         self.content_beta = model.content_beta;
         self.group_names = group_vocab;
         self.mu = model.mu.clone();
         self.sigma = model.sigma.clone();
-        self.sigma_estep = model.sigma_estep.clone();
+        // E-step Σ snapshot: retained only when eta_cov was NOT kept.
+        if !keep_eta_cov {
+            self.sigma_estep = model.sigma_estep.clone();
+        }
         self.corpus = Some(corpus);
         self.bound = model.bound;
         self.bound_history = model.bound_history.clone();
@@ -6831,12 +6818,21 @@ pub struct STS {
     sentiment: Option<Array2<f64>>, // D×K topic sentiment-discourse α^(s)
     gamma: Option<Array2<f64>>,     // F×(2K-1) prevalence+sentiment regression
     feature_names: Vec<String>,
-    kappa_t: Vec<Vec<f64>>, // K×V
-    kappa_s: Vec<Vec<f64>>, // K×V
+    kappa_t: Vec<Vec<f64>>, // K×V (final, after last κ M-step)
+    kappa_s: Vec<Vec<f64>>, // K×V (final, after last κ M-step)
     mv: Vec<f64>,           // V
     sigma: Vec<f64>,        // (2K-1)²
     eta_mean: Option<Array2<f64>>,  // D×(2K-1)
-    eta_cov: Option<Array3<f32>>,   // D×(2K-1)×(2K-1) — stored as f32 to halve memory
+    eta_cov: Option<Array3<f32>>,   // D×(2K-1)×(2K-1) — stored as f32 to halve memory; None when fit with keep_eta_cov=False
+    /// Sigma from the last E-step (before the final Σ M-step). Used by
+    /// `_recompute_eta_cov` to reproduce ν exactly. Empty when not needed (loaded
+    /// models) — falls back to `sigma` in that case.
+    sigma_estep: Vec<f64>,
+    /// kappa from the last E-step (before the final κ M-step). Used by
+    /// `_recompute_eta_cov` to reproduce ν exactly. Empty when not retained
+    /// (loaded models) — falls back to kappa_t/kappa_s in that case.
+    kappa_t_estep: Vec<Vec<f64>>,
+    kappa_s_estep: Vec<Vec<f64>>,
     corpus: Option<corpus::Corpus>,
     bound: f64,
     bound_history: Vec<f64>,
@@ -6887,6 +6883,9 @@ impl STS {
             kappa_s: Vec::new(),
             mv: Vec::new(),
             sigma: Vec::new(),
+            sigma_estep: Vec::new(),
+            kappa_t_estep: Vec::new(),
+            kappa_s_estep: Vec::new(),
             eta_mean: None,
             eta_cov: None,
             corpus: None,
@@ -6914,7 +6913,8 @@ impl STS {
     /// two give the same topics on well-conditioned corpora.
     #[pyo3(signature = (data, sentiment_seed, prevalence=None, *,
                         prevalence_names=None, iters=30, convergence_tol=1e-5,
-                        kappa_estimation="ridge", kappa_ridge=1e-3, em_tol=None, covariates=None))]
+                        kappa_estimation="ridge", kappa_ridge=1e-3, em_tol=None, covariates=None,
+                        keep_eta_cov=true))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -6929,6 +6929,7 @@ impl STS {
         kappa_ridge: f64,
         em_tol: Option<f64>,
         covariates: Option<&Bound<'_, PyAny>>,
+        keep_eta_cov: bool,
     ) -> PyResult<()> {
         let convergence_tol = if let Some(old_val) = em_tol {
             let warnings = py.import_bound("warnings")?;
@@ -7031,7 +7032,7 @@ impl STS {
             let prev_ref = prevalence_x.as_deref();
             let m = sts::fit_sts(
                 &corpus.docs, k, num_types, iters, convergence_tol, prev_ref, Some(&sentiment_seed),
-                kappa_est, spectral, &mut rng,
+                kappa_est, spectral, keep_eta_cov, &mut rng,
             );
             (m, corpus)
         });
@@ -7064,9 +7065,40 @@ impl STS {
             arr
         });
 
-        let (em, ec) = eta_posterior(&model);
-        self.eta_mean = Some(em);
-        self.eta_cov = Some(ec);
+        // Always build eta_mean; only build eta_cov when keep_eta_cov=True
+        // (when keep_nu=false the nu array is empty; only build eta_cov when kept).
+        let d = model.alpha.len();
+        let dim = 2 * k - 1;
+        let mut eta_mean_arr = Array2::<f64>::zeros((d, dim));
+        for (di, row) in model.alpha.iter().enumerate() {
+            for (i, &v) in row.iter().enumerate() {
+                eta_mean_arr[[di, i]] = v;
+            }
+        }
+        let stored_eta_cov: Option<Array3<f32>> = if keep_eta_cov {
+            let cov_rows = model.eta_cov();
+            let mut cov = Array3::<f32>::zeros((d, dim, dim));
+            for di in 0..d {
+                for i in 0..dim {
+                    for j in 0..dim {
+                        cov[[di, i, j]] = cov_rows[di][i * dim + j] as f32;
+                    }
+                }
+            }
+            Some(cov)
+        } else {
+            None
+        };
+        self.eta_mean = Some(eta_mean_arr);
+        self.eta_cov = stored_eta_cov;
+        // Retain the E-step snapshots only when eta_cov was NOT kept, so the
+        // default path carries no extra state; they let _recompute_eta_cov
+        // reproduce ν exactly. When kept, the stored eta_cov is used directly.
+        if !keep_eta_cov {
+            self.sigma_estep = model.sigma_estep.clone();
+            self.kappa_t_estep = model.kappa_t_estep.clone();
+            self.kappa_s_estep = model.kappa_s_estep.clone();
+        }
         self.topic_names = (0..k).map(|i| format!("topic_{i}")).collect();
         self.beta = Some(beta);
         self.theta = Some(theta);
@@ -7175,10 +7207,88 @@ impl STS {
     /// ``(num_docs, 2*num_topics-1, 2*num_topics-1)``. Stored as float32 in memory
     /// to halve the dominant memory term; cast to float64 with
     /// ``np.asarray(model.eta_cov, dtype=np.float64)`` when full precision is needed.
+    /// Raises RuntimeError if the model was fit with ``keep_eta_cov=False``; use
+    /// :meth:`_recompute_eta_cov` to regenerate on demand.
     #[getter]
     fn eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
         self.require_fitted()?;
-        Ok(self.eta_cov.as_ref().unwrap().to_pyarray_bound(py))
+        self.eta_cov.as_ref()
+            .map(|c| c.to_pyarray_bound(py))
+            .ok_or_else(|| PyRuntimeError::new_err(
+                "model was fit with keep_eta_cov=False; refit with keep_eta_cov=True, \
+                 or use _recompute_eta_cov which recomputes it on demand"
+            ))
+    }
+
+    /// Recompute the per-document variational covariance ν on demand.
+    /// Use this when the model was fit with ``keep_eta_cov=False`` to save memory.
+    /// Returns the same ``(num_docs, 2*num_topics-1, 2*num_topics-1)`` float32
+    /// array as :attr:`eta_cov`.
+    fn _recompute_eta_cov<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<f32>>> {
+        self.require_fitted()?;
+        let corpus = self.corpus.as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("no corpus retained; cannot recompute eta_cov"))?;
+        let sparse: Vec<(Vec<usize>, Vec<f64>)> =
+            corpus.docs.iter().map(|d| crate::variational::doc_sparse(d)).collect();
+
+        // Build a minimal StsModel stub with only the fields recompute_nu_sts needs.
+        let alpha = self.eta_mean.as_ref().unwrap()
+            .rows().into_iter()
+            .map(|r| r.to_vec())
+            .collect::<Vec<_>>();
+        // ν is independent of the prior mean μ — use sigma_estep (the sigma that was
+        // active during the last E-step). Fall back to sigma if sigma_estep was not
+        // persisted (e.g. loaded from disk).
+        let sigma_for_recompute = if self.sigma_estep.is_empty() {
+            self.sigma.clone()
+        } else {
+            self.sigma_estep.clone()
+        };
+        // Use kappa from the last E-step. Fall back to kappa_t/kappa_s if estep
+        // snapshots were not persisted (e.g. loaded from disk).
+        let kt_recompute = if self.kappa_t_estep.is_empty() {
+            self.kappa_t.clone()
+        } else {
+            self.kappa_t_estep.clone()
+        };
+        let ks_recompute = if self.kappa_s_estep.is_empty() {
+            self.kappa_s.clone()
+        } else {
+            self.kappa_s_estep.clone()
+        };
+        let model_stub = sts::StsModel {
+            k: self.num_topics,
+            num_types: self.mv.len(),
+            alpha,
+            nu: Vec::new(),
+            gamma: None,
+            sigma: sigma_for_recompute.clone(),
+            sigma_estep: sigma_for_recompute,
+            kappa_t: self.kappa_t.clone(),
+            kappa_s: self.kappa_s.clone(),
+            kappa_t_estep: kt_recompute,
+            kappa_s_estep: ks_recompute,
+            mv: self.mv.clone(),
+            beta: Vec::new(),
+            bound_history: Vec::new(),
+            converged: false,
+            em_iters_run: 0,
+        };
+
+        let nu = py.allow_threads(|| sts::recompute_nu_sts(&model_stub, &sparse));
+
+        // Convert to (D, 2K-1, 2K-1) f32 array.
+        let d = nu.len();
+        let dim = 2 * self.num_topics - 1;
+        let mut cov = Array3::<f32>::zeros((d, dim, dim));
+        for di in 0..d {
+            for i in 0..dim {
+                for j in 0..dim {
+                    cov[[di, i, j]] = nu[di][i * dim + j] as f32;
+                }
+            }
+        }
+        Ok(cov.to_pyarray_bound(py))
     }
 
     /// Final variational bound (approximate ELBO).
@@ -7293,6 +7403,9 @@ impl STS {
             eta_mean: arr2_back(s.eta_mean), eta_cov,
             feature_names: s.feature_names,
             kappa_t: s.kappa_t, kappa_s: s.kappa_s, mv: s.mv, sigma: s.sigma,
+            sigma_estep: Vec::new(),         // not persisted; falls back to sigma in _recompute_eta_cov
+            kappa_t_estep: Vec::new(),       // not persisted; falls back to kappa_t/kappa_s
+            kappa_s_estep: Vec::new(),
             corpus: s.corpus, bound: s.bound, bound_history: s.bound_history,
             converged: s.converged,
         })

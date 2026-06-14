@@ -670,6 +670,7 @@ class STS:
         kappa_ridge: float = 1e-3,
         em_tol: Optional[float] = None,
         covariates: Optional[numpy.typing.NDArray[numpy.float64]] = None,
+        keep_eta_cov: bool = True,
     ) -> None:
         """Fit. sentiment_seed (required, one value per document) defines the
         aggregation groups for the topic-word (kappa) Poisson M-step and seeds the
@@ -684,6 +685,10 @@ class STS:
         or "lasso" (an L1 Poisson path with AIC-selected penalty, matching the
         reference R sts exactly at higher cost). Both give the same topics on
         well-conditioned corpora.
+
+        keep_eta_cov=False skips storing the per-document variational covariance
+        (nu), saving O(N*(2K-1)^2) memory. The fit is bit-identical. Use
+        _recompute_eta_cov() to regenerate on demand.
 
         em_tol is a deprecated alias for convergence_tol."""
         ...
@@ -725,7 +730,13 @@ class STS:
     def eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
         """Per-document variational posterior covariances of eta,
         (num_docs, 2*num_topics-1, 2*num_topics-1).
-        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed."""
+        Stored as float32 to halve memory; cast with np.asarray(model.eta_cov, dtype=np.float64) if needed.
+        Raises RuntimeError if the model was fit with keep_eta_cov=False."""
+        ...
+    def _recompute_eta_cov(self) -> numpy.typing.NDArray[numpy.float32]:
+        """Recompute the per-document variational covariance nu on demand.
+        Use when the model was fit with keep_eta_cov=False. Returns the same
+        (num_docs, 2*num_topics-1, 2*num_topics-1) float32 array as eta_cov."""
         ...
     @property
     def doc_names(self) -> list[str]:

@@ -37,6 +37,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 - API conventions guide (`docs/contributing/conventions.md`) documenting the
   shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
   (#155).
+- Memory: `STS` `fit` takes `keep_eta_cov=True` (matching STM/CTM): with
+  `keep_eta_cov=False` the per-document variational covariance is not stored
+  (O(N·eta_dim) fit), the fit is bit-identical, and the covariance is recomputed
+  exactly on demand for method-of-composition uncertainty (#162). The small
+  E-step snapshots needed for that recompute (a β/κ and Σ copy, not per-document)
+  are now retained only on the `keep_eta_cov=False` path, so the default path of
+  STM/CTM/STS carries no extra per-fit state.
 - Memory: `STM`/`CTM` `fit` take `keep_eta_cov=True`. With `keep_eta_cov=False`,
   the per-document variational covariance is not stored, dropping the fit
   footprint from O(N·K²) to O(N·K) (no extra per-document state is retained). The

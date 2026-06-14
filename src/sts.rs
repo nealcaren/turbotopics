@@ -326,11 +326,22 @@ pub struct StsModel {
     pub k: usize,
     pub num_types: usize,
     pub alpha: Vec<Vec<f64>>,         // D × (2K-1): [α^(p)_{1..K-1}, α^(s)_{1..K}]
+    /// Per-document variational covariance ν = H⁻¹ ((2K-1)² flattened, row-major).
+    /// Empty when the model was fit with `keep_nu = false`; use `recompute_nu_sts`
+    /// to regenerate on demand.
     pub nu: Vec<Vec<f64>>,            // D × (2K-1)²: Laplace covariance per doc
     pub gamma: Option<Vec<Vec<f64>>>, // F × (2K-1): prevalence+sentiment regression
     pub sigma: Vec<f64>,             // (2K-1)²
-    pub kappa_t: Vec<Vec<f64>>,      // K × V
-    pub kappa_s: Vec<Vec<f64>>,      // K × V
+    /// The prior covariance Σ that was used in the final E-step (sigma before the
+    /// final M-step). Used by `recompute_nu_sts` to exactly reproduce the stored ν.
+    pub sigma_estep: Vec<f64>,
+    pub kappa_t: Vec<Vec<f64>>,      // K × V (final, after last M-step)
+    pub kappa_s: Vec<Vec<f64>>,      // K × V (final, after last M-step)
+    /// The topic-word coefficients κ_t, κ_s that were used in the final E-step
+    /// (before the κ M-step updated `kappa_t`/`kappa_s`). Used by `recompute_nu_sts`
+    /// to reproduce ν exactly.
+    pub kappa_t_estep: Vec<Vec<f64>>,
+    pub kappa_s_estep: Vec<Vec<f64>>,
     pub mv: Vec<f64>,                // V
     pub beta: Vec<Vec<f64>>,         // K × V baseline topic-word at α^(s)=0
     pub bound_history: Vec<f64>,
@@ -374,6 +385,8 @@ impl Estimator for StsModel {
 impl LogisticNormalModel for StsModel {
     fn eta_dim(&self) -> usize { 2 * self.k - 1 }
     fn eta_mean(&self) -> &[Vec<f64>] { &self.alpha }
+    /// Returns the stored per-document covariances. Returns `&[]` when the model
+    /// was fit with `keep_nu = false` (use `recompute_nu_sts` to regenerate).
     fn eta_cov(&self) -> &[Vec<f64>] { &self.nu }
 }
 
@@ -730,6 +743,7 @@ pub fn fit_sts<R: Rng>(
     sentiment_seed: Option<&[f64]>,
     kappa_est: KappaEst,
     init_spectral: bool,
+    keep_nu: bool,
     rng: &mut R,
 ) -> StsModel {
     let k = num_topics;
@@ -845,7 +859,13 @@ pub fn fit_sts<R: Rng>(
     for i in 0..n {
         sigma[i * n + i] = 1.0;
     }
-    let mut nu_store = vec![vec![0.0f64; n * n]; d];
+    // When keep_nu=false, don't allocate storage for per-doc ν (saves O(N·(2K-1)²)
+    // memory), but still consume it transiently for the Σ sufficient-stat update.
+    let mut nu_store: Vec<Vec<f64>> = if keep_nu {
+        vec![vec![0.0f64; n * n]; d]
+    } else {
+        Vec::new()
+    };
 
     let doc_mu = |di: usize, gamma: &Option<Vec<Vec<f64>>>, mu_shared: &[f64]| -> Vec<f64> {
         match (prevalence, gamma) {
@@ -859,9 +879,21 @@ pub fn fit_sts<R: Rng>(
     let mut bound_history = Vec::with_capacity(em_iters);
     let mut converged = false;
     let mut em_iters_run = 0usize;
+    // Track sigma and kappa used at the START of each E-step. After the loop,
+    // these hold the values that produced the stored α/ν — which may differ from
+    // `sigma`/`kappa_t`/`kappa_s` (updated by the M-steps after the last E-step).
+    // `recompute_nu_sts` uses these to reproduce ν exactly.
+    // Note: μ cancels from the STS Hessian (`sts_precision` takes `siginv` but not
+    // `mu`), so ν is independent of the per-document prior mean — no need to track it.
+    let mut sigma_estep = sigma.clone();
+    let mut kappa_t_estep = kappa_t.clone();
+    let mut kappa_s_estep = kappa_s.clone();
 
     for em in 0..em_iters {
         em_iters_run = em + 1;
+        sigma_estep = sigma.clone();        // capture sigma before E-step
+        kappa_t_estep = kappa_t.clone();   // capture kappa before E-step
+        kappa_s_estep = kappa_s.clone();
         let kappa = Kappa { kappa_t: kappa_t.clone(), kappa_s: kappa_s.clone() };
         let siginv = spd_inverse(&sigma, n).unwrap_or_else(|| {
             let mut s = sigma.clone();
@@ -929,8 +961,11 @@ pub fn fit_sts<R: Rng>(
             });
 
         // Serial reduction in document order (deterministic).
+        // When keep_nu=false we accumulate the ν sufficient-stat for Σ on the fly
+        // (so the Σ M-step is bit-identical whether or not we retain per-doc ν).
         let mut phi_by_group = vec![vec![vec![0.0f64; k]; v]; num_groups];
         let mut total_bound = 0.0;
+        let mut nu_sum_sstat = if keep_nu { Vec::new() } else { vec![0.0f64; n * n] };
         for (di, (a_hat, nu_d, bound_contrib, phi_contrib)) in doc_results {
             let g = group[di];
             for (w, row) in &phi_contrib {
@@ -940,7 +975,14 @@ pub fn fit_sts<R: Rng>(
             }
             total_bound += bound_contrib;
             alpha[di] = a_hat;
-            nu_store[di] = nu_d;
+            if keep_nu {
+                nu_store[di] = nu_d;
+            } else {
+                // Accumulate ν into the sufficient stat; discard the per-doc array.
+                for idx in 0..(n * n) {
+                    nu_sum_sstat[idx] += nu_d[idx];
+                }
+            }
         }
         bound_history.push(total_bound);
 
@@ -970,7 +1012,11 @@ pub fn fit_sts<R: Rng>(
                 for di in 0..d {
                     cross += (alpha[di][i] - mus[di][i]) * (alpha[di][j] - mus[di][j]);
                 }
-                let nu_sum: f64 = nu_store.iter().map(|nu| nu[i * n + j]).sum();
+                let nu_sum: f64 = if keep_nu {
+                    nu_store.iter().map(|nu| nu[i * n + j]).sum()
+                } else {
+                    nu_sum_sstat[i * n + j]
+                };
                 sigma[i * n + j] = (nu_sum + cross) / d as f64;
             }
         }
@@ -997,14 +1043,65 @@ pub fn fit_sts<R: Rng>(
         nu: nu_store,
         gamma,
         sigma,
+        sigma_estep,
         kappa_t,
         kappa_s,
+        kappa_t_estep,
+        kappa_s_estep,
         mv,
         beta,
         bound_history,
         converged,
         em_iters_run,
     }
+}
+
+/// Recompute the per-document variational covariance ν from the stored
+/// variational means α and the fitted global parameters. Used when the model
+/// was fit with `keep_nu = false` to reconstruct ν on demand (e.g. for
+/// method-of-composition uncertainty). Parallelized with rayon.
+///
+/// The Laplace covariance ν = H⁻¹ depends only on α, κ, m and Σ⁻¹ — the
+/// prior mean μ cancels out of the STS Hessian (`sts_precision` takes `siginv`
+/// but not `mu`). So ν is independent of the per-document μ. We evaluate using
+/// `sigma_estep` and `kappa_t_estep`/`kappa_s_estep` (the globals that were active
+/// during the last E-step) to reproduce the stored ν exactly.
+pub fn recompute_nu_sts(
+    model: &StsModel,
+    sparse: &[(Vec<usize>, Vec<f64>)],
+) -> Vec<Vec<f64>> {
+    use rayon::prelude::*;
+    let d = sparse.len();
+    let k = model.k;
+    let n = 2 * k - 1;
+    // Use sigma_estep (the sigma active during the last E-step) rather than
+    // model.sigma (updated by the final M-step and may differ).
+    let sig = &model.sigma_estep;
+    let siginv = spd_inverse(sig, n).unwrap_or_else(|| {
+        let mut s = sig.clone();
+        make_diagonally_dominant(&mut s, n);
+        spd_inverse(&s, n).unwrap()
+    });
+    // Use kappa from the last E-step (before the final κ M-step updated kappa_t/kappa_s).
+    let kappa = Kappa {
+        kappa_t: model.kappa_t_estep.clone(),
+        kappa_s: model.kappa_s_estep.clone(),
+    };
+    (0..d)
+        .into_par_iter()
+        .map(|di| {
+            let (words, counts) = &sparse[di];
+            let mut prec = sts_precision(&model.alpha[di], &kappa, &model.mv, words, counts, &siginv, k);
+            match cholesky(&prec, n) {
+                Some(l) => spd_inverse_from_chol(&l, n),
+                None => {
+                    make_diagonally_dominant(&mut prec, n);
+                    let l = cholesky(&prec, n).expect("PD after diagonal dominance");
+                    spd_inverse_from_chol(&l, n)
+                }
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1128,7 +1225,7 @@ mod tests {
     fn em_bound_increases_and_recovers_topics() {
         let (docs, x, truth, v) = planted_corpus();
         let mut rng = StdRng::seed_from_u64(1);
-        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 40, 1e-6, Some(&x), None, KappaEst::Ridge(1e-3), true, true, &mut rng);
 
         // The variational bound increases monotonically (allowing tiny slack).
         for w in m.bound_history.windows(2) {
@@ -1159,8 +1256,8 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let mut r1 = StdRng::seed_from_u64(1);
         let mut r2 = StdRng::seed_from_u64(1);
-        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut r1);
-        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, &mut r2);
+        let m1 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, true, &mut r1);
+        let m2 = fit_sts(&docs, 2, v, 15, 0.0, Some(&x), None, KappaEst::Ridge(1e-3), true, true, &mut r2);
         for (a, b) in m1.alpha.iter().flatten().zip(m2.alpha.iter().flatten()) {
             assert!((a - b).abs() < 1e-12);
         }
@@ -1236,7 +1333,7 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
         let mut rng = StdRng::seed_from_u64(2);
-        let m = fit_sts(&docs, 2, v, 30, 1e-6, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 30, 1e-6, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, true, &mut rng);
 
         let ks_max = m
             .kappa_s
@@ -1257,7 +1354,7 @@ mod tests {
         let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
         let mut rng = StdRng::seed_from_u64(3);
         let est = KappaEst::Lasso { nlambda: 60, lambda_min_ratio: 0.001 };
-        let m = fit_sts(&docs, 2, v, 20, 1e-6, Some(&x), Some(&seed), est, true, &mut rng);
+        let m = fit_sts(&docs, 2, v, 20, 1e-6, Some(&x), Some(&seed), est, true, true, &mut rng);
 
         let tw = m.topic_word();
         let top0 = (0..v).max_by(|&a, &b| tw[0][a].partial_cmp(&tw[0][b]).unwrap()).unwrap();
@@ -1281,7 +1378,7 @@ mod tests {
         let (docs, x, _truth, v) = planted_corpus();
         let seed: Vec<f64> = x.iter().map(|row| row[1]).collect();
         let mut rng = StdRng::seed_from_u64(7);
-        let m = fit_sts(&docs, 3, v, 5, 0.0, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, &mut rng);
+        let m = fit_sts(&docs, 3, v, 5, 0.0, Some(&x), Some(&seed), KappaEst::Ridge(1e-3), true, true, &mut rng);
         let base = check_conformance(&m);
         assert!(base.is_empty(), "check_conformance: {:?}", base);
         let ln = check_logistic_normal(&m);
