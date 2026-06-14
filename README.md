@@ -39,6 +39,7 @@ See the [getting-started guide](https://nealcaren.github.io/topica/getting-start
 | **`STS`** | Structural Topic **and Sentiment-Discourse**: covariate-driven topic sentiment/tone on top of STM |
 | **`CTM`** | Correlated topics (logistic-normal) |
 | **`DMR`** | Topics conditioned on document metadata (Dirichlet-multinomial regression) |
+| **`GDMR`** | Generalized DMR over continuous metadata via a Legendre basis, with topic distribution functions across the metadata range |
 | **`DTM`** | Dynamic topics that evolve across time slices |
 | **`HDP`** | Nonparametric LDA that learns the number of topics from the data; by default fits with fixed concentrations (topic count steered by `gamma`), with optional concentration resampling |
 | **`keyATM` / `seededlda`** | Guided topics steered by seed words |
@@ -108,7 +109,7 @@ Topica stands on a generation of open topic-modeling research and code. Each ent
 - [**sts**](https://cran.r-project.org/package=sts) (Chen & Mankad, 2024) — `STS`: the Structural Topic and Sentiment-Discourse model — the joint prevalence/sentiment Laplace E-step and the Poisson topic-word M-step, validated against the package
 - [**lda-c / ctm-c / dtm**](https://github.com/blei-lab) and [**hdp**](https://github.com/blei-lab/hdp) (Blei lab, 2006–2007) — `CTM`, `DTM`, `HDP`: the CTM, Dynamic Topic Model, and HDP samplers
 - [**gensim**](https://github.com/piskvorky/gensim) (Řehůřek & Sojka, 2010) — `DTM`, `ensemble`: the coherence-pipeline conventions (the `coherence_type=` API and default sliding windows; the measures themselves are Röder et al. 2015 and Mimno et al. 2011), the `LdaSeqModel` DTM reference, and the `EnsembleLda` (CBDBSCAN stable-topic) method ported for `ensemble(method="stable")`
-- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min, 2020) — API conventions (`summary`, the short-text models)
+- [**tomotopy**](https://github.com/bab2min/tomotopy) (bab2min, 2020) — API conventions (`summary`, the short-text models), and `GDMR` (generalized DMR; Lee & Song, 2020), validated against its `GDMRModel`
 - [**keyATM**](https://github.com/keyATM/keyATM) (Eshima, Imai & Sasaki, 2024) — `KeyATM`: the base, covariate, and dynamic models, the information-theory token weighting, and the Chib (1998) change-point HMM, validated against the package
 - [**seededlda**](https://github.com/koheiw/seededlda) (Watanabe, 2023) — `SeededLDA`: the seeded-prior scheme
 - [**LightLDA**](https://github.com/microsoft/LightLDA) (Yuan et al., 2015) — `LDA`: the alias-table Metropolis-Hastings sampler
