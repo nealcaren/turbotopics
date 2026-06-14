@@ -12,6 +12,8 @@ This page covers the count-based models. The embedding-based models
 
 ::: topica.DMR
 
+::: topica.GDMR
+
 ::: topica.LabeledLDA
 
 ::: topica.SAGE

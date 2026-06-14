@@ -122,5 +122,6 @@ nav:
       - keyATM toolkit: api/keyatm.md
       - Keywords & preprocessing: api/keywords.md
   - Contributing:
+      - API conventions: contributing/conventions.md
       - Estimator contract: contributing/estimator-contract.md
   - Citing: citing.md

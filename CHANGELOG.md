@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ### Added
 
+- `GDMR`, generalized DMR (g-DMR; Lee & Song 2020): DMR over one or more
+  continuous metadata variables via a Legendre-polynomial basis with a decay
+  prior, plus topic distribution functions `tdf` / `tdf_linspace` that read the
+  fitted prevalence surface at arbitrary metadata values. Mirrors `DMR`'s
+  interface (`features=`, with `covariates=`/`metadata=` aliases) and is
+  validated against tomotopy's `GDMRModel` (#148).
+- API conventions guide (`docs/contributing/conventions.md`) documenting the
+  shared cross-model vocabulary, enforced by `tests/test_naming_conventions.py`
+  (#155).
 - The covariate-design helpers `spline` and `interaction` are now exported at the
   top level as `topica.spline` / `topica.interaction`, matching the `formulas`
   docstring and reflecting that they build design-matrix blocks usable by any
