@@ -666,10 +666,20 @@ struct SampleParams {
 /// count tables (not the whole model), so it can run against either the model's
 /// own tables (sequential) or a worker's local clones (parallel). Removes the
 /// token by its weight, samples a new (k, s), and re-adds it.
+///
+/// `nkw_t_row` is the word-major shadow of the regular topic-word table for the
+/// current word: `nkw_t_row[kk] == nkw[kk][w]`. The s=0 candidate loop reads the
+/// per-topic count of `w` across all topics; in the `nkw[k][w]` layout that is a
+/// strided column walk (one cache miss per topic), whereas `nkw_t_row` is the
+/// contiguous K-length row for `w`, streamed in order. The shadow is kept exactly
+/// in step with `nkw` by applying the identical `+= wt` / `-= wt` to both cells,
+/// so every value read is bit-for-bit the same f64 the `nkw` layout would
+/// supply: the optimisation changes memory layout only, never the arithmetic.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn resample_token_inner<R: Rng>(
     nkw: &mut [Vec<f64>],
+    nkw_t_row: &mut [f64],
     nk0: &mut [f64],
     nkx: &mut [Vec<f64>],
     nk1: &mut [f64],
@@ -696,6 +706,7 @@ fn resample_token_inner<R: Rng>(
     ndk_row[old_z] -= wt;
     if old_s == 0 {
         nkw[old_z][w] -= wt;
+        nkw_t_row[old_z] -= wt;
         nk0[old_z] -= wt;
     } else {
         let j = ki.keyword_index(old_z, w).expect("old s=1 but w not a keyword");
@@ -709,9 +720,11 @@ fn resample_token_inner<R: Rng>(
     weights.fill(0.0);
 
     // s=0 candidate for every topic (always allowed). No keyword lookup here.
+    // `nkw_t_row[kk]` is the contiguous word-major count, bit-identical to
+    // `nkw[kk][w]` but read in cache order.
     for kk in 0..k {
         let ndk_val = ndk_row[kk] + alpha_row[kk];
-        let nkw_val = nkw[kk][w] + beta;
+        let nkw_val = nkw_t_row[kk] + beta;
         let nk0_val = nk0[kk];
         let reg_likelihood = nkw_val / (v_beta + nk0_val);
         let switch_factor_s0 = if kk < num_kw {
@@ -744,6 +757,7 @@ fn resample_token_inner<R: Rng>(
     ndk_row[new_k] += wt;
     if new_s == 0 {
         nkw[new_k][w] += wt;
+        nkw_t_row[new_k] += wt;
         nk0[new_k] += wt;
     } else {
         let j = ki.keyword_index(new_k, w).expect("new s=1 but w not a keyword");
@@ -752,6 +766,20 @@ fn resample_token_inner<R: Rng>(
     }
 
     (new_k, new_s)
+}
+
+/// Word-major shadow of `nkw`: `nkw_t[w][k] == nkw[k][w]`. Built once at the
+/// start of a fit and maintained by the token sampler so the hot s=0 loop reads
+/// each word's per-topic counts contiguously instead of striding down a `nkw`
+/// column. A fit-time artifact, never persisted.
+fn build_nkw_t(nkw: &[Vec<f64>], num_types: usize, num_topics: usize) -> Vec<Vec<f64>> {
+    let mut t = vec![vec![0.0f64; num_topics]; num_types];
+    for (k, row) in nkw.iter().enumerate() {
+        for (w, &c) in row.iter().enumerate() {
+            t[w][k] = c;
+        }
+    }
+    t
 }
 
 /// Scalar params from the model.
@@ -767,11 +795,14 @@ fn sample_params(model: &KeyAtmModel) -> SampleParams {
     }
 }
 
-/// One full sequential Gibbs sweep over all tokens in all documents.
+/// One full sequential Gibbs sweep over all tokens in all documents. `nkw_t` is
+/// the word-major shadow of `model.nkw` (`nkw_t[w][k] == model.nkw[k][w]`), kept
+/// in step so the hot s=0 loop reads each word's counts contiguously.
 fn sweep<R: Rng>(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut [Vec<f64>],
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     rng: &mut R,
@@ -786,7 +817,7 @@ fn sweep<R: Rng>(
             let wt = model.vocab_weights[w];
             let (old_z, old_s) = assignments[d][pos];
             let (new_z, new_s) = resample_token_inner(
-                &mut model.nkw, &mut model.nk0, &mut model.nkx, &mut model.nk1,
+                &mut model.nkw, &mut nkw_t[w], &mut model.nk0, &mut model.nkx, &mut model.nk1,
                 &mut model.ndk[d], &model.l, ki, p, alpha_row, w, wt, old_z, old_s,
                 &mut scratch, rng,
             );
@@ -820,6 +851,7 @@ fn parallel_sweep_keyatm(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut Vec<Vec<f64>>,
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     num_threads: usize,
@@ -865,6 +897,8 @@ fn parallel_sweep_keyatm(
             let mut ndk: Vec<Vec<f64>> = model.ndk[start..end].to_vec();
             let mut asgn: Vec<Vec<(usize, u8)>> = assignments[start..end].to_vec();
             let mut scratch = vec![0.0f64; 2 * p.num_topics];
+            // Worker-local word-major shadow of this worker's `nkw` clone.
+            let mut local_t = build_nkw_t(&nkw, p.num_types, p.num_topics);
             let mut rng = Pcg64Mcg::seed_from_u64(
                 sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
@@ -876,8 +910,8 @@ fn parallel_sweep_keyatm(
                     let wt = vocab_weights[w];
                     let (old_z, old_s) = asgn[li][pos];
                     let (new_z, new_s) = resample_token_inner(
-                        &mut nkw, &mut nk0, &mut nkx, &mut nk1, &mut ndk[li], l, ki, p,
-                        alpha_row, w, wt, old_z, old_s, &mut scratch, &mut rng,
+                        &mut nkw, &mut local_t[w], &mut nk0, &mut nkx, &mut nk1, &mut ndk[li],
+                        l, ki, p, alpha_row, w, wt, old_z, old_s, &mut scratch, &mut rng,
                     );
                     asgn[li][pos] = (new_z, new_s);
                 }
@@ -947,6 +981,10 @@ fn parallel_sweep_keyatm(
             model.nkx[kk][j] = (sumx - wm1 * orig_nkx[kk][j]).max(0.0);
         }
     }
+
+    // Rebuild the word-major shadow from the reconciled `nkw` so the next sweep
+    // reads a consistent table.
+    *nkw_t = build_nkw_t(&model.nkw, p.num_types, k);
 }
 
 /// Run one sweep, choosing the exact sequential path or the approximate parallel
@@ -956,16 +994,17 @@ fn run_sweep<R: Rng>(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut Vec<Vec<f64>>,
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     num_threads: usize,
     rng: &mut R,
 ) {
     if num_threads <= 1 {
-        sweep(model, docs, assignments, ki, doc_alpha, rng);
+        sweep(model, docs, assignments, nkw_t, ki, doc_alpha, rng);
     } else {
         let seed: u64 = rng.gen();
-        parallel_sweep_keyatm(model, docs, assignments, ki, doc_alpha, num_threads, seed);
+        parallel_sweep_keyatm(model, docs, assignments, nkw_t, ki, doc_alpha, num_threads, seed);
     }
 }
 
@@ -1040,9 +1079,10 @@ pub fn fit_keyatm<R: Rng>(
     };
     let mut doc_alpha: Vec<Vec<f64>> = vec![alpha_vec.clone(); docs.len()];
     let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         if estimate_alpha {
             dyn_sample_alpha_state(
                 &mut alpha_vec, num_keyword_topics, 0, docs.len() - 1, &model.ndk, &doc_len,
@@ -1478,9 +1518,10 @@ pub fn fit_keyatm_cov<R: Rng>(
         model.features = Some(features.to_vec());
         model.prior_offset = offset.map(|o| o.to_vec());
     }
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         if opt_interval > 0 && it + 1 > burn_in && (it + 1 - burn_in) % opt_interval == 0 {
             crate::dmr::optimize_lambda(
                 &mut lambda,
@@ -1751,6 +1792,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
 
     let mut prk = vec![vec![0.0f64; num_states]; num_time];
     let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
         // 1. Token (z, s) sweep with each doc's α tied to its segment's state.
@@ -1758,7 +1800,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
             .iter()
             .map(|&t| alphas[r_est[t]].clone())
             .collect();
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         // Snapshot under the (ndk, doc_alpha) pair this sweep just used — coherent
         // smoothing even though r_est/alphas are resampled below.
         draws.maybe_collect(&mut theta_draw_buf, it + 1, &model.ndk, &doc_alpha);
