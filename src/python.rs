@@ -12443,7 +12443,7 @@ impl KeyATM {
                         num_threads=None, optimize_interval=50, burn_in=200, prior_variance=1.0,
                         lbfgs_iters=20, progress_interval=0, prior_offset=None,
                         keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64,
-                        report_interval=None))]
+                        report_interval=None, turbo_alpha_stride=1))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -12467,7 +12467,13 @@ impl KeyATM {
         num_theta_draws: usize,
         convergence_tol: f64,
         report_interval: Option<usize>,
+        turbo_alpha_stride: usize,
     ) -> PyResult<()> {
+        if turbo_alpha_stride < 1 {
+            return Err(PyValueError::new_err(
+                "turbo_alpha_stride must be >= 1 (1 = exact; >1 = approximate, subsample documents in the alpha sampler)",
+            ));
+        }
         // `times` is the canonical cross-model name for a per-document time index
         // (as in DTM); `timestamps` is accepted as an alias. Exactly one.
         let timestamps: Option<&Bound<'_, PyAny>> = match (times, timestamps) {
@@ -12561,6 +12567,14 @@ impl KeyATM {
         if self.cvb0 && (timestamps.is_some() || covariates.is_some() || prior_offset.is_some()) {
             return Err(PyValueError::new_err(
                 "sampler=\"cvb0\" supports only the base keyATM (no timestamps, covariates, or prior_offset)",
+            ));
+        }
+        // The turbo alpha subsampling only applies to the base model's α
+        // slice-sampler; the covariate model learns λ and the dynamic model learns
+        // per-state α, so it has no effect there.
+        if turbo_alpha_stride > 1 && (timestamps.is_some() || covariates.is_some()) {
+            return Err(PyValueError::new_err(
+                "turbo_alpha_stride > 1 applies only to the base keyATM (not the covariate or dynamic model)",
             ));
         }
         let cvb0 = self.cvb0;
@@ -12724,7 +12738,7 @@ impl KeyATM {
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, convergence_tol, &mut rng,
+                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, convergence_tol, turbo_alpha_stride, &mut rng,
                 ),
             };
             (m, corpus)

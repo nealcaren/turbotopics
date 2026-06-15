@@ -2693,6 +2693,7 @@ class KeyATM:
         num_theta_draws: int = 25,
         convergence_tol: float = 0.0,
         report_interval: Optional[int] = None,
+        turbo_alpha_stride: int = 1,
     ) -> None:
         """Fit by collapsed Gibbs. Pass `covariates` (num_docs x F) for the
         covariate keyATM: the document-topic prior becomes a DMR,
@@ -2726,7 +2727,16 @@ class KeyATM:
         samplers). Applies to the base/covariate/dynamic Gibbs backends; ignored
         by the CVB0 backend, which keeps no trace.
 
-        report_interval is a deprecated alias for progress_interval."""
+        report_interval is a deprecated alias for progress_interval.
+
+        turbo_alpha_stride (default 1, exact) is an opt-in approximate speedup
+        for the base model's asymmetric-alpha slice sampler, the dominant
+        non-sweep cost on large corpora. With a stride s > 1 the slice sampler
+        evaluates its Dirichlet-multinomial data term over every s-th document and
+        scales that sum up by s, an unbiased estimate of the full term that touches
+        ~1/s of the documents. It changes the estimated alpha (and therefore the
+        fit), so it is off by default; it applies to the base model only (it errors
+        with covariates or timestamps) and only when estimate_alpha is True."""
         ...
     @property
     def topic_word(self) -> numpy.typing.NDArray[numpy.float64]: ...
