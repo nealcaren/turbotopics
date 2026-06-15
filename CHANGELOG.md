@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-15
+
+### Changed
+
+- `search_k(...).best_k()` no longer falls back to bare `coherence` when no
+  held-out set is supplied. Mean UMass coherence is roughly monotone-decreasing
+  in K, so that fallback silently returned the smallest K in the grid (#167). It
+  now selects the `"frontier"`: the K maximizing `z(coherence) + z(exclusivity)`
+  across the scanned grid — the knee `plot_search_k` draws. The held-out default
+  (`heldout_loglik` / `perplexity`) is unchanged when a held-out set is supplied.
+  This changes the K returned by `best_k()` for grids scored on coherence alone.
+
+### Added
+
+- `SearchKResult.best_k(metric="frontier")` selects the coherence/exclusivity
+  frontier explicitly (requires at least two K values to z-score). Explicit
+  `best_k(metric="coherence")` on a multi-K grid now warns that UMass coherence
+  is roughly monotone in K and recommends `metric="frontier"` or `held_out=`.
+
 ## [0.17.0] - 2026-06-14
 
 ### Added
