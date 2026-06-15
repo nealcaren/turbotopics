@@ -31,7 +31,8 @@ corpus = topica.from_dataframe(df, text_col="text")     # metadata kept aligned
 # corpus.metadata is the surviving rows, already aligned to the documents.
 X, names = topica.design_matrix("~ party + spline(year, df=3)", corpus.metadata)
 
-# Pick K with a safe, direction-aware selector, then fit at that K.
+# Pick K at the coherence/exclusivity frontier (a knee, not a coherence max,
+# which would just return the smallest K), then fit at that K.
 scan = topica.search_k(corpus, [10, 20, 30], model="stm", prevalence=X, iters=200)
 model = topica.STM(num_topics=scan.best_k(), seed=1)
 model.fit(corpus, prevalence=X, prevalence_names=names)

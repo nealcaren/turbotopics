@@ -136,13 +136,53 @@ def test_search_k_best_k_and_directions():
     assert isinstance(res, list) and len(res) == 2
     assert res.directions["coherence"] == "maximize"
     assert res.directions["exclusivity"] == "maximize"
-    # best_k matches a manual max-by-coherence
+    # explicit coherence still maximizes (least-negative), but warns about
+    # monotonicity (#167)
     expected = max(res, key=lambda r: r["coherence"])["k"]
-    assert res.best_k() == expected
-    assert res.best_k("coherence") == expected
+    with pytest.warns(UserWarning, match="monotone"):
+        assert res.best_k("coherence") == expected
     # asking for an absent held-out metric is a clear error, not a silent wrong pick
     with pytest.raises(ValueError):
         res.best_k("heldout_loglik")
+
+
+def test_search_k_best_k_defaults_to_frontier():
+    # #167: with no held-out set, best_k() picks the coherence/exclusivity
+    # frontier (a knee), not bare coherence (which is monotone in K and would
+    # return the grid floor). The frontier default must not warn.
+    docs = [["cat", "dog", "pet"]] * 12 + [["star", "moon", "sky"]] * 12
+    res = topica.search_k(docs, [2, 3, 4], iters=60, num_samples=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # frontier default is silent
+        chosen = res.best_k()
+    assert chosen == res.best_k("frontier")
+    assert chosen in {r["k"] for r in res}
+
+
+def test_frontier_k_is_zscore_argmax():
+    # #167: the frontier is argmax over K of z(coherence)+z(exclusivity), both
+    # maximize. Verify against a hand-built result reproducing the issue's table.
+    from topica.validation import SearchKResult
+    rows = SearchKResult([
+        {"k": 40, "coherence": -108.4, "exclusivity": 0.636},
+        {"k": 60, "coherence": -114.4, "exclusivity": 0.652},
+        {"k": 80, "coherence": -118.4, "exclusivity": 0.657},
+        {"k": 100, "coherence": -125.2, "exclusivity": 0.660},
+    ])
+    # coherence-max would pick the grid floor (40); the frontier picks the knee.
+    assert rows.best_k("frontier") == 60
+    assert rows.best_k() == 60  # frontier is the no-held-out default
+
+
+def test_frontier_needs_two_k():
+    from topica.validation import SearchKResult
+    one = SearchKResult([{"k": 5, "coherence": -10.0, "exclusivity": 0.5}])
+    with pytest.raises(ValueError, match="at least two"):
+        one.best_k("frontier")
+    # a single-K grid falls back to coherence without the monotonicity warning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert one.best_k() == 5
 
 
 def test_search_k_best_k_defaults_to_heldout_when_present():

@@ -721,9 +721,13 @@ class SearchKResult(list):
     optimization direction stamped in and a safe ``best_k`` selector.
 
     It is a ``list`` subclass, so it iterates and indexes exactly like the rows
-    it always returned. The additions remove the trap of sorting the wrong way:
-    ``coherence`` is mean UMass (negative; less-negative is better), so naively
-    taking the minimum picks the worst K.
+    it always returned. The additions remove two traps. The first is sorting the
+    wrong way: ``coherence`` is mean UMass (negative; less-negative is better),
+    so naively taking the minimum picks the worst K. The second is subtler:
+    UMass coherence is roughly *monotone-decreasing* in K, so selecting K by
+    coherence alone returns the smallest K in the grid regardless of the data.
+    ``best_k`` defaults to a coherence/exclusivity *frontier* (a knee, not a
+    maximum) to avoid that, and to the held-out metric when one is supplied.
     """
 
     @property
@@ -732,12 +736,53 @@ class SearchKResult(list):
         present = set().union(*[r.keys() for r in self]) if self else set()
         return {m: d for m, d in SEARCH_K_DIRECTIONS.items() if m in present}
 
-    def best_k(self, metric: str | None = None) -> int:
-        """Return the ``k`` that optimizes ``metric`` in its correct direction.
+    def _frontier_k(self) -> int:
+        """K that maximizes ``z(coherence) + z(exclusivity)`` across the grid.
 
-        ``metric`` defaults to the held-out metric when a held-out set was
-        supplied (``"heldout_loglik"`` for a :class:`Heldout`, ``"perplexity"``
-        for a legacy corpus), otherwise ``"coherence"``. Raises if absent.
+        Each metric is z-scored across the scanned K values (so the two scales
+        are comparable) and added in its own optimization direction. The pick
+        is the K that is jointly high on both — the knee, not either extreme.
+        A metric with zero variance across the grid contributes nothing.
+        """
+        for m in ("coherence", "exclusivity"):
+            if m not in self[0]:
+                raise ValueError(
+                    f"frontier selection needs {m!r} in the results "
+                    f"(present: {sorted(self[0])})"
+                )
+        if len(self) < 2:
+            raise ValueError(
+                "frontier selection needs at least two K values to z-score; "
+                "scan a wider grid or pass a single metric"
+            )
+        score = np.zeros(len(self))
+        for m in ("coherence", "exclusivity"):
+            v = np.array([r[m] for r in self], dtype=np.float64)
+            sd = v.std()
+            if sd > 0:
+                z = (v - v.mean()) / sd
+                score += z if SEARCH_K_DIRECTIONS[m] == "maximize" else -z
+        return int(self[int(np.argmax(score))]["k"])
+
+    def best_k(self, metric: str | None = None) -> int:
+        """Return the ``k`` chosen by ``metric``.
+
+        With ``metric=None`` (the default), selection is:
+
+        - the held-out metric when a held-out set was supplied
+          (``"heldout_loglik"`` for a :class:`Heldout`, ``"perplexity"`` for a
+          legacy corpus) — the principled, non-monotone criterion;
+        - otherwise the ``"frontier"`` (see below), since bare ``"coherence"``
+          is roughly monotone in K and would just return the grid floor.
+
+        ``metric`` may also be given explicitly:
+
+        - ``"frontier"`` — the K maximizing ``z(coherence) + z(exclusivity)``,
+          the knee the ``plot_search_k`` curve shows (needs at least two K).
+        - any column metric (``"coherence"``, ``"exclusivity"``,
+          ``"heldout_loglik"``, ``"perplexity"``), optimized in its correct
+          direction. Asking for bare ``"coherence"`` on a multi-K grid warns,
+          because UMass coherence is roughly monotone in K.
         """
         if not self:
             raise ValueError("search_k returned no rows")
@@ -746,16 +791,30 @@ class SearchKResult(list):
                 metric = "heldout_loglik"
             elif "perplexity" in self[0]:
                 metric = "perplexity"
+            elif len(self) >= 2 and "coherence" in self[0] and "exclusivity" in self[0]:
+                metric = "frontier"
             else:
                 metric = "coherence"
+        if metric == "frontier":
+            return self._frontier_k()
         if metric not in SEARCH_K_DIRECTIONS:
             raise ValueError(
-                f"unknown metric {metric!r}; choose from {sorted(SEARCH_K_DIRECTIONS)}"
+                f"unknown metric {metric!r}; choose 'frontier' or one of "
+                f"{sorted(SEARCH_K_DIRECTIONS)}"
             )
         if metric not in self[0]:
             raise ValueError(
                 f"metric {metric!r} not in results (present: {sorted(self[0])}); "
                 f"pass held_out= to get a held-out metric"
+            )
+        if metric == "coherence" and len(self) >= 2:
+            warnings.warn(
+                "best_k(metric='coherence'): mean UMass coherence is roughly "
+                "monotone-decreasing in K, so this tends to return the smallest "
+                "K in the grid. Prefer metric='frontier' (coherence/exclusivity "
+                "knee) or pass held_out= for held-out log-likelihood.",
+                UserWarning,
+                stacklevel=2,
             )
         pick = max if SEARCH_K_DIRECTIONS[metric] == "maximize" else min
         return int(pick(self, key=lambda r: r[metric])["k"])
@@ -786,8 +845,10 @@ def search_k(
     ``exclusivity`` (mean top-word exclusivity), and — when ``held_out`` is
     supplied — a held-out quality metric. The result also carries
     ``.directions`` (whether higher or lower is better per metric) and a
-    ``.best_k(metric=...)`` selector, so auto-selection cannot sort the wrong way
-    (``coherence`` is negative, so the maximum, not the minimum, is best).
+    ``.best_k(metric=...)`` selector. ``best_k`` defaults to the held-out metric
+    when one is supplied, otherwise to a coherence/exclusivity frontier (a knee),
+    because bare UMass coherence is roughly monotone in K and would just return
+    the smallest K scanned.
 
     Two held-out paths are supported, determined by the type of ``held_out``:
 
@@ -1045,7 +1106,8 @@ def plot_search_k(rows, *, metrics=("coherence", "exclusivity"), ax=None):
     """Plot :func:`search_k` results: each metric against the number of topics.
 
     Researchers read this curve to choose `K`: coherence and exclusivity usually
-    trade off, so the goal is a knee, not a maximum. Each metric gets its own
+    trade off, so the goal is a knee, not a maximum. ``rows.best_k()`` returns
+    that knee directly (the ``"frontier"`` selector). Each metric gets its own
     y-axis (they live on different scales). ``rows`` is the list returned by
     :func:`search_k`; ``metrics`` selects which of its keys to draw (any of
     ``"coherence"``, ``"exclusivity"``, ``"perplexity"``, ``"heldout_loglik"``).
