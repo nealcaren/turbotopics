@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-06-15
+
 ### Changed
 
 - Faster LDA, STM/CTM, and keyATM fits, with bit-for-bit identical results
