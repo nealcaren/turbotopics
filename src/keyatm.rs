@@ -666,10 +666,20 @@ struct SampleParams {
 /// count tables (not the whole model), so it can run against either the model's
 /// own tables (sequential) or a worker's local clones (parallel). Removes the
 /// token by its weight, samples a new (k, s), and re-adds it.
+///
+/// `nkw_t_row` is the word-major shadow of the regular topic-word table for the
+/// current word: `nkw_t_row[kk] == nkw[kk][w]`. The s=0 candidate loop reads the
+/// per-topic count of `w` across all topics; in the `nkw[k][w]` layout that is a
+/// strided column walk (one cache miss per topic), whereas `nkw_t_row` is the
+/// contiguous K-length row for `w`, streamed in order. The shadow is kept exactly
+/// in step with `nkw` by applying the identical `+= wt` / `-= wt` to both cells,
+/// so every value read is bit-for-bit the same f64 the `nkw` layout would
+/// supply: the optimisation changes memory layout only, never the arithmetic.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn resample_token_inner<R: Rng>(
     nkw: &mut [Vec<f64>],
+    nkw_t_row: &mut [f64],
     nk0: &mut [f64],
     nkx: &mut [Vec<f64>],
     nk1: &mut [f64],
@@ -696,6 +706,7 @@ fn resample_token_inner<R: Rng>(
     ndk_row[old_z] -= wt;
     if old_s == 0 {
         nkw[old_z][w] -= wt;
+        nkw_t_row[old_z] -= wt;
         nk0[old_z] -= wt;
     } else {
         let j = ki.keyword_index(old_z, w).expect("old s=1 but w not a keyword");
@@ -709,9 +720,11 @@ fn resample_token_inner<R: Rng>(
     weights.fill(0.0);
 
     // s=0 candidate for every topic (always allowed). No keyword lookup here.
+    // `nkw_t_row[kk]` is the contiguous word-major count, bit-identical to
+    // `nkw[kk][w]` but read in cache order.
     for kk in 0..k {
         let ndk_val = ndk_row[kk] + alpha_row[kk];
-        let nkw_val = nkw[kk][w] + beta;
+        let nkw_val = nkw_t_row[kk] + beta;
         let nk0_val = nk0[kk];
         let reg_likelihood = nkw_val / (v_beta + nk0_val);
         let switch_factor_s0 = if kk < num_kw {
@@ -744,6 +757,7 @@ fn resample_token_inner<R: Rng>(
     ndk_row[new_k] += wt;
     if new_s == 0 {
         nkw[new_k][w] += wt;
+        nkw_t_row[new_k] += wt;
         nk0[new_k] += wt;
     } else {
         let j = ki.keyword_index(new_k, w).expect("new s=1 but w not a keyword");
@@ -752,6 +766,20 @@ fn resample_token_inner<R: Rng>(
     }
 
     (new_k, new_s)
+}
+
+/// Word-major shadow of `nkw`: `nkw_t[w][k] == nkw[k][w]`. Built once at the
+/// start of a fit and maintained by the token sampler so the hot s=0 loop reads
+/// each word's per-topic counts contiguously instead of striding down a `nkw`
+/// column. A fit-time artifact, never persisted.
+fn build_nkw_t(nkw: &[Vec<f64>], num_types: usize, num_topics: usize) -> Vec<Vec<f64>> {
+    let mut t = vec![vec![0.0f64; num_topics]; num_types];
+    for (k, row) in nkw.iter().enumerate() {
+        for (w, &c) in row.iter().enumerate() {
+            t[w][k] = c;
+        }
+    }
+    t
 }
 
 /// Scalar params from the model.
@@ -767,11 +795,14 @@ fn sample_params(model: &KeyAtmModel) -> SampleParams {
     }
 }
 
-/// One full sequential Gibbs sweep over all tokens in all documents.
+/// One full sequential Gibbs sweep over all tokens in all documents. `nkw_t` is
+/// the word-major shadow of `model.nkw` (`nkw_t[w][k] == model.nkw[k][w]`), kept
+/// in step so the hot s=0 loop reads each word's counts contiguously.
 fn sweep<R: Rng>(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut [Vec<f64>],
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     rng: &mut R,
@@ -786,7 +817,7 @@ fn sweep<R: Rng>(
             let wt = model.vocab_weights[w];
             let (old_z, old_s) = assignments[d][pos];
             let (new_z, new_s) = resample_token_inner(
-                &mut model.nkw, &mut model.nk0, &mut model.nkx, &mut model.nk1,
+                &mut model.nkw, &mut nkw_t[w], &mut model.nk0, &mut model.nkx, &mut model.nk1,
                 &mut model.ndk[d], &model.l, ki, p, alpha_row, w, wt, old_z, old_s,
                 &mut scratch, rng,
             );
@@ -820,6 +851,7 @@ fn parallel_sweep_keyatm(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut Vec<Vec<f64>>,
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     num_threads: usize,
@@ -865,6 +897,8 @@ fn parallel_sweep_keyatm(
             let mut ndk: Vec<Vec<f64>> = model.ndk[start..end].to_vec();
             let mut asgn: Vec<Vec<(usize, u8)>> = assignments[start..end].to_vec();
             let mut scratch = vec![0.0f64; 2 * p.num_topics];
+            // Worker-local word-major shadow of this worker's `nkw` clone.
+            let mut local_t = build_nkw_t(&nkw, p.num_types, p.num_topics);
             let mut rng = Pcg64Mcg::seed_from_u64(
                 sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
@@ -876,8 +910,8 @@ fn parallel_sweep_keyatm(
                     let wt = vocab_weights[w];
                     let (old_z, old_s) = asgn[li][pos];
                     let (new_z, new_s) = resample_token_inner(
-                        &mut nkw, &mut nk0, &mut nkx, &mut nk1, &mut ndk[li], l, ki, p,
-                        alpha_row, w, wt, old_z, old_s, &mut scratch, &mut rng,
+                        &mut nkw, &mut local_t[w], &mut nk0, &mut nkx, &mut nk1, &mut ndk[li],
+                        l, ki, p, alpha_row, w, wt, old_z, old_s, &mut scratch, &mut rng,
                     );
                     asgn[li][pos] = (new_z, new_s);
                 }
@@ -947,6 +981,10 @@ fn parallel_sweep_keyatm(
             model.nkx[kk][j] = (sumx - wm1 * orig_nkx[kk][j]).max(0.0);
         }
     }
+
+    // Rebuild the word-major shadow from the reconciled `nkw` so the next sweep
+    // reads a consistent table.
+    *nkw_t = build_nkw_t(&model.nkw, p.num_types, k);
 }
 
 /// Run one sweep, choosing the exact sequential path or the approximate parallel
@@ -956,16 +994,17 @@ fn run_sweep<R: Rng>(
     model: &mut KeyAtmModel,
     docs: &[Vec<u32>],
     assignments: &mut [Vec<(usize, u8)>],
+    nkw_t: &mut Vec<Vec<f64>>,
     ki: &KeywordIndex,
     doc_alpha: &[Vec<f64>],
     num_threads: usize,
     rng: &mut R,
 ) {
     if num_threads <= 1 {
-        sweep(model, docs, assignments, ki, doc_alpha, rng);
+        sweep(model, docs, assignments, nkw_t, ki, doc_alpha, rng);
     } else {
         let seed: u64 = rng.gen();
-        parallel_sweep_keyatm(model, docs, assignments, ki, doc_alpha, num_threads, seed);
+        parallel_sweep_keyatm(model, docs, assignments, nkw_t, ki, doc_alpha, num_threads, seed);
     }
 }
 
@@ -1007,6 +1046,7 @@ pub fn fit_keyatm<R: Rng>(
     num_threads: usize,
     draws: ThetaDrawOpts,
     convergence_tol: f64,
+    alpha_stride: usize,
     rng: &mut R,
 ) -> KeyAtmModel {
     assert_eq!(
@@ -1040,13 +1080,14 @@ pub fn fit_keyatm<R: Rng>(
     };
     let mut doc_alpha: Vec<Vec<f64>> = vec![alpha_vec.clone(); docs.len()];
     let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         if estimate_alpha {
             dyn_sample_alpha_state(
                 &mut alpha_vec, num_keyword_topics, 0, docs.len() - 1, &model.ndk, &doc_len,
-                1.0, 1.0, 2.0, 1.0, min_v, max_v, rng,
+                1.0, 1.0, 2.0, 1.0, min_v, max_v, alpha_stride, rng,
             );
             for row in doc_alpha.iter_mut() {
                 row.clone_from(&alpha_vec);
@@ -1478,9 +1519,10 @@ pub fn fit_keyatm_cov<R: Rng>(
         model.features = Some(features.to_vec());
         model.prior_offset = offset.map(|o| o.to_vec());
     }
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         if opt_interval > 0 && it + 1 > burn_in && (it + 1 - burn_in) % opt_interval == 0 {
             crate::dmr::optimize_lambda(
                 &mut lambda,
@@ -1542,6 +1584,42 @@ fn dyn_alpha_loglik(
     loglik
 }
 
+/// Approximate `dyn_alpha_loglik` (turbo): evaluates the per-document Dirichlet-
+/// multinomial term over every `stride`-th document and scales that sum up by the
+/// inverse sampling fraction, so the slice sampler sees an unbiased estimate of
+/// the full data term while touching only `~1/stride` of the documents. The
+/// Gamma prior term is left unscaled (it does not depend on the corpus size).
+/// `stride == 1` reduces to the exact `dyn_alpha_loglik`. Used only on the opt-in
+/// `turbo_alpha_stride` path; it changes the estimated α and therefore the fit.
+fn dyn_alpha_loglik_sub(
+    alpha: &[f64],
+    k: usize,
+    doc_start: usize,
+    doc_end: usize,
+    ndk: &[Vec<f64>],
+    doc_len: &[f64],
+    prior_shape: f64,
+    prior_scale: f64,
+    stride: usize,
+) -> f64 {
+    if stride <= 1 {
+        return dyn_alpha_loglik(alpha, k, doc_start, doc_end, ndk, doc_len, prior_shape, prior_scale);
+    }
+    let alpha_sum: f64 = alpha.iter().sum();
+    let fixed = lgamma(alpha_sum) - lgamma(alpha[k]);
+    let mut data = 0.0f64;
+    let mut sampled = 0usize;
+    let mut d = doc_start;
+    while d <= doc_end {
+        data += fixed + lgamma(ndk[d][k] + alpha[k]) - lgamma(doc_len[d] + alpha_sum);
+        sampled += 1;
+        d += stride;
+    }
+    let total = doc_end - doc_start + 1;
+    let scale = total as f64 / sampled.max(1) as f64;
+    gammapdfln(alpha[k], prior_shape, prior_scale) + data * scale
+}
+
 /// Pólya (Dirichlet-multinomial) log-likelihood of all documents in time
 /// segment `[doc_start, doc_end]` under prior `alpha`. keyATM's `polyapdfln`.
 fn dyn_polyapdfln(
@@ -1568,6 +1646,12 @@ fn dyn_polyapdfln(
 /// documents `[doc_start, doc_end]` that currently belong to the state. Keyword
 /// topics use the Gamma(`eta1`, `eta2`) prior, regular topics Gamma(`eta1_reg`,
 /// `eta2_reg`). Mirrors keyATM's `sample_alpha_state`.
+///
+/// `stride` is the opt-in turbo subsampling stride for the per-document data
+/// term: `1` is exact (every document contributes); `> 1` evaluates only every
+/// `stride`-th document and scales the data term up by the inverse fraction, an
+/// approximation that trades a small bias in the estimated α for a large cut in
+/// the slice sampler's lgamma cost (the dominant non-sweep cost on large corpora).
 #[allow(clippy::too_many_arguments)]
 fn dyn_sample_alpha_state<R: Rng>(
     alpha: &mut [f64],
@@ -1582,6 +1666,7 @@ fn dyn_sample_alpha_state<R: Rng>(
     eta2_reg: f64,
     min_v: f64,
     max_v: f64,
+    stride: usize,
     rng: &mut R,
 ) {
     const MAX_SHRINK_TIME: usize = 200;
@@ -1597,7 +1682,7 @@ fn dyn_sample_alpha_state<R: Rng>(
 
         let keep = alpha[k];
         let store_loglik =
-            dyn_alpha_loglik(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale);
+            dyn_alpha_loglik_sub(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale, stride);
 
         let mut start = min_v;
         let mut end = max_v;
@@ -1608,7 +1693,7 @@ fn dyn_sample_alpha_state<R: Rng>(
             let new_p = start + (end - start) * rng.gen::<f64>();
             alpha[k] = new_p / (1.0 - new_p); // expandp
             let new_loglik =
-                dyn_alpha_loglik(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale);
+                dyn_alpha_loglik_sub(alpha, k, doc_start, doc_end, ndk, doc_len, shape, scale, stride);
             let new_likelihood = new_loglik - 2.0 * (1.0 - new_p).ln();
 
             if slice_ < new_likelihood {
@@ -1751,6 +1836,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
 
     let mut prk = vec![vec![0.0f64; num_states]; num_time];
     let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
+    let mut nkw_t = build_nkw_t(&model.nkw, num_types, num_topics);
 
     for it in 0..iters {
         // 1. Token (z, s) sweep with each doc's α tied to its segment's state.
@@ -1758,7 +1844,7 @@ pub fn fit_keyatm_dynamic<R: Rng>(
             .iter()
             .map(|&t| alphas[r_est[t]].clone())
             .collect();
-        run_sweep(&mut model, docs, &mut assignments, &ki, &doc_alpha, num_threads, rng);
+        run_sweep(&mut model, docs, &mut assignments, &mut nkw_t, &ki, &doc_alpha, num_threads, rng);
         // Snapshot under the (ndk, doc_alpha) pair this sweep just used — coherent
         // smoothing even though r_est/alphas are resampled below.
         draws.maybe_collect(&mut theta_draw_buf, it + 1, &model.ndk, &doc_alpha);
@@ -1794,14 +1880,14 @@ pub fn fit_keyatm_dynamic<R: Rng>(
                     );
                     dyn_sample_alpha_state(
                         alpha, num_keyword_topics, d_start, d_end, ndk, &doc_len,
-                        eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, &mut srng,
+                        eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, 1, &mut srng,
                     );
                 });
         } else {
             for (r, &(d_start, d_end)) in ranges.iter().enumerate() {
                 dyn_sample_alpha_state(
                     &mut alphas[r], num_keyword_topics, d_start, d_end, &model.ndk, &doc_len,
-                    eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, rng,
+                    eta1, eta2, eta1_reg, eta2_reg, min_v, max_v, 1, rng,
                 );
             }
         }
@@ -1969,7 +2055,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 200, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng,
         );
 
         // Helper: block with max probability mass in topic_word(k).
@@ -2070,7 +2156,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(7);
         let model = fit_keyatm(
-            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
+            &docs, v, 4, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 50, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng,
         );
 
         let rates = model.keyword_rate();
@@ -2106,7 +2192,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
+            &docs, v, 3, &keywords, 0.5, 0.1, 0.5, 1.0, 1.0, 30, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng,
         );
 
         let d = docs.len();
@@ -2227,8 +2313,8 @@ mod tests {
         let mut r1 = ChaCha8Rng::seed_from_u64(77);
         let mut r2 = ChaCha8Rng::seed_from_u64(77);
 
-        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r1);
-        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut r2);
+        let m1 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut r1);
+        let m2 = fit_keyatm(&docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 40, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut r2);
 
         assert_eq!(
             m1.topic_word_all(),
@@ -2258,7 +2344,7 @@ mod tests {
 
         let mut rng = ChaCha8Rng::seed_from_u64(3);
         let model = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 10, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng,
         );
         let h = &model.log_likelihood_history;
         // iters=60, interval=10 -> sweeps 10,20,30,40,50,60.
@@ -2274,7 +2360,7 @@ mod tests {
         // interval 0 disables tracing.
         let mut rng2 = ChaCha8Rng::seed_from_u64(3);
         let none = fit_keyatm(
-            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng2,
+            &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true, WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng2,
         );
         assert!(none.log_likelihood_history.is_empty());
     }
@@ -2289,11 +2375,40 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(77);
         let m = fit_keyatm(
             &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 20, 0, true,
-            WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, &mut rng,
+            WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, 1, &mut rng,
         );
         let base = crate::conformance::check_conformance(&m);
         assert!(base.is_empty(), "check_conformance: {:?}", base);
         let dir = crate::conformance::check_dirichlet(&m);
         assert!(dir.is_empty(), "check_dirichlet: {:?}", dir);
+    }
+
+    /// Turbo: `alpha_stride = 1` must reproduce the exact alpha-sampler path
+    /// bit-for-bit (it is the same code path), and `> 1` must stay deterministic
+    /// for a fixed seed.
+    #[test]
+    fn turbo_alpha_stride_one_is_exact_and_higher_is_deterministic() {
+        let v = 40usize;
+        let docs: Vec<Vec<u32>> = (0..400usize)
+            .map(|d| (0..6).map(|i| ((i + d * 5) % v) as u32).collect())
+            .collect();
+        let keywords: Vec<Vec<usize>> = vec![vec![0, 1], vec![10, 11], vec![]];
+        let f = |stride: usize, seed: u64| {
+            let mut r = ChaCha8Rng::seed_from_u64(seed);
+            fit_keyatm(
+                &docs, v, 3, &keywords, 0.1, 0.1, 0.5, 1.0, 1.0, 60, 0, true,
+                WeightScheme::None, 1, ThetaDrawOpts::new(false, 0, 0), 0.0, stride, &mut r,
+            )
+        };
+        // stride = 1 is the exact path: identical to a no-stride fit.
+        let exact = f(1, 5);
+        let exact2 = f(1, 5);
+        assert_eq!(exact.topic_word_all(), exact2.topic_word_all());
+        assert_eq!(exact.doc_topic(), exact2.doc_topic());
+        // stride > 1 is deterministic for a fixed seed.
+        let t_a = f(4, 9);
+        let t_b = f(4, 9);
+        assert_eq!(t_a.topic_word_all(), t_b.topic_word_all());
+        assert_eq!(t_a.doc_topic(), t_b.doc_topic());
     }
 }

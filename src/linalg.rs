@@ -48,17 +48,25 @@ fn invert_lower(l: &[f64], n: usize) -> Vec<f64> {
 }
 
 /// Inverse of an SPD matrix from its Cholesky factor: `A⁻¹ = L⁻ᵀ L⁻¹`.
+///
+/// The result is symmetric, so only the lower triangle (`j ≤ i`) is summed and
+/// mirrored. `L⁻¹` is lower-triangular, so `L⁻¹_{ki}` is nonzero only for
+/// `k ≥ i`: the inner product `Σ_k L⁻¹_{ki} L⁻¹_{kj}` for `j ≤ i` starts at
+/// `k = i`. Both shortcuts keep each entry's summation order identical to the
+/// dense `k = 0..n` loop (the skipped terms are exact zeros), so the inverse is
+/// bit-for-bit identical while doing roughly a sixth of the multiplies.
 pub fn spd_inverse_from_chol(l: &[f64], n: usize) -> Vec<f64> {
     let li = invert_lower(l, n);
     let mut inv = vec![0.0f64; n * n];
-    // (L⁻ᵀ L⁻¹)_{ij} = Σ_k L⁻¹_{ki} L⁻¹_{kj}
+    // (L⁻ᵀ L⁻¹)_{ij} = Σ_k L⁻¹_{ki} L⁻¹_{kj}, with L⁻¹ lower-triangular.
     for i in 0..n {
-        for j in 0..n {
+        for j in 0..=i {
             let mut s = 0.0;
-            for k in 0..n {
+            for k in i..n {
                 s += li[k * n + i] * li[k * n + j];
             }
             inv[i * n + j] = s;
+            inv[j * n + i] = s;
         }
     }
     inv

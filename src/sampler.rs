@@ -110,18 +110,27 @@ pub(crate) fn sample_doc<R: Rng>(
     if doc_len == 0 { return; }
 
     // --- Populate local topic counts for this document ---
-    for t in 0..num_topics { local_topic_counts[t] = 0; }
-    for &topic in &doc_topics[doc_idx] {
-        local_topic_counts[topic as usize] += 1;
-    }
-
+    //
+    // Both `local_topic_counts` (all zero) and `cached_coefficients` (the
+    // smoothing-only value α[t]/denom for every t) hold their inter-document
+    // invariant on entry, restored by the reset loop at the end of the previous
+    // document. We therefore touch only the topics this document actually uses
+    // (O(doc_len + nonzero·log nonzero)) instead of scanning all K topics — a
+    // large win at high K with short documents, and bit-identical: the set of
+    // nonzero entries and their ascending order in `local_topic_index` are
+    // exactly what the old O(K) scan produced.
     let mut non_zero_topics: usize = 0;
-    for t in 0..num_topics {
-        if local_topic_counts[t] > 0 {
-            local_topic_index[non_zero_topics] = t as u32;
+    for &topic in &doc_topics[doc_idx] {
+        let t = topic as usize;
+        if local_topic_counts[t] == 0 {
+            local_topic_index[non_zero_topics] = topic;
             non_zero_topics += 1;
         }
+        local_topic_counts[t] += 1;
     }
+    // Restore the ascending-by-topic order the linear scan guaranteed; the
+    // sampler then maintains this order incrementally for the rest of the doc.
+    local_topic_index[..non_zero_topics].sort_unstable();
 
     let mut topic_beta_mass: f64 = 0.0;
     for di in 0..non_zero_topics {
@@ -316,9 +325,14 @@ pub(crate) fn sample_doc<R: Rng>(
             / (tokens_per_topic[new_topic] as f64 + beta_sum);
     }
 
-    // Reset cached_coefficients to smoothing-only values for the next document.
+    // Restore both inter-document invariants over only the touched topics:
+    // cached_coefficients back to its smoothing-only value, and
+    // local_topic_counts back to zero. At this point the document's tokens are
+    // still distributed across exactly local_topic_index[0..non_zero_topics],
+    // so zeroing those entries clears the whole array without an O(K) wipe.
     for di in 0..non_zero_topics {
         let t = local_topic_index[di] as usize;
         cached_coefficients[t] = alpha[t] / (tokens_per_topic[t] as f64 + beta_sum);
+        local_topic_counts[t] = 0;
     }
 }

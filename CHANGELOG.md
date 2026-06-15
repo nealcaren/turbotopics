@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once released.
 
 ## [Unreleased]
 
+### Changed
+
+- Faster LDA, STM/CTM, and keyATM fits, with bit-for-bit identical results
+  (same seed and thread count) — the default path is unchanged:
+  - **STM/CTM**: the L-BFGS E-step now evaluates value and gradient in one fused
+    pass and exploits the symmetry of the Hessian and its inverse, cutting the
+    dominant per-document O(K^3) work. Up to ~2.2x faster at K=200, ~1.5x at K=60.
+  - **keyATM**: a word-major shadow of the topic-word counts makes the per-token
+    s=0 candidate loop a contiguous cache-friendly read instead of a strided
+    column walk. Up to ~1.6x faster on large, high-K/V corpora.
+  - **LDA**: the SparseLDA per-document setup is built directly from the
+    document's own token assignments instead of an O(K) zero-and-scan, helping
+    short-document and high-K fits (~1.5-1.9x) at no cost to long documents.
+
+### Added
+
+- Opt-in "turbo" approximations that trade exactness for speed, off by default
+  (the default path stays bit-identical):
+  - `LDA.fit(turbo_merge_every=m)` runs `m` parallel sweeps against private count
+    tables before reconciling, amortizing the per-sweep merge. Helps when the
+    merge dominates (large, wide-vocabulary, many-thread fits); it can hurt
+    smaller corpora, so it is documented as situational. `m=1` (default) is exact.
+  - `KeyATM.fit(turbo_alpha_stride=s)` subsamples documents in the base alpha
+    slice-sampler (an unbiased estimate of the data term at ~1/s the cost),
+    ~2.3-2.5x faster at `s>=4` with topic coherence preserved and a moderate
+    shift in per-document topic mixtures. `s=1` (default) is exact. Base model
+    only, with `estimate_alpha`.
+
 ## [0.18.0] - 2026-06-15
 
 ### Changed

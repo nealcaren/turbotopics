@@ -1167,10 +1167,29 @@ impl LDA {
     /// is compared; if it falls below `convergence_tol` the loop stops and
     /// :attr:`converged` is set to ``True``. When 0 (default), the full `iters`
     /// sweeps always run (default behavior is unchanged, bit-for-bit identical).
+    ///
+    /// `turbo_merge_every` (default 1, exact) is an opt-in approximate-speed knob
+    /// for multi-threaded runs only. The parallel sampler partitions documents
+    /// across workers and reconciles the shared topic-word counts after every
+    /// sweep; that per-sweep merge is the thread-scaling ceiling. Setting this to
+    /// ``m > 1`` lets each worker run ``m`` sweeps against its own counts before
+    /// one merge, so the table is synchronized once per ``m`` sweeps. This is
+    /// approximate (workers sample against staler cross-partition counts the
+    /// deeper into a batch they go), so results differ from the exact path and
+    /// are not bit-reproducible against it; with ``m = 1`` (or single-threaded,
+    /// or the LightLDA/WarpLDA/CVB0 samplers) the exact per-sweep path runs and
+    /// is unchanged. We measured the tradeoff on a large wide-vocabulary corpus
+    /// (30k docs, 30k vocabulary, K=400, 8 threads): ``m = 3`` ran 1.55x faster
+    /// for a 0.010 drop in c_npmi topic coherence. The win appears only when the
+    /// merge actually dominates (large corpus, wide vocabulary, high K, many
+    /// threads); on smaller corpora it does not help and can run slower, so leave
+    /// it at the default unless profiling shows the merge is your bottleneck.
+    /// Recommended range when it helps: 3 to 4.
     #[pyo3(signature = (data, *, iters=1000, num_samples=5, sample_interval=25,
                         progress=None, progress_interval=50,
                         keep_theta_draws=true, num_theta_draws=25,
-                        convergence_tol=0.0_f64, check_every=10_usize, num_threads=None))]
+                        convergence_tol=0.0_f64, check_every=10_usize, num_threads=None,
+                        turbo_merge_every=1_usize))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -1186,6 +1205,7 @@ impl LDA {
         convergence_tol: f64,
         check_every: usize,
         num_threads: Option<usize>,
+        turbo_merge_every: usize,
     ) -> PyResult<()> {
         // Accept either a Corpus or a list[list[str]].
         let corpus: corpus::Corpus = if let Ok(c) = data.extract::<Corpus>() {
@@ -1245,6 +1265,15 @@ impl LDA {
         let burn_in = self.burn_in;
         // num_threads from fit() overrides the constructor default for this run.
         let num_threads = num_threads.unwrap_or(self.num_threads).max(1);
+        // turbo_merge_every (default 1): in the approximate-parallel (num_threads
+        // > 1) path, defer the per-sweep count-table reconciliation, merging once
+        // every this-many sweeps instead. 1 keeps the exact per-sweep path
+        // (bit-identical). Has no effect single-threaded (the sequential sampler
+        // is always exact) or on the LightLDA/WarpLDA/CVB0 samplers.
+        if turbo_merge_every == 0 {
+            return Err(PyValueError::new_err("turbo_merge_every must be >= 1"));
+        }
+        let merge_every = turbo_merge_every.max(1);
         let seed_base = self.seed;
         let light = self.light;
         let warp = self.warp;
@@ -1334,19 +1363,33 @@ impl LDA {
         // re-acquires it. allow_threads returns the owned model + accumulators.
         let (acc_phi, acc_theta, theta_draw_buf, ll_history, converged, model) =
             py.allow_threads(move || {
-            // One Gibbs sweep: exact sequential path when single-threaded,
-            // approximate parallel sampling otherwise. `sweep` seeds the
-            // per-worker RNGs so parallel runs are deterministic.
+            // One logical Gibbs sweep: exact sequential path when
+            // single-threaded, approximate parallel sampling otherwise. `sweep`
+            // seeds the per-worker RNGs so parallel runs are deterministic.
+            //
+            // In turbo mode (merge_every > 1, parallel only) sampling proceeds in
+            // batches: each `do_sweep` call runs `merge_every` worker sweeps and
+            // reconciles once, returning a globally consistent model. The caller
+            // therefore steps the iteration counter by `merge_every` per call and
+            // runs the per-iteration bookkeeping (θ-draws, α/β optimization,
+            // convergence checks) at those batch boundaries, where the model is
+            // consistent. With merge_every == 1 this is the exact per-sweep path.
             let mut sweep: u64 = 0;
+            // logical iterations advanced by one do_sweep call.
+            let step = if num_threads <= 1 { 1 } else { merge_every };
+            // `batch` is the number of worker sweeps to run before reconciling;
+            // it is `step` for full windows and the remainder for a short tail
+            // window so the run never samples more than `iters` total sweeps.
             let mut do_sweep =
-                |model: &mut TopicModel, rng: &mut Pcg64Mcg| {
-                    sweep += 1;
+                |model: &mut TopicModel, rng: &mut Pcg64Mcg, batch: usize| {
                     if num_threads <= 1 {
+                        sweep += 1;
                         sampler::run_iteration(model, &corpus, rng);
                     } else {
+                        sweep += 1;
                         let s = seed_base
                             .wrapping_add(sweep.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-                        parallel_sweep(model, &corpus.docs, num_threads, s);
+                        parallel_sweep_batched(model, &corpus.docs, num_threads, s, batch.max(1));
                     }
                 };
             let mut theta_draw_buf: Vec<Vec<Vec<f32>>> = Vec::new();
@@ -1354,8 +1397,16 @@ impl LDA {
             let mut converged = false;
 
             // ---- main training loop (ports src/bin/train.rs) ----
-            for iter in 1..=iters {
-                do_sweep(&mut model, &mut rng);
+            // `step` is 1 except in turbo mode, where each do_sweep advances
+            // `step` logical iterations. We sample at the start of each window
+            // and run the per-iteration bookkeeping at its end (where the model
+            // is freshly reconciled), so θ-draws/optimization/convergence always
+            // observe a consistent global state.
+            let mut iter = 0usize;
+            while iter < iters {
+                let batch = (iters - iter).min(step);
+                do_sweep(&mut model, &mut rng, batch);
+                iter += batch;
 
                 if draw_thin > 0 && iter % draw_thin == 0 {
                     push_capped(
@@ -1414,8 +1465,13 @@ impl LDA {
             let mut acc_theta = vec![vec![0.0f64; num_topics]; num_docs];
 
             for _ in 0..num_samples {
-                for _ in 0..sample_interval {
-                    do_sweep(&mut model, &mut rng);
+                // Step through `sample_interval` sweeps; in turbo mode each
+                // do_sweep covers a batch of `step`, reconciling once per batch.
+                let mut done = 0usize;
+                while done < sample_interval {
+                    let batch = (sample_interval - done).min(step);
+                    do_sweep(&mut model, &mut rng, batch);
+                    done += batch;
                 }
                 accumulate_phi(&model, &mut acc_phi);
                 accumulate_theta(&model, &corpus, &mut acc_theta);
@@ -2508,7 +2564,31 @@ struct WorkerOut {
 /// model. Token bookkeeping stays consistent (each token belongs to exactly one
 /// worker); only the sampling distribution is approximated. `sweep_seed` makes
 /// the result deterministic for a fixed `num_threads`.
-fn parallel_sweep(model: &mut TopicModel, docs: &[Vec<u32>], num_threads: usize, sweep_seed: u64) {
+/// Approximate-parallel sampling with a deferred merge (turbo mode). Each worker
+/// runs `batch` consecutive Gibbs sweeps over its document partition against its
+/// own private count tables before any reconciliation, so the global topic-word
+/// counts are synchronized once per `batch` sweeps instead of every sweep. This
+/// trades a small amount of mixing accuracy (workers sample against staler
+/// cross-partition counts the deeper they are into a batch) for `batch`× fewer
+/// O(V·K) reconciliations and per-worker table clones — the per-sweep merge is
+/// the thread-scaling ceiling, so deferring it lifts that ceiling. With
+/// `batch == 1` this is the exact per-sweep path and is bit-identical to it.
+///
+/// The reconciliation is the same exact additive formula used by the per-sweep
+/// path: each worker only ever touches its own documents' tokens relative to the
+/// shared `original` snapshot, so summing the workers and subtracting (W−1)
+/// copies of the snapshot recovers the combined state regardless of how many
+/// sweeps each worker ran. Determinism for a fixed `num_threads`/`batch` is
+/// preserved: each worker seeds one RNG from `sweep_seed` and draws from it
+/// across all `batch` internal sweeps.
+fn parallel_sweep_batched(
+    model: &mut TopicModel,
+    docs: &[Vec<u32>],
+    num_threads: usize,
+    sweep_seed: u64,
+    batch: usize,
+) {
+    let batch = batch.max(1);
     let k = model.num_topics;
     let mask = model.topic_mask;
     let bits = model.topic_bits;
@@ -2534,19 +2614,21 @@ fn parallel_sweep(model: &mut TopicModel, docs: &[Vec<u32>], num_threads: usize,
             let mut rng = Pcg64Mcg::seed_from_u64(
                 sweep_seed ^ (wid as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
             );
-            sampler::run_sweep(
-                &mut ttc,
-                &mut tpt,
-                &mut dt,
-                &docs[start..end],
-                &alpha,
-                beta,
-                beta_sum,
-                mask,
-                bits,
-                k,
-                &mut rng,
-            );
+            for _ in 0..batch {
+                sampler::run_sweep(
+                    &mut ttc,
+                    &mut tpt,
+                    &mut dt,
+                    &docs[start..end],
+                    &alpha,
+                    beta,
+                    beta_sum,
+                    mask,
+                    bits,
+                    k,
+                    &mut rng,
+                );
+            }
             WorkerOut { ttc, tpt, start, dt }
         })
         .collect();
@@ -12361,7 +12443,7 @@ impl KeyATM {
                         num_threads=None, optimize_interval=50, burn_in=200, prior_variance=1.0,
                         lbfgs_iters=20, progress_interval=0, prior_offset=None,
                         keep_theta_draws=true, num_theta_draws=25, convergence_tol=0.0_f64,
-                        report_interval=None))]
+                        report_interval=None, turbo_alpha_stride=1))]
     #[allow(clippy::too_many_arguments)]
     fn fit(
         &mut self,
@@ -12385,7 +12467,13 @@ impl KeyATM {
         num_theta_draws: usize,
         convergence_tol: f64,
         report_interval: Option<usize>,
+        turbo_alpha_stride: usize,
     ) -> PyResult<()> {
+        if turbo_alpha_stride < 1 {
+            return Err(PyValueError::new_err(
+                "turbo_alpha_stride must be >= 1 (1 = exact; >1 = approximate, subsample documents in the alpha sampler)",
+            ));
+        }
         // `times` is the canonical cross-model name for a per-document time index
         // (as in DTM); `timestamps` is accepted as an alias. Exactly one.
         let timestamps: Option<&Bound<'_, PyAny>> = match (times, timestamps) {
@@ -12479,6 +12567,14 @@ impl KeyATM {
         if self.cvb0 && (timestamps.is_some() || covariates.is_some() || prior_offset.is_some()) {
             return Err(PyValueError::new_err(
                 "sampler=\"cvb0\" supports only the base keyATM (no timestamps, covariates, or prior_offset)",
+            ));
+        }
+        // The turbo alpha subsampling only applies to the base model's α
+        // slice-sampler; the covariate model learns λ and the dynamic model learns
+        // per-state α, so it has no effect there.
+        if turbo_alpha_stride > 1 && (timestamps.is_some() || covariates.is_some()) {
+            return Err(PyValueError::new_err(
+                "turbo_alpha_stride > 1 applies only to the base keyATM (not the covariate or dynamic model)",
             ));
         }
         let cvb0 = self.cvb0;
@@ -12642,7 +12738,7 @@ impl KeyATM {
                 ),
                 None => keyatm::fit_keyatm(
                     &corpus.docs, num_types, num_topics, &keys, alpha, beta, beta_key, g1, g2,
-                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, convergence_tol, &mut rng,
+                    iters, ll_interval, estimate_alpha, weight_scheme, nthreads, draws_opts, convergence_tol, turbo_alpha_stride, &mut rng,
                 ),
             };
             (m, corpus)

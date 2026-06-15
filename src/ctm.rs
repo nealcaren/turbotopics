@@ -81,6 +81,73 @@ pub fn ctm_lhood(
     0.5 * part2 - part1
 }
 
+/// Fused objective + gradient: returns exactly `(ctm_lhood(..), ctm_grad(..))`
+/// but evaluates `exp(η)`, `Σ exp(η)`, and the per-word column sum
+/// `Σ_t e_t β_{t,w}` once instead of once each in the two separate functions.
+/// The L-BFGS E-step calls value and gradient together at every point, so the
+/// separate path recomputes this O(W·K) inner loop twice per evaluation.
+///
+/// Every partial sum is accumulated in the same order as the standalone
+/// `ctm_lhood`/`ctm_grad`, so the returned value and gradient are bit-for-bit
+/// identical to calling those two functions.
+pub fn ctm_lhood_grad(
+    eta: &[f64],
+    beta: &[Vec<f64>],
+    words: &[usize],
+    counts: &[f64],
+    mu: &[f64],
+    siginv: &[f64],
+) -> (f64, Vec<f64>) {
+    let km1 = eta.len();
+    let k = km1 + 1;
+    let e = expeta(eta);
+    let sum_e: f64 = e.iter().sum();
+    let ndoc: f64 = counts.iter().sum();
+
+    // Single pass over the document's words: accumulate the objective's
+    // `Σ_w counts[w]·ln(colsum)` (= `part1` in ctm_lhood) and the gradient's
+    // `Σ_w counts[w]·φ_{·,w}` (= `part1` in ctm_grad) from the same `colsum`.
+    let mut obj_part1 = 0.0;
+    let mut grad_part1 = vec![0.0f64; k];
+    for (wi, &w) in words.iter().enumerate() {
+        let mut colsum = 0.0;
+        for t in 0..k {
+            colsum += e[t] * beta[t][w];
+        }
+        obj_part1 += counts[wi] * colsum.ln();
+        let c = counts[wi] / colsum;
+        for t in 0..k {
+            grad_part1[t] += c * e[t] * beta[t][w];
+        }
+    }
+    obj_part1 -= ndoc * sum_e.ln();
+    let f = ndoc / sum_e;
+    for t in 0..k {
+        grad_part1[t] -= f * e[t];
+    }
+
+    // Quadratic prior term: objective `0.5·(η-μ)ᵀΣ⁻¹(η-μ)`, gradient `Σ⁻¹(η-μ)`.
+    // To stay bit-for-bit identical to the separate functions, the value's
+    // double sum is accumulated EXACTLY as ctm_lhood does — `part2 += di ·
+    // siginv[ij] · (η_j−μ_j)` with the same left-to-right multiply/add order —
+    // and the gradient's `s = Σ_j siginv[ij]·(η_j−μ_j)` EXACTLY as ctm_grad
+    // does. Float multiplication is not associative, so we deliberately keep the
+    // two separate accumulations rather than reuse `s` for the value.
+    let mut obj_part2 = 0.0;
+    let mut g = vec![0.0f64; km1];
+    for i in 0..km1 {
+        let di = eta[i] - mu[i];
+        let mut s = 0.0;
+        for j in 0..km1 {
+            obj_part2 += di * siginv[i * km1 + j] * (eta[j] - mu[j]);
+            s += siginv[i * km1 + j] * (eta[j] - mu[j]);
+        }
+        g[i] = s - grad_part1[i];
+    }
+
+    (0.5 * obj_part2 - obj_part1, g)
+}
+
 /// STM `gradcpp`: gradient of `ctm_lhood` w.r.t. η (length K-1).
 pub fn ctm_grad(
     eta: &[f64],
@@ -208,15 +275,22 @@ pub fn ctm_hpb(
         }
         (nu, det_term)
     } else {
-        // hess (K×K) = EB·EBᵀ − ndoc·θθᵀ
+        // hess (K×K) = EB·EBᵀ − ndoc·θθᵀ. Both terms are symmetric, so compute
+        // the lower triangle (b ≤ a) and mirror it. Each entry is the same inner
+        // product in the same order as the full double loop, so this is
+        // bit-for-bit identical while doing half the O(K²·W) work.
         let mut hess = vec![0.0f64; k * k];
         for a in 0..k {
-            for b in 0..k {
+            let eb_a = &eb[a];
+            for b in 0..=a {
+                let eb_b = &eb[b];
                 let mut s = 0.0;
                 for wi in 0..w_n {
-                    s += eb[a][wi] * eb[b][wi];
+                    s += eb_a[wi] * eb_b[wi];
                 }
-                hess[a * k + b] = s - ndoc * theta[a] * theta[b];
+                let v = s - ndoc * theta[a] * theta[b];
+                hess[a * k + b] = v;
+                hess[b * k + a] = v;
             }
         }
         // Turn EB into φ = counts[w]·responsibility (multiply rows by sqrt(counts) again).
@@ -573,12 +647,7 @@ pub fn infer_theta(
     }
     let opt = lbfgs_minimize(
         vec![0.0; km1],
-        |eta| {
-            (
-                ctm_lhood(eta, beta, words, counts, mu, siginv),
-                ctm_grad(eta, beta, words, counts, mu, siginv),
-            )
-        },
+        |eta| ctm_lhood_grad(eta, beta, words, counts, mu, siginv),
         40,
         7,
         1e-5,
@@ -974,12 +1043,7 @@ pub fn fit_ctm<R: Rng>(
                     };
                     let opt = lbfgs_minimize(
                         lambda[di].clone(),
-                        |eta| {
-                            (
-                                ctm_lhood(eta, beta_doc, words, counts, &mu_d, &siginv),
-                                ctm_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
-                            )
-                        },
+                        |eta| ctm_lhood_grad(eta, beta_doc, words, counts, &mu_d, &siginv),
                         40,
                         7,
                         1e-5,
@@ -1240,12 +1304,7 @@ pub fn fit_ctm_svi<R: Rng>(
                 let counts = &sparse[di].1;
                 let opt = lbfgs_minimize(
                     lambda[di].clone(),
-                    |eta| {
-                        (
-                            ctm_lhood(eta, &beta, words, counts, &mu_shared, &siginv),
-                            ctm_grad(eta, &beta, words, counts, &mu_shared, &siginv),
-                        )
-                    },
+                    |eta| ctm_lhood_grad(eta, &beta, words, counts, &mu_shared, &siginv),
                     40,
                     7,
                     1e-5,
@@ -1319,12 +1378,7 @@ pub fn fit_ctm_svi<R: Rng>(
         let counts = &sparse[di].1;
         let opt = lbfgs_minimize(
             lambda[di].clone(),
-            |eta| {
-                (
-                    ctm_lhood(eta, &beta, words, counts, &mu_shared, &siginv),
-                    ctm_grad(eta, &beta, words, counts, &mu_shared, &siginv),
-                )
-            },
+            |eta| ctm_lhood_grad(eta, &beta, words, counts, &mu_shared, &siginv),
             40,
             7,
             1e-5,
